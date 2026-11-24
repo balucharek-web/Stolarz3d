@@ -1,0 +1,6 @@
+{
+  "name": "Stolarz 3D — Projektant Mebli",
+  "description": "Nowoczesny program przeglądarkowy 3D do projektowania własnych mebli z płyt OSB, płyt meblowych, sklejki i stali — z realistycznymi teksturami, skosami, wkrętami i listą rozkroju.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
