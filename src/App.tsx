@@ -3,6 +3,7 @@ import {
   AlertTriangle,
   ChevronLeft,
   ChevronRight,
+  Home,
   LayoutPanelTop,
   PenTool,
   Plus,
@@ -10,7 +11,6 @@ import {
 } from 'lucide-react';
 import {
   AlignMode,
-  ASSEMBLY_STEPS,
   CameraPreset,
   EditorTool,
   Fastener,
@@ -25,6 +25,10 @@ import {
   StudioLighting,
   syncCatalogMaterials,
 } from './types/furniture';
+import {
+  buildAssemblyPlan,
+  type AssemblyGranularity,
+} from './engine/assembly';
 import { FURNITURE_TEMPLATES } from './data/templates';
 import {
   autoDetectJointFasteners,
@@ -33,6 +37,8 @@ import {
 import {
   alignSelectedParts,
   analyzeFasteners,
+  analyzeShelfDeflection,
+  auditRoomClearances,
   bindFastenerToJoint,
   computeJointZones,
   computePartClearances,
@@ -73,6 +79,7 @@ import {
 } from './components/PartsTemplatesDrawer';
 import { CutListModal } from './components/CutListModal';
 import { ShapeSketchModal } from './components/ShapeSketchModal';
+import { RoomSettingsModal } from './components/RoomSettingsModal';
 import { ContextMenu, type ContextMenuTarget } from './components/ContextMenu';
 import { ViewCube } from './components/ViewCube';
 
@@ -116,6 +123,8 @@ export default function App() {
   const [explodedAmount, setExplodedAmount] = useState<number>(0);
   const [openAmount, setOpenAmount] = useState<number>(0);
   const [assemblyStep, setAssemblyStep] = useState<number>(0);
+  const [assemblyGranularity, setAssemblyGranularity] =
+    useState<AssemblyGranularity>('grouped');
   const [lighting, setLighting] = useState<StudioLighting>('daylight');
   const [customTextures, setCustomTextures] = useState<Partial<Record<MaterialId, string>>>({});
 
@@ -124,6 +133,7 @@ export default function App() {
   const [addPartOpen, setAddPartOpen] = useState<boolean>(false);
   const [cabinetBuilderOpen, setCabinetBuilderOpen] = useState<boolean>(false);
   const [materialsModalOpen, setMaterialsModalOpen] = useState<boolean>(false);
+  const [roomModalOpen, setRoomModalOpen] = useState<boolean>(false);
   const [sketchOpen, setSketchOpen] = useState<boolean>(false);
   const [sketchEditingPart, setSketchEditingPart] = useState<FurniturePart | null>(null);
   const [leftDrawerMode, setLeftDrawerMode] = useState<LeftDrawerMode>(null);
@@ -900,7 +910,12 @@ export default function App() {
   }, [commitProject, selectedPartIds, showToast]);
 
   const anyModalOpen =
-    sketchOpen || cutListOpen || addPartOpen || cabinetBuilderOpen || materialsModalOpen;
+    sketchOpen ||
+    cutListOpen ||
+    addPartOpen ||
+    cabinetBuilderOpen ||
+    materialsModalOpen ||
+    roomModalOpen;
 
   // Isolated Keyboard shortcuts for fast desktop CAD workflow
   useEffect(() => {
@@ -916,6 +931,10 @@ export default function App() {
       }
 
       if (e.key === 'Escape') {
+        if (roomModalOpen) {
+          setRoomModalOpen(false);
+          return;
+        }
         if (materialsModalOpen) {
           setMaterialsModalOpen(false);
           return;
@@ -1053,6 +1072,7 @@ export default function App() {
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [
     anyModalOpen,
+    roomModalOpen,
     materialsModalOpen,
     cabinetBuilderOpen,
     sketchOpen,
@@ -1120,6 +1140,24 @@ export default function App() {
     return n;
   }, [fastenerAuditMap]);
 
+  const shelfDeflectionMap = useMemo(
+    () => analyzeShelfDeflection(project.parts),
+    [project.parts]
+  );
+
+  const criticalSagCount = useMemo(() => {
+    let n = 0;
+    shelfDeflectionMap.forEach((a) => {
+      if (a.status === 'critical') n++;
+    });
+    return n;
+  }, [shelfDeflectionMap]);
+
+  const roomIssues = useMemo(
+    () => auditRoomClearances(project.parts, project.room),
+    [project.parts, project.room]
+  );
+
   const selectedClearances = useMemo(
     () => (selectedPart ? computePartClearances(selectedPart, project.parts) : []),
     [selectedPart, project.parts]
@@ -1142,9 +1180,24 @@ export default function App() {
     [project.parts, selectedPartIds]
   );
 
-  const activeAssemblyMeta =
-    assemblyStep > 0
-      ? ASSEMBLY_STEPS.find((s) => s.step === assemblyStep) ?? ASSEMBLY_STEPS[0]
+  const assemblyPlan = useMemo(
+    () =>
+      buildAssemblyPlan(
+        project.parts,
+        project.fasteners,
+        assemblyGranularity
+      ),
+    [project.parts, project.fasteners, assemblyGranularity]
+  );
+
+  const clampedAssemblyStep =
+    assemblyStep > 0 && assemblyPlan.steps.length > 0
+      ? Math.min(assemblyStep, assemblyPlan.steps.length)
+      : 0;
+
+  const activeAssemblyStepPlan =
+    clampedAssemblyStep > 0
+      ? assemblyPlan.steps[clampedAssemblyStep - 1] ?? assemblyPlan.steps[0] ?? null
       : null;
 
   const snapMm = SNAP_STEPS[snapIdx];
@@ -1220,6 +1273,19 @@ export default function App() {
         <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
           <button
             type="button"
+            onClick={() => setRoomModalOpen(true)}
+            className={`flex min-h-[34px] items-center gap-1.5 rounded-lg border px-2.5 text-xs font-medium transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+              project.room?.enabled
+                ? 'border-sky-500/60 bg-sky-500/15 text-sky-300 hover:bg-sky-500/25'
+                : 'border-zinc-700 bg-zinc-900 text-zinc-200 hover:border-sky-500/50 hover:text-sky-300'
+            }`}
+            title="Wnęka, ściany pokoju, skos poddasza i przeszkody (grzejniki, rury, gniazdka)"
+          >
+            <Home className="h-3.5 w-3.5 shrink-0" />
+            <span className="hidden lg:inline">Wnęka</span>
+          </button>
+          <button
+            type="button"
             onClick={() => setCabinetBuilderOpen(true)}
             className="flex min-h-[34px] items-center gap-1.5 rounded-lg border border-emerald-500/50 bg-emerald-500/12 px-2.5 sm:px-3 text-xs font-medium text-emerald-300 hover:bg-emerald-500/20 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
             title="Kreator parametrycznej szafki, szuflad i frontów"
@@ -1270,85 +1336,210 @@ export default function App() {
           <span className="font-sans">{project.fasteners.length} wkręt.</span>
         </div>
 
-        {(collisionReport.pairs.length > 0 || faultyFastenerCount > 0) && (
+        {(collisionReport.pairs.length > 0 ||
+          faultyFastenerCount > 0 ||
+          criticalSagCount > 0 ||
+          roomIssues.length > 0) && (
           <button
             type="button"
             onClick={() =>
-              collisionReport.pairs.length > 0
-                ? setLeftDrawerMode('parts')
-                : setCutListOpen(true)
+              roomIssues.length > 0
+                ? setRoomModalOpen(true)
+                : collisionReport.pairs.length > 0
+                  ? setLeftDrawerMode('parts')
+                  : setCutListOpen(true)
             }
             className="pointer-events-auto mt-1 inline-flex w-fit items-center gap-1.5 rounded-lg border border-red-500/40 bg-red-950/90 px-2.5 py-1 text-[11px] font-medium text-red-100 shadow-md hover:bg-red-900 cursor-pointer"
           >
             <AlertTriangle className="h-3.5 w-3.5 text-red-400 shrink-0" />
             <span>
-              {collisionReport.pairs.length > 0 &&
-                `${collisionReport.pairs.length} kolizji płyt`}
-              {collisionReport.pairs.length > 0 && faultyFastenerCount > 0 && ' · '}
-              {faultyFastenerCount > 0 && `${faultyFastenerCount} wkręt. do poprawy`}
+              {[
+                collisionReport.pairs.length > 0 ? `${collisionReport.pairs.length} kolizji` : null,
+                faultyFastenerCount > 0 ? `${faultyFastenerCount} wkręt.` : null,
+                criticalSagCount > 0 ? `${criticalSagCount} ugięcie półki` : null,
+                roomIssues.length > 0 ? `${roomIssues.length} wnęka/skos` : null,
+              ]
+                .filter(Boolean)
+                .join(' · ')}
             </span>
           </button>
         )}
       </div>
 
-      {/* Step-by-Step Workshop Assembly Guide Bar (visible only when active) */}
-      {activeAssemblyMeta && (
-        <div className="fixed top-14 left-1/2 z-30 -translate-x-1/2 max-w-[min(640px,calc(100vw-24px))] rounded-xl border border-emerald-500/50 bg-[#141518]/[0.96] px-3.5 py-2 text-zinc-100 shadow-2xl">
-          <div className="flex flex-wrap items-center justify-between gap-2.5">
+      {/* Physical Contact-Graph Step-by-Step Workshop Assembly Guide */}
+      {activeAssemblyStepPlan && (
+        <div className="fixed top-14 left-1/2 z-30 -translate-x-1/2 w-[min(660px,calc(100vw-24px))] rounded-xl border border-emerald-500/50 bg-[#141518]/[0.97] px-3.5 py-2.5 text-zinc-100 shadow-2xl">
+          {/* Top navigation & granularity row */}
+          <div className="flex flex-wrap items-center justify-between gap-2">
             <div className="flex items-center gap-1">
               <button
                 type="button"
-                disabled={assemblyStep <= 1}
+                disabled={clampedAssemblyStep <= 1}
                 onClick={() => setAssemblyStep((s) => Math.max(1, s - 1))}
                 className="flex h-7 w-7 items-center justify-center rounded-md border border-zinc-700 bg-zinc-900 text-zinc-200 hover:bg-zinc-800 disabled:opacity-35 cursor-pointer"
-                aria-label="Poprzedni etap montażu"
+                aria-label="Poprzedni krok montażu"
               >
                 <ChevronLeft className="h-4 w-4" />
               </button>
-              {ASSEMBLY_STEPS.map((s) => (
-                <button
-                  key={s.step}
-                  type="button"
-                  onClick={() => setAssemblyStep(s.step)}
-                  className={`flex h-7 w-7 items-center justify-center rounded-md text-xs font-mono-num font-semibold cursor-pointer ${
-                    assemblyStep === s.step
-                      ? 'bg-emerald-500 text-zinc-950'
-                      : s.step < assemblyStep
-                        ? 'bg-emerald-500/20 text-emerald-300'
-                        : 'bg-zinc-900 text-zinc-400 hover:text-white'
-                  }`}
-                >
-                  {s.step}
-                </button>
-              ))}
+
+              {assemblyPlan.steps.length <= 10 ? (
+                assemblyPlan.steps.map((s) => (
+                  <button
+                    key={s.step}
+                    type="button"
+                    onClick={() => setAssemblyStep(s.step)}
+                    title={`Krok ${s.step}: ${s.title}`}
+                    className={`flex h-7 min-w-[26px] px-1 items-center justify-center rounded-md text-xs font-mono-num font-semibold cursor-pointer ${
+                      clampedAssemblyStep === s.step
+                        ? 'bg-emerald-500 text-zinc-950'
+                        : s.step < clampedAssemblyStep
+                          ? 'bg-emerald-500/20 text-emerald-300'
+                          : 'bg-zinc-900 text-zinc-400 hover:text-white'
+                    }`}
+                  >
+                    {s.step}
+                  </button>
+                ))
+              ) : (
+                <div className="flex items-center gap-2 px-1.5">
+                  <span className="text-xs font-mono-num font-semibold text-emerald-300 whitespace-nowrap">
+                    {clampedAssemblyStep} / {assemblyPlan.steps.length}
+                  </span>
+                  <input
+                    type="range"
+                    min={1}
+                    max={assemblyPlan.steps.length}
+                    value={clampedAssemblyStep}
+                    onChange={(e) => setAssemblyStep(Number(e.target.value))}
+                    className="w-28 sm:w-36 accent-emerald-500 cursor-pointer"
+                    aria-label="Suwak kroków montażu"
+                  />
+                </div>
+              )}
+
               <button
                 type="button"
-                disabled={assemblyStep >= ASSEMBLY_STEPS.length}
-                onClick={() => setAssemblyStep((s) => Math.min(ASSEMBLY_STEPS.length, s + 1))}
+                disabled={clampedAssemblyStep >= assemblyPlan.steps.length}
+                onClick={() =>
+                  setAssemblyStep((s) =>
+                    Math.min(assemblyPlan.steps.length, s + 1)
+                  )
+                }
                 className="flex h-7 w-7 items-center justify-center rounded-md border border-zinc-700 bg-zinc-900 text-zinc-200 hover:bg-zinc-800 disabled:opacity-35 cursor-pointer"
-                aria-label="Następny etap montażu"
+                aria-label="Następny krok montażu"
               >
                 <ChevronRight className="h-4 w-4" />
               </button>
             </div>
 
-            <div className="min-w-0 flex-1">
-              <div className="text-xs font-semibold text-emerald-300 truncate">
-                Krok {activeAssemblyMeta.step}/5: {activeAssemblyMeta.title}
+            <div className="flex items-center gap-2">
+              <div className="flex items-center rounded-md border border-zinc-800 bg-zinc-950 p-0.5 text-[10px]">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAssemblyGranularity('grouped');
+                    setAssemblyStep(1);
+                  }}
+                  className={`rounded px-2 py-0.5 font-medium cursor-pointer transition-colors ${
+                    assemblyGranularity === 'grouped'
+                      ? 'bg-emerald-500/20 text-emerald-300'
+                      : 'text-zinc-400 hover:text-zinc-200'
+                  }`}
+                >
+                  Etapy
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAssemblyGranularity('part_by_part');
+                    setAssemblyStep(1);
+                  }}
+                  className={`rounded px-2 py-0.5 font-medium cursor-pointer transition-colors ${
+                    assemblyGranularity === 'part_by_part'
+                      ? 'bg-emerald-500/20 text-emerald-300'
+                      : 'text-zinc-400 hover:text-zinc-200'
+                  }`}
+                >
+                  1 po 1
+                </button>
               </div>
-              <div className="text-[11px] text-zinc-400 truncate">
-                {activeAssemblyMeta.desc}
+              <span className="hidden sm:inline text-[10px] font-mono-num text-zinc-400">
+                {assemblyPlan.totalContacts} styków
+              </span>
+              <button
+                type="button"
+                onClick={() => setAssemblyStep(0)}
+                className="flex h-7 w-7 items-center justify-center rounded-md text-zinc-400 hover:bg-zinc-800 hover:text-white cursor-pointer shrink-0"
+                title="Zakończ przewodnik montażu"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+          </div>
+
+          {/* Step title & auto-generated carpentry instruction */}
+          <div className="mt-2 border-t border-zinc-800/80 pt-2">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="text-xs font-semibold text-emerald-300">
+                Krok {activeAssemblyStepPlan.step}/{assemblyPlan.steps.length}:{' '}
+                {activeAssemblyStepPlan.title}
               </div>
+              {activeAssemblyStepPlan.totalFasteners > 0 && (
+                <span className="rounded bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-mono-num font-medium text-amber-300">
+                  {activeAssemblyStepPlan.fastenerSummary}
+                </span>
+              )}
+            </div>
+            <p className="mt-0.5 text-[11px] leading-snug text-zinc-300">
+              {activeAssemblyStepPlan.instruction}
+            </p>
+
+            {/* Per-board contact breakdown (clickable to focus/select board in 3D) */}
+            <div className="mt-2 flex max-h-24 flex-col gap-1 overflow-y-auto pr-1">
+              {activeAssemblyStepPlan.items.map((item) => (
+                <button
+                  key={item.partId}
+                  type="button"
+                  onClick={() => {
+                    handleSelectPart(item.partId, false);
+                    viewportRef.current?.focusPart(item.partId);
+                  }}
+                  className="flex flex-wrap items-center justify-between gap-x-2 gap-y-0.5 rounded-md border border-zinc-800 bg-zinc-900/80 px-2 py-1 text-left text-[11px] hover:border-emerald-500/60 hover:bg-zinc-900 transition-colors cursor-pointer"
+                >
+                  <span className="flex items-center gap-1.5 font-medium text-zinc-100">
+                    <span className="inline-block h-2 w-2 rounded-full bg-emerald-400 shrink-0" />
+                    {item.partName}
+                  </span>
+                  <span className="text-[10px] text-sky-300 truncate max-w-full sm:max-w-[340px]">
+                    {item.attachToNames.length > 0
+                      ? `→ do: ${item.attachToNames.slice(0, 2).join(', ')}${
+                          item.attachToNames.length > 2
+                            ? ` (+${item.attachToNames.length - 2})`
+                            : ''
+                        }`
+                      : '→ element startowy'}
+                    {item.fastenerSummary ? ` · ${item.fastenerSummary}` : ''}
+                  </span>
+                </button>
+              ))}
             </div>
 
-            <button
-              type="button"
-              onClick={() => setAssemblyStep(0)}
-              className="flex h-7 w-7 items-center justify-center rounded-md text-zinc-400 hover:bg-zinc-800 hover:text-white cursor-pointer shrink-0"
-              title="Zakończ podgląd montażu"
-            >
-              <X className="h-4 w-4" />
-            </button>
+            {/* Compact 3D highlight color key */}
+            <div className="mt-1.5 flex items-center gap-3 text-[10px] text-zinc-400">
+              <span className="inline-flex items-center gap-1">
+                <span className="h-2 w-2 rounded-xs bg-emerald-400" />
+                Montujesz teraz
+              </span>
+              {activeAssemblyStepPlan.targetBasePartIds.length > 0 && (
+                <span className="inline-flex items-center gap-1">
+                  <span className="h-2 w-2 rounded-xs bg-sky-400" />
+                  Baza styku ({activeAssemblyStepPlan.targetBasePartIds.length})
+                </span>
+              )}
+              <span className="ml-auto hidden sm:inline text-zinc-500">
+                Kolejność wykryta automatycznie ze styków 3D
+              </span>
+            </div>
           </div>
         </div>
       )}
@@ -1372,6 +1563,7 @@ export default function App() {
           ref={viewportRef}
           parts={project.parts}
           fasteners={project.fasteners}
+          room={project.room}
           selectedPartId={selectedPartId}
           selectedPartIds={selectedPartIds}
           selectedFastenerId={selectedFastenerId}
@@ -1387,7 +1579,8 @@ export default function App() {
           measurements={measurements}
           explodedAmount={explodedAmount}
           openAmount={openAmount}
-          assemblyStep={assemblyStep}
+          assemblyStep={clampedAssemblyStep}
+          assemblyPlan={clampedAssemblyStep > 0 ? assemblyPlan : null}
           materialsVersion={materialsVersion}
           lighting={lighting}
           customTextures={customTextures}
@@ -1556,6 +1749,7 @@ export default function App() {
         isColliding={Boolean(selectedPart && collisionReport.collidingIds.has(selectedPart.id))}
         clearances={selectedClearances}
         fastenerAuditMap={fastenerAuditMap}
+        shelfDeflection={selectedPart ? shelfDeflectionMap.get(selectedPart.id) : undefined}
         groupBounds={selectedGroupBounds}
         onSmartResizeGroup={handleSmartResizeGroup}
         onClose={() => setInspectorOpen(false)}
@@ -1618,11 +1812,31 @@ export default function App() {
         }}
       />
 
+      <RoomSettingsModal
+        open={roomModalOpen}
+        room={project.room}
+        roomIssues={roomIssues}
+        onClose={() => setRoomModalOpen(false)}
+        onSaveRoom={(nextRoom) => {
+          commitProject((prev) => ({
+            ...prev,
+            room: nextRoom,
+          }));
+          showToast(
+            nextRoom.enabled
+              ? `Zapisano wnękę ${nextRoom.widthMm}×${nextRoom.heightMm}×${nextRoom.depthMm} mm`
+              : 'Wyłączono podgląd wnęki'
+          );
+        }}
+      />
+
       <CutListModal
         open={cutListOpen}
         project={project}
         materialsVersion={materialsVersion}
         fastenerAuditMap={fastenerAuditMap}
+        shelfDeflectionMap={shelfDeflectionMap}
+        roomIssues={roomIssues}
         collisionCount={collisionReport.pairs.length}
         quoteSettings={quoteSettings}
         onChangeQuoteSettings={setQuoteSettings}

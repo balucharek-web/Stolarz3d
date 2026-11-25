@@ -22,6 +22,7 @@ import {
   Fastener,
   FurniturePart,
   HandleSide,
+  HandleStyle,
   MATERIAL_CATALOG,
   MaterialId,
   PART_KIND_LABELS,
@@ -36,6 +37,7 @@ import {
   computeSawCutAngles,
   type ClearanceGuide,
   type FastenerAudit,
+  type ShelfDeflectionAudit,
 } from '../engine/carpentry';
 
 interface InspectorDrawerProps {
@@ -48,6 +50,7 @@ interface InspectorDrawerProps {
   isColliding: boolean;
   clearances: ClearanceGuide[];
   fastenerAuditMap: Map<string, FastenerAudit>;
+  shelfDeflection?: ShelfDeflectionAudit;
   onClose: () => void;
   onUpdatePart: (id: string, patch: Partial<FurniturePart>) => void;
   onSmartResizeGroup: (groupId: string, width: number, height: number, depth: number) => void;
@@ -134,6 +137,7 @@ export const InspectorDrawer: React.FC<InspectorDrawerProps> = ({
   isColliding,
   clearances,
   fastenerAuditMap,
+  shelfDeflection,
   onClose,
   onUpdatePart,
   onSmartResizeGroup,
@@ -278,8 +282,8 @@ export const InspectorDrawer: React.FC<InspectorDrawerProps> = ({
 
       {/* Scrollable Body */}
       <div className="cad-scroll flex-1 overflow-y-auto px-4 py-3.5 space-y-5">
-        {/* Collision Alert + Clearances Summary */}
-        {(isColliding || clearances.length > 0 || sawAngles.length > 0) && (
+        {/* Collision Alert, Shelf Deflection Sag Check & Clearances Summary */}
+        {(isColliding || Boolean(shelfDeflection) || clearances.length > 0 || sawAngles.length > 0) && (
           <div className="space-y-2">
             {isColliding && (
               <div className="flex items-start gap-2 rounded-xl border border-red-500/50 bg-red-950/50 px-3 py-2 text-[11px] text-red-200">
@@ -287,6 +291,34 @@ export const InspectorDrawer: React.FC<InspectorDrawerProps> = ({
                 <span>
                   <strong className="font-semibold">Kolizja płyt!</strong> Ten element nachodzi na sąsiednią płytę — przesuń go z włączonym Magnesem.
                 </span>
+              </div>
+            )}
+
+            {shelfDeflection && (
+              <div
+                className={`rounded-xl border px-3 py-2 space-y-1 text-[11px] ${
+                  shelfDeflection.status === 'critical'
+                    ? 'border-red-500/50 bg-red-950/45 text-red-100'
+                    : shelfDeflection.status === 'warning'
+                      ? 'border-amber-500/45 bg-amber-950/35 text-amber-100'
+                      : 'border-emerald-500/35 bg-emerald-950/25 text-emerald-100'
+                }`}
+              >
+                <div className="flex items-center justify-between gap-2 font-semibold">
+                  <span>
+                    Test ugięcia półki ({shelfDeflection.status === 'critical' ? 'RYZYKO!' : shelfDeflection.status === 'warning' ? 'Uwaga' : 'Sztywna'})
+                  </span>
+                  <span className="font-mono-num">
+                    ~{shelfDeflection.deflectionMm} mm
+                  </span>
+                </div>
+                <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-[10px] opacity-85 font-mono-num">
+                  <span>Rozpiętość: {shelfDeflection.maxUnsupportedSpanMm} mm</span>
+                  <span>Udźwig bezp.: ~{shelfDeflection.safeMaxLoadKg} kg</span>
+                </div>
+                <div className="text-[10px] leading-snug opacity-90">
+                  {shelfDeflection.recommendation}
+                </div>
               </div>
             )}
 
@@ -563,6 +595,33 @@ export const InspectorDrawer: React.FC<InspectorDrawerProps> = ({
                 </select>
               </label>
             </div>
+
+            <div className="space-y-1">
+              <span className="text-[11px] text-zinc-400">System otwierania frontu</span>
+              <div className="grid grid-cols-4 gap-1 rounded-lg bg-zinc-900 p-1 border border-zinc-800">
+                {(
+                  [
+                    { id: 'bar', label: 'Reling' },
+                    { id: 'tip_on', label: 'Tip-On' },
+                    { id: 'gola_j', label: 'Gola J' },
+                    { id: 'chamfer_45', label: 'Ukos 45°' },
+                  ] as { id: HandleStyle; label: string }[]
+                ).map((opt) => (
+                  <button
+                    key={opt.id}
+                    type="button"
+                    onClick={() => onUpdatePart(part.id, { handleStyle: opt.id })}
+                    className={`rounded-md py-1.5 text-[11px] font-medium transition-colors cursor-pointer ${
+                      (part.handleStyle ?? 'bar') === opt.id
+                        ? 'bg-amber-500 text-zinc-950 font-semibold'
+                        : 'text-zinc-400 hover:text-white'
+                    }`}
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+            </div>
           </div>
         )}
 
@@ -704,6 +763,28 @@ export const InspectorDrawer: React.FC<InspectorDrawerProps> = ({
               </button>
             </div>
           </div>
+
+          {/* System 32 Shelf-Pin Drilling Rows on Vertical Side Walls */}
+          {part.kind === 'panel' && part.height >= 400 && part.width <= 45 && (
+            <label className="flex items-center justify-between gap-2 rounded-lg border border-zinc-800 bg-zinc-900/70 px-3 py-2 cursor-pointer">
+              <div>
+                <div className="text-[11px] font-medium text-zinc-200">
+                  System 32 (rzędy otworów Ø5 co 32 mm)
+                </div>
+                <div className="text-[10px] text-zinc-500">
+                  Automatyczna mapa nawiertów pod podpórki półek (37 mm od krawędzi)
+                </div>
+              </div>
+              <input
+                type="checkbox"
+                checked={Boolean(part.system32ShelfHoles)}
+                onChange={(e) =>
+                  onUpdatePart(part.id, { system32ShelfHoles: e.target.checked })
+                }
+                className="h-4 w-4 accent-amber-500 shrink-0"
+              />
+            </label>
+          )}
 
           {/* 45-degree Miter Edges (Gerung) */}
           <div className="space-y-1.5">

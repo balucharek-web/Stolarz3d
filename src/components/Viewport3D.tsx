@@ -16,6 +16,7 @@ import {
   Fastener,
   FurniturePart,
   MeasureSegment,
+  RoomConfig,
   ScrewType,
   StudioLighting,
 } from '../types/furniture';
@@ -30,11 +31,12 @@ import {
   M_TO_MM,
   MM_TO_M,
 } from '../engine/geometry';
-import { classifyAssemblyStep } from '../engine/documentation';
+import type { AssemblyPlan } from '../engine/assembly';
 import {
   evaluateScrewPlacement,
   getPartQuaternion,
   getPartWorldBox,
+  getRoomObstacleWorldBox,
   snapPartToNeighbors,
   type ClearanceGuide,
   type FastenerAudit,
@@ -53,6 +55,7 @@ export interface Viewport3DHandle {
 interface Viewport3DProps {
   parts: FurniturePart[];
   fasteners: Fastener[];
+  room?: RoomConfig;
   selectedPartId: string | null;
   selectedPartIds: string[];
   selectedFastenerId: string | null;
@@ -69,6 +72,7 @@ interface Viewport3DProps {
   explodedAmount: number;
   openAmount: number;
   assemblyStep: number;
+  assemblyPlan: AssemblyPlan | null;
   materialsVersion: number;
   lighting: StudioLighting;
   customTextures: Partial<Record<import('../types/furniture').MaterialId, string>>;
@@ -445,6 +449,7 @@ export const Viewport3D = forwardRef<Viewport3DHandle, Viewport3DProps>(
       transform: TransformControls;
       materials: MaterialLibrary;
       partsRoot: THREE.Group;
+      roomRoot: THREE.Group;
       guidesRoot: THREE.Group;
       jointZonesRoot: THREE.Group;
       ledRoot: THREE.Group;
@@ -459,6 +464,7 @@ export const Viewport3D = forwardRef<Viewport3DHandle, Viewport3DProps>(
         string,
         | { kind: 'door'; localPivot: THREE.Vector3; maxAngleRad: number }
         | { kind: 'drawer'; slideDistM: number }
+        | { kind: 'sliding'; slideDistM: number }
       >;
       screwPreview: THREE.Group;
       screwPreviewRingMat: THREE.MeshBasicMaterial;
@@ -769,6 +775,9 @@ export const Viewport3D = forwardRef<Viewport3DHandle, Viewport3DProps>(
       const partsRoot = new THREE.Group();
       scene.add(partsRoot);
 
+      const roomRoot = new THREE.Group();
+      scene.add(roomRoot);
+
       const guidesRoot = new THREE.Group();
       scene.add(guidesRoot);
 
@@ -847,6 +856,7 @@ export const Viewport3D = forwardRef<Viewport3DHandle, Viewport3DProps>(
         string,
         | { kind: 'door'; localPivot: THREE.Vector3; maxAngleRad: number }
         | { kind: 'drawer'; slideDistM: number }
+        | { kind: 'sliding'; slideDistM: number }
       >();
 
       function afterDraw(cb: () => void) {
@@ -895,6 +905,11 @@ export const Viewport3D = forwardRef<Viewport3DHandle, Viewport3DProps>(
               const worldPivot = _vec3C.copy(meta.localPivot).applyQuaternion(baseQ).add(_vec3A);
               node.position.copy(_vec3A).sub(worldPivot).applyQuaternion(_quatA).add(worldPivot);
               node.quaternion.copy(_quatA).multiply(baseQ);
+              return;
+            } else if (meta.kind === 'sliding') {
+              const slideAxis = _vec3B.set(1, 0, 0).applyQuaternion(baseQ).normalize();
+              node.position.copy(_vec3A).addScaledVector(slideAxis, meta.slideDistM * opnAmt);
+              node.quaternion.copy(baseQ);
               return;
             } else {
               const slideAxis = _vec3B.set(0, 0, 1).applyQuaternion(baseQ).normalize();
@@ -1038,6 +1053,7 @@ export const Viewport3D = forwardRef<Viewport3DHandle, Viewport3DProps>(
         transform,
         materials,
         partsRoot,
+        roomRoot,
         guidesRoot,
         jointZonesRoot,
         ledRoot,
@@ -2034,6 +2050,7 @@ export const Viewport3D = forwardRef<Viewport3DHandle, Viewport3DProps>(
         transform.dispose();
         orbit.dispose();
         disposeObjectTree(partsRoot);
+        disposeObjectTree(roomRoot);
         disposeObjectTree(guidesRoot);
         disposeObjectTree(jointZonesRoot);
         disposeObjectTree(ledRoot);
@@ -2110,6 +2127,175 @@ export const Viewport3D = forwardRef<Viewport3DHandle, Viewport3DProps>(
       runtimeRef.current?.materials.invalidateCustomMaterials();
     }, [props.materialsVersion]);
 
+    // Rebuild 3D Room / Alcove Shell, Sloped Attic Ceiling & Wall Obstacles
+    useEffect(() => {
+      const rt = runtimeRef.current;
+      if (!rt) return;
+      disposeObjectTree(rt.roomRoot);
+      rt.roomRoot.clear();
+
+      const room = props.room;
+      if (!room || !room.enabled) {
+        rt.requestRender();
+        return;
+      }
+
+      const wM = room.widthMm * MM_TO_M;
+      const hM = room.heightMm * MM_TO_M;
+      const dM = room.depthMm * MM_TO_M;
+      const wallT = 0.04;
+      const minX = -wM / 2;
+      const maxX = wM / 2;
+      const minZ = room.backWallZMm * MM_TO_M;
+      const centerZ = minZ + dM / 2;
+
+      const addWallBox = (
+        sx: number,
+        sy: number,
+        sz: number,
+        px: number,
+        py: number,
+        pz: number,
+        opacity = 0.24
+      ) => {
+        const geo = new THREE.BoxGeometry(sx, sy, sz);
+        const mat = new THREE.MeshStandardMaterial({
+          color: '#CBD5E1',
+          roughness: 0.9,
+          metalness: 0.02,
+          transparent: true,
+          opacity,
+          depthWrite: false,
+        });
+        const mesh = new THREE.Mesh(geo, mat);
+        mesh.position.set(px, py, pz);
+        mesh.userData.disposeMaterial = true;
+        rt.roomRoot.add(mesh);
+
+        const edgesGeo = new THREE.EdgesGeometry(geo);
+        const edgesMat = new THREE.LineBasicMaterial({
+          color: '#64748B',
+          transparent: true,
+          opacity: 0.55,
+        });
+        const edges = new THREE.LineSegments(edgesGeo, edgesMat);
+        edges.position.copy(mesh.position);
+        edges.userData.disposeMaterial = true;
+        rt.roomRoot.add(edges);
+      };
+
+      // Alcove floor footprint outline
+      const floorLineGeo = new THREE.BufferGeometry().setFromPoints([
+        new THREE.Vector3(minX, 0.003, minZ),
+        new THREE.Vector3(maxX, 0.003, minZ),
+        new THREE.Vector3(maxX, 0.003, minZ + dM),
+        new THREE.Vector3(minX, 0.003, minZ + dM),
+        new THREE.Vector3(minX, 0.003, minZ),
+      ]);
+      const floorLineMat = new THREE.LineBasicMaterial({ color: '#0EA5E9' });
+      const floorLine = new THREE.Line(floorLineGeo, floorLineMat);
+      floorLine.userData.disposeMaterial = true;
+      rt.roomRoot.add(floorLine);
+
+      if (room.showBackWall) {
+        addWallBox(wM + wallT * 2, hM, wallT, 0, hM / 2, minZ - wallT / 2, 0.34);
+      }
+      if (room.showLeftWall) {
+        addWallBox(wallT, hM, dM, minX - wallT / 2, hM / 2, centerZ, 0.2);
+      }
+      if (room.showRightWall) {
+        addWallBox(wallT, hM, dM, maxX + wallT / 2, hM / 2, centerZ, 0.2);
+      }
+      if (room.showCeiling) {
+        addWallBox(wM, wallT, dM, 0, hM + wallT / 2, centerZ, 0.16);
+      }
+
+      // Sloped attic ceiling plane
+      if (room.slopedCeiling?.enabled) {
+        const kneeH = Math.min(room.heightMm, Math.max(150, room.slopedCeiling.kneeWallHeightMm)) * MM_TO_M;
+        const slopeW = Math.min(room.widthMm, Math.max(200, room.slopedCeiling.slopeWidthMm)) * MM_TO_M;
+        const rise = Math.max(0.05, hM - kneeH);
+        const slopeLen = Math.hypot(slopeW, rise);
+        const angle = Math.atan2(rise, slopeW);
+
+        const slopeGeo = new THREE.BoxGeometry(slopeLen, 0.035, dM);
+        const slopeMat = new THREE.MeshStandardMaterial({
+          color: '#F59E0B',
+          roughness: 0.75,
+          transparent: true,
+          opacity: 0.22,
+          depthWrite: false,
+        });
+        const slopeMesh = new THREE.Mesh(slopeGeo, slopeMat);
+        const isRight = room.slopedCeiling.side === 'right';
+        slopeMesh.position.set(
+          isRight ? maxX - slopeW / 2 : minX + slopeW / 2,
+          kneeH + rise / 2,
+          centerZ
+        );
+        slopeMesh.rotation.z = isRight ? -angle : angle;
+        slopeMesh.userData.disposeMaterial = true;
+        rt.roomRoot.add(slopeMesh);
+
+        const slopeEdgesGeo = new THREE.EdgesGeometry(slopeGeo);
+        const slopeEdgesMat = new THREE.LineBasicMaterial({ color: '#D97706' });
+        const slopeEdges = new THREE.LineSegments(slopeEdgesGeo, slopeEdgesMat);
+        slopeEdges.position.copy(slopeMesh.position);
+        slopeEdges.rotation.copy(slopeMesh.rotation);
+        slopeEdges.userData.disposeMaterial = true;
+        rt.roomRoot.add(slopeEdges);
+      }
+
+      // Wall Obstacles (Radiator, Socket, Pipe, Window)
+      for (const obs of room.obstacles) {
+        const box = getRoomObstacleWorldBox(obs, room);
+        const sx = Math.max(0.02, (box.maxX - box.minX) * MM_TO_M);
+        const sy = Math.max(0.02, (box.maxY - box.minY) * MM_TO_M);
+        const sz = Math.max(0.02, (box.maxZ - box.minZ) * MM_TO_M);
+        const cx = ((box.minX + box.maxX) / 2) * MM_TO_M;
+        const cy = ((box.minY + box.maxY) / 2) * MM_TO_M;
+        const cz = ((box.minZ + box.maxZ) / 2) * MM_TO_M;
+
+        const colorMap: Record<typeof obs.type, string> = {
+          radiator: '#E2E8F0',
+          socket: '#FACC15',
+          pipe: '#94A3B8',
+          window: '#38BDF8',
+        };
+        const edgeColorMap: Record<typeof obs.type, string> = {
+          radiator: '#475569',
+          socket: '#CA8A04',
+          pipe: '#334155',
+          window: '#0284C7',
+        };
+
+        const geo =
+          obs.type === 'pipe'
+            ? new THREE.CylinderGeometry(Math.min(sx, sz) / 2, Math.min(sx, sz) / 2, sy, 18)
+            : new THREE.BoxGeometry(sx, sy, sz);
+        const mat = new THREE.MeshStandardMaterial({
+          color: colorMap[obs.type],
+          roughness: obs.type === 'window' ? 0.15 : 0.45,
+          metalness: obs.type === 'pipe' || obs.type === 'radiator' ? 0.45 : 0.05,
+          transparent: obs.type === 'window',
+          opacity: obs.type === 'window' ? 0.35 : 0.92,
+        });
+        const mesh = new THREE.Mesh(geo, mat);
+        mesh.position.set(cx, cy, cz);
+        mesh.userData.disposeMaterial = true;
+        rt.roomRoot.add(mesh);
+
+        const edgesGeo = new THREE.EdgesGeometry(geo, 24);
+        const edgesMat = new THREE.LineBasicMaterial({ color: edgeColorMap[obs.type] });
+        const edges = new THREE.LineSegments(edgesGeo, edgesMat);
+        edges.position.copy(mesh.position);
+        edges.userData.disposeMaterial = true;
+        rt.roomRoot.add(edges);
+      }
+
+      rt.requestRender();
+    }, [props.room]);
+
     // Rebuild 3D parts & fasteners whenever scene model or custom textures change
     useEffect(() => {
       const rt = runtimeRef.current;
@@ -2148,8 +2334,17 @@ export const Viewport3D = forwardRef<Viewport3DHandle, Viewport3DProps>(
         }
       }
 
+      const activeStepPlan =
+        props.assemblyStep > 0 && props.assemblyPlan
+          ? props.assemblyPlan.steps.find((s) => s.step === props.assemblyStep) ?? null
+          : null;
+      const targetBaseIdSet = new Set<string>(
+        activeStepPlan?.targetBasePartIds ?? []
+      );
+
       for (const part of props.parts) {
-        const partStep = classifyAssemblyStep(part);
+        const partStep =
+          props.assemblyPlan?.partStepMap.get(part.id) ?? 1;
         if (props.assemblyStep > 0 && partStep > props.assemblyStep) {
           continue;
         }
@@ -2182,7 +2377,14 @@ export const Viewport3D = forwardRef<Viewport3DHandle, Viewport3DProps>(
           part.applianceModel === 'wire_cargo' ||
           /szuflad|cargo/i.test(part.name);
 
-        if (isDrawerLike) {
+        if (part.hardwareTag === 'sliding_door') {
+          const dirSign = part.slidingDirection === 'left' ? -1 : 1;
+          const travelMm = part.slidingTravelMm ?? Math.round(part.width * 0.85);
+          rt.partOpenMeta.set(part.id, {
+            kind: 'sliding',
+            slideDistM: travelMm * MM_TO_M * dirSign,
+          });
+        } else if (isDrawerLike) {
           rt.partOpenMeta.set(part.id, {
             kind: 'drawer',
             slideDistM: 0.34,
@@ -2290,13 +2492,21 @@ export const Viewport3D = forwardRef<Viewport3DHandle, Viewport3DProps>(
           }
         }
 
-        // Crisp architectural outline for colliding, selected, active assembly step, or X-Ray parts
+        // Crisp architectural outline for colliding, selected, active assembly step, assembly target base, or X-Ray parts
         const isSelected =
           part.id === props.selectedPartId ||
           props.selectedPartIds.includes(part.id);
         const isColliding = props.collidingPartIds.has(part.id);
         const isActiveAssemblyStep = props.assemblyStep > 0 && partStep === props.assemblyStep;
-        if (isSelected || isColliding || isActiveAssemblyStep || props.xrayMode) {
+        const isAssemblyTargetBase =
+          props.assemblyStep > 0 && !isActiveAssemblyStep && targetBaseIdSet.has(part.id);
+        if (
+          isSelected ||
+          isColliding ||
+          isActiveAssemblyStep ||
+          isAssemblyTargetBase ||
+          props.xrayMode
+        ) {
           const edgesGeo = new THREE.EdgesGeometry(geo, 22);
           const edgesMat = new THREE.LineBasicMaterial({
             color: isColliding
@@ -2305,9 +2515,15 @@ export const Viewport3D = forwardRef<Viewport3DHandle, Viewport3DProps>(
                 ? '#F59E0B'
                 : isActiveAssemblyStep
                   ? '#10B981'
-                  : '#4B5563',
-            transparent: !isSelected && !isColliding && !isActiveAssemblyStep,
-            opacity: isSelected || isColliding || isActiveAssemblyStep ? 1 : 0.35,
+                  : isAssemblyTargetBase
+                    ? '#38BDF8'
+                    : '#4B5563',
+            transparent:
+              !isSelected && !isColliding && !isActiveAssemblyStep && !isAssemblyTargetBase,
+            opacity:
+              isSelected || isColliding || isActiveAssemblyStep || isAssemblyTargetBase
+                ? 1
+                : 0.35,
           });
           const edges = new THREE.LineSegments(edgesGeo, edgesMat);
           edges.userData.disposeMaterial = true;
@@ -2317,6 +2533,13 @@ export const Viewport3D = forwardRef<Viewport3DHandle, Viewport3DProps>(
         // Attached fasteners anchored in local board coordinates
         const partFasteners = fastenersByPart.get(part.id) ?? [];
         for (const f of partFasteners) {
+          // In Assembly Guide mode, show a fastener only once both host and target boards are mounted
+          if (props.assemblyStep > 0 && props.assemblyPlan && f.targetPartId) {
+            const targetStep = props.assemblyPlan.partStepMap.get(f.targetPartId);
+            if (targetStep && targetStep > props.assemblyStep) {
+              continue;
+            }
+          }
           const audit = props.fastenerAuditMap.get(f.id);
           const fGroup = buildFastenerGroup(
             f.type,
@@ -2356,9 +2579,41 @@ export const Viewport3D = forwardRef<Viewport3DHandle, Viewport3DProps>(
       // Apply current exploded & open-door/drawer transforms immediately after rebuild
       rt.applyPartAnimations();
 
-      // Rebuild 3D Clearance Dimension Guides ("Prześwity w świetle")
+      // Rebuild 3D Clearance Dimension Guides ("Prześwity w świetle") & Assembly Joint Contact Pins
       disposeObjectTree(rt.guidesRoot);
       rt.guidesRoot.clear();
+      if (
+        props.assemblyStep > 0 &&
+        activeStepPlan &&
+        activeStepPlan.jointPointsWorld.length > 0 &&
+        props.explodedAmount < 0.01
+      ) {
+        const coreGeo = new THREE.SphereGeometry(0.011, 14, 14);
+        const coreMat = new THREE.MeshBasicMaterial({
+          color: '#10B981',
+          depthTest: false,
+          transparent: true,
+          opacity: 0.95,
+        });
+        const haloGeo = new THREE.SphereGeometry(0.022, 14, 14);
+        const haloMat = new THREE.MeshBasicMaterial({
+          color: '#38BDF8',
+          depthTest: false,
+          transparent: true,
+          opacity: 0.32,
+          wireframe: true,
+        });
+        for (const pt of activeStepPlan.jointPointsWorld) {
+          const marker = new THREE.Group();
+          marker.position.set(pt[0] * MM_TO_M, pt[1] * MM_TO_M, pt[2] * MM_TO_M);
+          const core = new THREE.Mesh(coreGeo, coreMat);
+          core.renderOrder = 26;
+          const halo = new THREE.Mesh(haloGeo, haloMat);
+          halo.renderOrder = 25;
+          marker.add(core, halo);
+          rt.guidesRoot.add(marker);
+        }
+      }
       if (props.showDimensions && props.explodedAmount < 0.01 && props.clearances.length > 0) {
         const lineMat = new THREE.LineBasicMaterial({
           color: '#0EA5E9',
@@ -2602,6 +2857,7 @@ export const Viewport3D = forwardRef<Viewport3DHandle, Viewport3DProps>(
       props.ledUnderCabinet,
       props.explodedAmount,
       props.assemblyStep,
+      props.assemblyPlan,
       props.materialsVersion,
       props.customTextures,
       props.collidingPartIds,

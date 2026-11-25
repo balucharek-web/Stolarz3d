@@ -12,23 +12,37 @@ import {
 export const MM_TO_M = 0.001;
 export const M_TO_MM = 1000;
 
+function hashPartUvOffset(seedStr?: string): [number, number] {
+  if (!seedStr) return [0, 0];
+  let h1 = 2166136261;
+  let h2 = 16777619;
+  for (let i = 0; i < seedStr.length; i++) {
+    const c = seedStr.charCodeAt(i);
+    h1 = Math.imul(h1 ^ c, 16777619);
+    h2 = Math.imul(h2 ^ (c + i * 31), 2246822519);
+  }
+  return [((h1 >>> 0) % 997) / 997, ((h2 >>> 0) % 991) / 991];
+}
+
 /**
  * Re-project box-planar UVs onto a BufferGeometry so wood/OSB textures keep real-world scale
- * (1 tile = 650mm) AND thin cut-edge faces map cleanly across board thickness (so laminated
- * birch plywood edges show crisp parallel veneer stripes along every edge & slope!).
+ * (1 seamless synthesized sheet tile = 1250mm), each board gets a unique deterministic UV crop
+ * (zero cloned look between adjacent shelves/doors!), and thin cut edges show crisp veneer layers.
  */
 function applyWorldScaleUVs(
   geometry: THREE.BufferGeometry,
   rotateGrain = false,
   boardDimsM?: [number, number, number],
-  forcedThinAxis?: 'x' | 'y' | 'z'
+  forcedThinAxis?: 'x' | 'y' | 'z',
+  partId?: string
 ) {
   const pos = geometry.attributes.position;
   const norm = geometry.attributes.normal;
   if (!pos || !norm) return;
 
   const uvArray = new Float32Array(pos.count * 2);
-  const scale = 1 / 0.65; // 650mm per texture tile
+  const scale = 1 / 1.25; // 1250mm per seamless synthesized sheet tile
+  const [offU, offV] = hashPartUvOffset(partId);
 
   // Determine which local axis is the thin board thickness (if any)
   const wM = boardDimsM ? boardDimsM[0] : 1;
@@ -103,10 +117,13 @@ function applyWorldScaleUVs(
       (thinAxis === 'x' && nx >= ny && nx >= nz);
 
     if (rotateGrain && isPrimaryFace) {
-      uvArray[i * 2] = v;
-      uvArray[i * 2 + 1] = u;
+      uvArray[i * 2] = v + offU;
+      uvArray[i * 2 + 1] = u + offV;
+    } else if (isPrimaryFace) {
+      uvArray[i * 2] = u + offU;
+      uvArray[i * 2 + 1] = v + offV;
     } else {
-      uvArray[i * 2] = u;
+      uvArray[i * 2] = u + offU;
       uvArray[i * 2 + 1] = v;
     }
   }
@@ -273,7 +290,7 @@ export function buildPartGeometry(part: FurniturePart): THREE.BufferGeometry {
     geo.rotateY(Math.PI / 2);
     geo.translate(-w / 2, 0, 0);
     geo.computeVertexNormals();
-    applyWorldScaleUVs(geo, !!part.grainRotated, [w, h, d]);
+    applyWorldScaleUVs(geo, !!part.grainRotated, [w, h, d], undefined, part.id);
     assignFaceEdgeGroups(geo, [w, h, d]);
     return geo;
   }
@@ -305,7 +322,7 @@ export function buildPartGeometry(part: FurniturePart): THREE.BufferGeometry {
     // Rotate so XY shape lies flat in XZ plane (local +Y = thickness)
     geo.rotateX(-Math.PI / 2);
     geo.computeVertexNormals();
-    applyWorldScaleUVs(geo, !!part.grainRotated, [w, h, d], 'y');
+    applyWorldScaleUVs(geo, !!part.grainRotated, [w, h, d], 'y', part.id);
     assignFaceEdgeGroups(geo, [w, h, d], 'y');
     return geo;
   }
@@ -336,7 +353,7 @@ export function buildPartGeometry(part: FurniturePart): THREE.BufferGeometry {
     geo.translate(0, 0, -innerW / 2);
     geo.rotateY(Math.PI / 2);
     geo.computeVertexNormals();
-    applyWorldScaleUVs(geo, !!part.grainRotated, [w, h, d], 'x');
+    applyWorldScaleUVs(geo, !!part.grainRotated, [w, h, d], 'x', part.id);
     assignFaceEdgeGroups(geo, [w, h, d], 'x');
     return geo;
   }
@@ -394,7 +411,7 @@ export function buildPartGeometry(part: FurniturePart): THREE.BufferGeometry {
     geo.translate(0, 0, -innerD / 2);
     geo.computeVertexNormals();
     // Custom polygons are always extruded along Z: front/back = face (0), all perimeter cuts = edge (1)
-    applyWorldScaleUVs(geo, !!part.grainRotated, [w, h, d], 'z');
+    applyWorldScaleUVs(geo, !!part.grainRotated, [w, h, d], 'z', part.id);
     assignFaceEdgeGroups(geo, [w, h, d], 'z');
     return geo;
   }
@@ -445,7 +462,7 @@ export function buildPartGeometry(part: FurniturePart): THREE.BufferGeometry {
 
   geo.translate(0, 0, -innerD / 2);
   geo.computeVertexNormals();
-  applyWorldScaleUVs(geo, !!part.grainRotated, [w, h, d]);
+  applyWorldScaleUVs(geo, !!part.grainRotated, [w, h, d], undefined, part.id);
   assignFaceEdgeGroups(geo, [w, h, d]);
   return geo;
 }
@@ -586,27 +603,131 @@ export function partToEditablePolygon(part: FurniturePart): {
 }
 
 /**
- * Procedural metallic bar handle for kitchen/cabinet doors (`kind === 'door'`)
+ * Procedural cabinet door/drawer opening hardware:
+ * - 'bar': classic metallic bar handle
+ * - 'tip_on': clean handleless front with internal magnetic push-to-open latch
+ * - 'gola_j': anodized brushed aluminum J-channel edge profile
+ * - 'chamfer_45': 45° beveled undercut finger-pull groove along the opening edge
  */
 export function buildDoorHandleGroup(part: FurniturePart): THREE.Group | null {
-  if (part.kind !== 'door' || !part.handleSide || part.handleSide === 'none') {
+  if (part.kind !== 'door') {
+    return null;
+  }
+
+  const style = part.handleStyle ?? 'bar';
+  const side = part.handleSide ?? 'none';
+
+  // Tip-On handleless: sleek exterior + small internal push-latch body behind opening edge
+  if (style === 'tip_on') {
+    const group = new THREE.Group();
+    group.name = 'door_tip_on';
+    const w = part.width * MM_TO_M;
+    const h = part.height * MM_TO_M;
+    const d = part.depth * MM_TO_M;
+    const latchMat = new THREE.MeshStandardMaterial({
+      color: '#94A3B8',
+      metalness: 0.65,
+      roughness: 0.35,
+    });
+    const latch = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.005, 0.005, 0.022, 10),
+      latchMat
+    );
+    latch.rotation.x = Math.PI / 2;
+    const xPos = side === 'left' ? -w / 2 + 0.025 : side === 'right' ? w / 2 - 0.025 : 0;
+    const yPos = side === 'top' ? h / 2 - 0.025 : 0;
+    latch.position.set(xPos, yPos, -d / 2 - 0.011);
+    group.add(latch);
+    return group;
+  }
+
+  if (side === 'none') {
     return null;
   }
 
   const group = new THREE.Group();
   group.name = 'door_handle';
 
+  const w = part.width * MM_TO_M;
+  const h = part.height * MM_TO_M;
+  const d = part.depth * MM_TO_M;
+  const isHorizontal = side === 'top';
+
+  if (style === 'gola_j') {
+    // Sleek full-edge brushed aluminum J-profile handle (listwa korytkowa Gola / krawędziowa)
+    const aluMat = new THREE.MeshStandardMaterial({
+      color: '#C7CDD6',
+      metalness: 0.9,
+      roughness: 0.22,
+    });
+    const grooveMat = new THREE.MeshStandardMaterial({
+      color: '#1E2126',
+      metalness: 0.3,
+      roughness: 0.65,
+    });
+    if (isHorizontal) {
+      const stripLen = Math.max(0.08, w - 0.004);
+      const lip = new THREE.Mesh(new THREE.BoxGeometry(stripLen, 0.016, d + 0.008), aluMat);
+      lip.position.set(0, h / 2 - 0.008, 0.003);
+      const shadowGroove = new THREE.Mesh(
+        new THREE.BoxGeometry(stripLen - 0.004, 0.007, 0.004),
+        grooveMat
+      );
+      shadowGroove.position.set(0, h / 2 - 0.015, d / 2 + 0.002);
+      group.add(lip, shadowGroove);
+    } else {
+      const stripLen = Math.max(0.12, h - 0.004);
+      const sx = side === 'left' ? -w / 2 + 0.008 : w / 2 - 0.008;
+      const lip = new THREE.Mesh(new THREE.BoxGeometry(0.016, stripLen, d + 0.008), aluMat);
+      lip.position.set(sx, 0, 0.003);
+      const shadowGroove = new THREE.Mesh(
+        new THREE.BoxGeometry(0.007, stripLen - 0.004, 0.004),
+        grooveMat
+      );
+      shadowGroove.position.set(
+        side === 'left' ? -w / 2 + 0.016 : w / 2 - 0.016,
+        0,
+        d / 2 + 0.002
+      );
+      group.add(lip, shadowGroove);
+    }
+    return group;
+  }
+
+  if (style === 'chamfer_45') {
+    // 45° beveled undercut finger-pull edge (frezowany podchwyt 45°)
+    const bevelMat = new THREE.MeshStandardMaterial({
+      color: '#2E323A',
+      metalness: 0.15,
+      roughness: 0.55,
+    });
+    if (isHorizontal) {
+      const stripLen = Math.max(0.08, w - 0.006);
+      const bevel = new THREE.Mesh(new THREE.BoxGeometry(stripLen, 0.018, 0.006), bevelMat);
+      bevel.rotation.x = Math.PI / 4;
+      bevel.position.set(0, h / 2 - 0.009, d / 2 - 0.002);
+      group.add(bevel);
+    } else {
+      const stripLen = Math.max(0.12, h - 0.006);
+      const bevel = new THREE.Mesh(new THREE.BoxGeometry(0.018, stripLen, 0.006), bevelMat);
+      bevel.rotation.y = side === 'left' ? -Math.PI / 4 : Math.PI / 4;
+      bevel.position.set(
+        side === 'left' ? -w / 2 + 0.009 : w / 2 - 0.009,
+        0,
+        d / 2 - 0.002
+      );
+      group.add(bevel);
+    }
+    return group;
+  }
+
+  // Classic metallic bar handle ('bar')
   const handleMat = new THREE.MeshStandardMaterial({
     color: '#2A2D33',
     metalness: 0.85,
     roughness: 0.28,
   });
 
-  const w = part.width * MM_TO_M;
-  const h = part.height * MM_TO_M;
-  const d = part.depth * MM_TO_M;
-
-  const isHorizontal = part.handleSide === 'top';
   const barLength = Math.min(0.16, (isHorizontal ? w : h) * 0.42);
   const standoffDepth = 0.024;
   const barThickness = 0.009;
@@ -637,11 +758,11 @@ export function buildDoorHandleGroup(part: FurniturePart): THREE.Group | null {
   group.add(leg1, leg2);
 
   const edgeInset = 0.042;
-  if (part.handleSide === 'left') {
+  if (side === 'left') {
     group.position.set(-w / 2 + edgeInset, Math.min(h * 0.22, h / 2 - barLength / 2 - 0.04), d / 2);
-  } else if (part.handleSide === 'right') {
+  } else if (side === 'right') {
     group.position.set(w / 2 - edgeInset, Math.min(h * 0.22, h / 2 - barLength / 2 - 0.04), d / 2);
-  } else if (part.handleSide === 'top') {
+  } else if (side === 'top') {
     group.position.set(0, h / 2 - edgeInset, d / 2);
   }
 

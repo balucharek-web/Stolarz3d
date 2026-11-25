@@ -25,60 +25,71 @@ interface PhotoPbrProfile {
   clearcoat: number;
   clearcoatRoughness: number;
   envMapIntensity: number;
-  /** Physical UV repeat factor relative to 650mm base tile so grain/flakes match real-world cm scale */
+  /** Physical UV repeat factor relative to 1250mm synthesized sheet so grain/flakes match real-world cm scale */
   tileScale: number;
-  mirrorWrap: boolean;
+  synthesisMode: 'isotropic' | 'directional';
+  /** How many source tiles span one synthesized macro sheet (higher = finer flakes/pores across 1.25m) */
+  patchDensity: number;
+  seed: number;
 }
 
 const DEFAULT_CUSTOM_PROFILE: PhotoPbrProfile = {
-  normalStrength: 2.5,
-  normalScale: 0.78,
-  roughMin: 115,
-  roughMax: 225,
+  normalStrength: 2.4,
+  normalScale: 0.72,
+  roughMin: 118,
+  roughMax: 222,
   metalness: 0.02,
   clearcoat: 0.12,
   clearcoatRoughness: 0.42,
   envMapIntensity: 0.92,
-  tileScale: 1.25,
-  mirrorWrap: true,
+  tileScale: 1.0,
+  synthesisMode: 'directional',
+  patchDensity: 1.8,
+  seed: 7109,
 };
 
 const PHOTO_PROFILES: Partial<Record<MaterialId, PhotoPbrProfile>> = {
   osb3: {
-    normalStrength: 3.4,
-    normalScale: 1.0,
+    normalStrength: 3.3,
+    normalScale: 0.95,
     roughMin: 148,
     roughMax: 242,
     metalness: 0.02,
     clearcoat: 0.08,
     clearcoatRoughness: 0.56,
     envMapIntensity: 0.85,
-    tileScale: 1.65, // ~395mm per tile so OSB strands are authentic 4–9 cm scale
-    mirrorWrap: true,
+    tileScale: 1.0, // 1250mm seamless stochastic sheet with authentic 4-8cm pressed OSB strands
+    synthesisMode: 'isotropic',
+    patchDensity: 2.8,
+    seed: 1337,
   },
   oak_craft: {
-    normalStrength: 2.3,
-    normalScale: 0.72,
+    normalStrength: 2.2,
+    normalScale: 0.68,
     roughMin: 108,
-    roughMax: 215,
+    roughMax: 214,
     metalness: 0.02,
     clearcoat: 0.18,
     clearcoatRoughness: 0.38,
     envMapIntensity: 0.95,
-    tileScale: 1.15,
-    mirrorWrap: true,
+    tileScale: 1.0,
+    synthesisMode: 'directional',
+    patchDensity: 2.0,
+    seed: 2411,
   },
   walnut: {
     normalStrength: 2.2,
-    normalScale: 0.72,
+    normalScale: 0.68,
     roughMin: 95,
     roughMax: 198,
     metalness: 0.03,
     clearcoat: 0.28,
     clearcoatRoughness: 0.32,
     envMapIntensity: 1.05,
-    tileScale: 1.15,
-    mirrorWrap: true,
+    tileScale: 1.0,
+    synthesisMode: 'directional',
+    patchDensity: 2.0,
+    seed: 3527,
   },
   birch_plywood: {
     normalStrength: 1.4,
@@ -89,12 +100,14 @@ const PHOTO_PROFILES: Partial<Record<MaterialId, PhotoPbrProfile>> = {
     clearcoat: 0.14,
     clearcoatRoughness: 0.44,
     envMapIntensity: 0.9,
-    tileScale: 1.1,
-    mirrorWrap: true,
+    tileScale: 1.0,
+    synthesisMode: 'directional',
+    patchDensity: 1.9,
+    seed: 4639,
   },
   concrete_top: {
-    normalStrength: 3.1,
-    normalScale: 0.95,
+    normalStrength: 2.9,
+    normalScale: 0.88,
     roughMin: 135,
     roughMax: 245,
     metalness: 0.03,
@@ -102,19 +115,23 @@ const PHOTO_PROFILES: Partial<Record<MaterialId, PhotoPbrProfile>> = {
     clearcoatRoughness: 0.52,
     envMapIntensity: 0.85,
     tileScale: 1.0,
-    mirrorWrap: true,
+    synthesisMode: 'isotropic',
+    patchDensity: 1.9,
+    seed: 5741,
   },
   steel_galv: {
-    normalStrength: 2.0,
-    normalScale: 0.65,
+    normalStrength: 1.9,
+    normalScale: 0.62,
     roughMin: 48,
     roughMax: 142,
     metalness: 0.88,
     clearcoat: 0.12,
     clearcoatRoughness: 0.24,
     envMapIntensity: 1.4,
-    tileScale: 2.1,
-    mirrorWrap: true,
+    tileScale: 1.0,
+    synthesisMode: 'isotropic',
+    patchDensity: 3.1,
+    seed: 6857,
   },
 };
 
@@ -206,7 +223,182 @@ function heightToNormalCanvas(
 }
 
 /**
- * Derive genuine Photographic Albedo (center-cropped power-of-two), Normal Map, and Roughness Map
+ * Synthesizes a 100% seamless, non-repetitive studio sheet texture from a high-res material scan.
+ * Eliminates visible tile grids & mirror-butterfly seams via toroidal stochastic patch quilting
+ * plus organic low-frequency natural tonal clouding (like real 2800x2070mm boards).
+ */
+function synthesizeSeamlessStudioSheet(
+  img: HTMLImageElement,
+  profile: PhotoPbrProfile,
+  targetSize: number
+): HTMLCanvasElement {
+  const srcSize = Math.min(512, targetSize);
+  const srcCanvas = drawSquareCropped(img, srcSize);
+  const [outCanvas, outCtx] = createCanvas(targetSize);
+  const rng = createRng(profile.seed);
+
+  // Reusable feathered stamp buffer
+  const stampSize = Math.max(96, Math.round(targetSize / Math.max(1.3, profile.patchDensity * 0.72)));
+  const [stampCanvas, stampCtx] = createCanvas(stampSize);
+
+  const drawWrapped = (canvas: HTMLCanvasElement, cx: number, cy: number, alpha = 1) => {
+    const hw = canvas.width * 0.5;
+    const hh = canvas.height * 0.5;
+    outCtx.globalAlpha = alpha;
+    for (let ox = -1; ox <= 1; ox++) {
+      for (let oy = -1; oy <= 1; oy++) {
+        const dx = cx - hw + ox * targetSize;
+        const dy = cy - hh + oy * targetSize;
+        if (dx + canvas.width < 0 || dx > targetSize || dy + canvas.height < 0 || dy > targetSize) {
+          continue;
+        }
+        outCtx.drawImage(canvas, dx, dy);
+      }
+    }
+    outCtx.globalAlpha = 1;
+  };
+
+  if (profile.synthesisMode === 'isotropic') {
+    // 1. Base average fill so zero transparent gaps ever appear
+    const baseScale = targetSize / Math.max(1.2, profile.patchDensity);
+    for (let gx = 0; gx < Math.ceil(profile.patchDensity) + 1; gx++) {
+      for (let gy = 0; gy < Math.ceil(profile.patchDensity) + 1; gy++) {
+        outCtx.save();
+        outCtx.translate((gx + 0.5) * baseScale, (gy + 0.5) * baseScale);
+        outCtx.rotate(Math.floor(rng() * 4) * (Math.PI / 2));
+        outCtx.drawImage(srcCanvas, -baseScale * 0.52, -baseScale * 0.52, baseScale * 1.04, baseScale * 1.04);
+        outCtx.restore();
+      }
+    }
+
+    // 2. Stochastic toroidal rotated patches with smooth radial cosine feather mask
+    const patchCount = 26;
+    for (let p = 0; p < patchCount; p++) {
+      const cropFrac = 0.56 + rng() * 0.34;
+      const cw = Math.floor(srcSize * cropFrac);
+      const sx = Math.floor(rng() * (srcSize - cw));
+      const sy = Math.floor(rng() * (srcSize - cw));
+
+      stampCtx.globalCompositeOperation = 'source-over';
+      stampCtx.clearRect(0, 0, stampSize, stampSize);
+      stampCtx.save();
+      stampCtx.translate(stampSize * 0.5, stampSize * 0.5);
+      // Random 90-deg orientation + flip breaks all grid repetition
+      stampCtx.rotate(Math.floor(rng() * 4) * (Math.PI / 2));
+      if (rng() > 0.5) stampCtx.scale(-1, 1);
+      stampCtx.drawImage(srcCanvas, sx, sy, cw, cw, -stampSize * 0.5, -stampSize * 0.5, stampSize, stampSize);
+      stampCtx.restore();
+
+      // Subtle per-patch natural tonal variation (±4%)
+      const tone = rng() > 0.5 ? 'rgba(255,248,236,0.045)' : 'rgba(24,18,12,0.045)';
+      stampCtx.fillStyle = tone;
+      stampCtx.fillRect(0, 0, stampSize, stampSize);
+
+      // Smooth radial feather mask
+      stampCtx.globalCompositeOperation = 'destination-in';
+      const grad = stampCtx.createRadialGradient(
+        stampSize * 0.5,
+        stampSize * 0.5,
+        stampSize * 0.14,
+        stampSize * 0.5,
+        stampSize * 0.5,
+        stampSize * 0.5
+      );
+      grad.addColorStop(0, 'rgba(0,0,0,1)');
+      grad.addColorStop(0.62, 'rgba(0,0,0,0.92)');
+      grad.addColorStop(1, 'rgba(0,0,0,0)');
+      stampCtx.fillStyle = grad;
+      stampCtx.fillRect(0, 0, stampSize, stampSize);
+
+      drawWrapped(stampCanvas, rng() * targetSize, rng() * targetSize, 0.94);
+    }
+  } else {
+    // Directional wood grain synthesis: preserve authentic longitudinal grain flow with zero seams & zero mirroring
+    const tileW = targetSize / Math.max(1.2, profile.patchDensity);
+    const cols = Math.ceil(profile.patchDensity) + 1;
+    const rows = Math.ceil(profile.patchDensity) + 1;
+    for (let gy = 0; gy < rows; gy++) {
+      for (let gx = 0; gx < cols; gx++) {
+        outCtx.drawImage(srcCanvas, gx * tileW, gy * tileW, tileW + 1, tileW + 1);
+      }
+    }
+
+    // Layer elongated feathered wood grain strips along X/Y to completely erase seam lines and create natural plank flow
+    const stripW = Math.round(targetSize * 0.62);
+    const stripH = Math.round(targetSize * 0.34);
+    const [stripCanvas, stripCtx] = createCanvas(stripW);
+    stripCanvas.height = stripH;
+
+    for (let i = 0; i < 18; i++) {
+      const cw = Math.floor(srcSize * (0.65 + rng() * 0.3));
+      const ch = Math.floor(srcSize * (0.45 + rng() * 0.35));
+      const sx = Math.floor(rng() * (srcSize - cw));
+      const sy = Math.floor(rng() * (srcSize - ch));
+
+      stripCtx.globalCompositeOperation = 'source-over';
+      stripCtx.clearRect(0, 0, stripW, stripH);
+      stripCtx.save();
+      stripCtx.translate(stripW * 0.5, stripH * 0.5);
+      // Flip 180° occasionally along grain without breaking grain orientation
+      if (rng() > 0.5) stripCtx.scale(-1, 1);
+      if (rng() > 0.5) stripCtx.scale(1, -1);
+      stripCtx.drawImage(srcCanvas, sx, sy, cw, ch, -stripW * 0.5, -stripH * 0.5, stripW, stripH);
+      stripCtx.restore();
+
+      // Natural heartwood / sapwood micro-tone shift
+      stripCtx.fillStyle = rng() > 0.5 ? 'rgba(255,244,225,0.04)' : 'rgba(28,16,8,0.045)';
+      stripCtx.fillRect(0, 0, stripW, stripH);
+
+      // Soft elliptical feather mask
+      stripCtx.globalCompositeOperation = 'destination-in';
+      stripCtx.save();
+      stripCtx.scale(1, stripH / stripW);
+      const grad = stripCtx.createRadialGradient(
+        stripW * 0.5,
+        stripW * 0.5,
+        stripW * 0.12,
+        stripW * 0.5,
+        stripW * 0.5,
+        stripW * 0.5
+      );
+      grad.addColorStop(0, 'rgba(0,0,0,1)');
+      grad.addColorStop(0.65, 'rgba(0,0,0,0.88)');
+      grad.addColorStop(1, 'rgba(0,0,0,0)');
+      stripCtx.fillStyle = grad;
+      stripCtx.fillRect(0, 0, stripW, stripW);
+      stripCtx.restore();
+
+      drawWrapped(stripCanvas, rng() * targetSize, rng() * targetSize, 0.9);
+    }
+  }
+
+  // 3. Subtle periodic macro tonal variation (breaks up large-area uniformity across 1.25m sheets)
+  const imgData = outCtx.getImageData(0, 0, targetSize, targetSize);
+  const d = imgData.data;
+  const phase1 = rng() * Math.PI * 2;
+  const phase2 = rng() * Math.PI * 2;
+  const invSize = (Math.PI * 2) / targetSize;
+  for (let y = 0; y < targetSize; y++) {
+    const sy1 = Math.sin(y * invSize + phase1);
+    const cy2 = Math.cos(y * invSize * 2 + phase2);
+    for (let x = 0; x < targetSize; x++) {
+      const wave =
+        0.55 * Math.sin(x * invSize + phase2) * sy1 +
+        0.45 * Math.cos(x * invSize * 2 - phase1) * cy2;
+      const mult = 1 + wave * 0.032; // Gentle ±3.2% organic light-absorption clouding
+      const idx = (y * targetSize + x) * 4;
+      d[idx] = Math.min(255, Math.max(0, Math.round(d[idx] * mult)));
+      d[idx + 1] = Math.min(255, Math.max(0, Math.round(d[idx + 1] * mult)));
+      d[idx + 2] = Math.min(255, Math.max(0, Math.round(d[idx + 2] * mult)));
+    }
+  }
+  outCtx.putImageData(imgData, 0, 0);
+
+  return outCanvas;
+}
+
+/**
+ * Derive non-repeating Synthesized Photographic Albedo, Tangent Normal Map, and Roughness Map
  */
 function buildPhotoMapsFromImage(
   img: HTMLImageElement,
@@ -218,9 +410,9 @@ function buildPhotoMapsFromImage(
   normalCanvas: HTMLCanvasElement;
   roughnessCanvas: HTMLCanvasElement;
 } {
-  const albedoCanvas = drawSquareCropped(img, albedoSize);
-  const lumCanvas = drawSquareCropped(img, derivedSize);
-  const lumCtx = lumCanvas.getContext('2d', { willReadFrequently: true })!;
+  const albedoCanvas = synthesizeSeamlessStudioSheet(img, profile, albedoSize);
+  const [lumCanvas, lumCtx] = createCanvas(derivedSize);
+  lumCtx.drawImage(albedoCanvas, 0, 0, derivedSize, derivedSize);
   const srcImg = lumCtx.getImageData(0, 0, derivedSize, derivedSize);
   const src = srcImg.data;
 
@@ -367,6 +559,82 @@ function generateMicroPebblePBR(
   return { albedo, height, roughness };
 }
 
+/**
+ * Intelligent 100% seamless procedural wood-grain PBR synthesis for custom user warehouse boards
+ * (periodic annual growth rings, cathedral curves, dark wood pores, and matching normal/roughness maps).
+ */
+function generateProceduralWoodPBR(
+  rgb: [number, number, number],
+  seed: number,
+  size = 512
+): PBRCanvasSet {
+  const rng = createRng(seed);
+  const [albedo, ctx] = createCanvas(size);
+  const [height, hctx] = createCanvas(size);
+  const [roughness, rctx] = createCanvas(size);
+
+  const aImg = ctx.createImageData(size, size);
+  const hImg = hctx.createImageData(size, size);
+  const rImg = rctx.createImageData(size, size);
+
+  const p1 = rng() * Math.PI * 2;
+  const p2 = rng() * Math.PI * 2;
+  const p3 = rng() * Math.PI * 2;
+  const tau = Math.PI * 2;
+
+  for (let y = 0; y < size; y++) {
+    const v = y / size;
+    for (let x = 0; x < size; x++) {
+      const u = x / size;
+      // Seamless periodic domain warp for organic timber rings along X
+      const warp =
+        0.18 * Math.sin(u * tau * 2 + p1) * Math.cos(v * tau + p2) +
+        0.09 * Math.sin(u * tau * 4 - v * tau * 2 + p3) +
+        0.045 * Math.cos(u * tau * 7 + v * tau * 3 + p1);
+      const ringCoord = (v * 9.5 + warp * 3.8);
+      const ring = 0.5 + 0.5 * Math.sin(ringCoord * tau);
+      const sharpRing = Math.pow(ring, 2.2);
+
+      // Fine longitudinal wood fibers & pores
+      const fiber =
+        0.5 +
+        0.5 * Math.sin(v * tau * 48 + Math.sin(u * tau * 3 + p2) * 2.4) *
+          Math.cos(u * tau * 5 + p3);
+      const poreMask =
+        Math.sin(v * tau * 31 + warp * 12) > 0.88 && Math.sin(u * tau * 14 + v * tau * 19 + p1) > 0.65
+          ? 1
+          : 0;
+
+      // Subtle macro sapwood/heartwood tonal wave
+      const macro = 1 + 0.05 * Math.sin(v * tau + p2) * Math.cos(u * tau + p1);
+      const shade = (0.86 + sharpRing * 0.16 + fiber * 0.05 - poreMask * 0.24) * macro;
+
+      const idx = (y * size + x) * 4;
+      aImg.data[idx] = Math.min(255, Math.max(0, Math.round(rgb[0] * shade)));
+      aImg.data[idx + 1] = Math.min(255, Math.max(0, Math.round(rgb[1] * shade * 0.98)));
+      aImg.data[idx + 2] = Math.min(255, Math.max(0, Math.round(rgb[2] * shade * 0.95)));
+      aImg.data[idx + 3] = 255;
+
+      const hv = Math.min(255, Math.max(0, Math.round(135 + sharpRing * 42 + fiber * 18 - poreMask * 95)));
+      hImg.data[idx] = hv;
+      hImg.data[idx + 1] = hv;
+      hImg.data[idx + 2] = hv;
+      hImg.data[idx + 3] = 255;
+
+      const rv = Math.min(245, Math.max(85, Math.round(168 - sharpRing * 38 + poreMask * 56)));
+      rImg.data[idx] = rv;
+      rImg.data[idx + 1] = rv;
+      rImg.data[idx + 2] = rv;
+      rImg.data[idx + 3] = 255;
+    }
+  }
+
+  ctx.putImageData(aImg, 0, 0);
+  hctx.putImageData(hImg, 0, 0);
+  rctx.putImageData(rImg, 0, 0);
+  return { albedo, height, roughness };
+}
+
 /** UI Swatch URLs — supports custom uploaded photos as well as built-in studio scans */
 const swatchCache = new Map<MaterialId, string>();
 
@@ -408,7 +676,10 @@ export function getMaterialSwatchDataUrl(
     ctx.fillRect(0, 0, 64, 64);
     canvas = c;
   } else {
-    canvas = generateMicroPebblePBR(hexToRgbTuple(meta.swatchFallbackHex), 125, 9, 64).albedo;
+    const rgb = hexToRgbTuple(meta.swatchFallbackHex);
+    canvas = meta.grainDirectional
+      ? generateProceduralWoodPBR(rgb, rgb[0] * 17 + rgb[1] * 31 + rgb[2] * 13, 64).albedo
+      : generateMicroPebblePBR(rgb, 125, 9, 64).albedo;
   }
 
   const url = canvas.toDataURL('image/png');
@@ -423,6 +694,8 @@ const FALLBACK_COLORS: Record<string, string> = {
   birch_plywood: '#E8D1AF',
   white_matte: '#F4F3EF',
   anthracite_matte: '#34383F',
+  hdf_white: '#F0EFEA',
+  hdf_black: '#2C2E33',
   concrete_top: '#A0A3A2',
   steel_black: '#26292E',
   steel_galv: '#AEB5BC',
@@ -634,21 +907,21 @@ export class MaterialLibrary {
       const albedoTex = this.createCanvasTex(
         albedoCanvas,
         true,
-        profile.mirrorWrap,
+        false,
         profile.tileScale,
         id
       );
       const normalTex = this.createCanvasTex(
         normalCanvas,
         false,
-        profile.mirrorWrap,
+        false,
         profile.tileScale,
         id
       );
       const roughTex = this.createCanvasTex(
         roughnessCanvas,
         false,
-        profile.mirrorWrap,
+        false,
         profile.tileScale,
         id
       );
@@ -699,7 +972,9 @@ export class MaterialLibrary {
         const base = this.getMaterial(id, false);
         const primary = (Array.isArray(base) ? base[0] : base) as THREE.MeshStandardMaterial;
         const xMat = new THREE.MeshStandardMaterial({
-          color: primary.map ? new THREE.Color('#FFFFFF') : new THREE.Color(FALLBACK_COLORS[id]),
+          color: primary.map
+            ? new THREE.Color('#FFFFFF')
+            : new THREE.Color(FALLBACK_COLORS[id] ?? getMaterialMeta(id).swatchFallbackHex),
           map: primary.map ?? null,
           roughness: 0.55,
           metalness: 0.05,
@@ -834,22 +1109,22 @@ export class MaterialLibrary {
         depthWrite: false,
       });
     } else {
-      // Custom user warehouse board — realistic textured micro-grain PBR tinted by swatchFallbackHex
+      // Custom user warehouse board — realistic procedural wood grain or architectural matte melamine PBR
       const meta = getMaterialMeta(id);
       const rgb = hexToRgbTuple(meta.swatchFallbackHex);
-      result = this.buildProceduralPbrMat(
-        id,
-        generateMicroPebblePBR(rgb, 128, 8, 256),
-        {
-          normalStrength: 1.05,
-          normalScale: 0.4,
-          roughness: 0.88,
-          metalness: meta.category === 'Stal i szkło' ? 0.65 : 0.02,
-          clearcoat: 0.14,
-          clearcoatRoughness: 0.4,
-          envMapIntensity: 0.92,
-        }
-      );
+      const seed = rgb[0] * 17 + rgb[1] * 31 + rgb[2] * 13 + id.length * 7;
+      const pbrSet = meta.grainDirectional
+        ? generateProceduralWoodPBR(rgb, seed, this.isSoftwareGl ? 256 : 512)
+        : generateMicroPebblePBR(rgb, 128, 8, 256);
+      result = this.buildProceduralPbrMat(id, pbrSet, {
+        normalStrength: meta.grainDirectional ? 2.1 : 1.0,
+        normalScale: meta.grainDirectional ? 0.62 : 0.36,
+        roughness: 0.9,
+        metalness: meta.category === 'Stal i szkło' ? 0.65 : 0.02,
+        clearcoat: meta.grainDirectional ? 0.16 : 0.12,
+        clearcoatRoughness: 0.4,
+        envMapIntensity: 0.94,
+      });
     }
 
     this.standardMaterials.set(id, result);

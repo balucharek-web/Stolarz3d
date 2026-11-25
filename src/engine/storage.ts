@@ -11,6 +11,7 @@ import {
   type FurniturePart,
   type FurnitureProject,
   type HandleSide,
+  type HandleStyle,
   type MaterialId,
   type MaterialMeta,
   type MaterialsCatalogConfig,
@@ -18,6 +19,9 @@ import {
   type PartCutout,
   type PartKind,
   type QuoteSettings,
+  type RoomConfig,
+  type RoomObstacle,
+  type RoomObstacleType,
   type ScrewType,
   type SurfaceFinish,
 } from '../types/furniture';
@@ -107,8 +111,69 @@ function sanitizePolygon(raw: unknown): [number, number][] | undefined {
 }
 
 const VALID_FINISHES = new Set<SurfaceFinish>(['matte', 'satin', 'gloss']);
+const VALID_HANDLE_STYLES = new Set<HandleStyle>(['bar', 'tip_on', 'gola_j', 'chamfer_45']);
 const VALID_SLIDES = new Set<DrawerSlideType>(['none', 'ball_26mm', 'undermount_blum']);
-const VALID_HW_TAGS = new Set(['leg', 'drawer_front', 'drawer_box', 'door_overlay', 'door_inset']);
+const VALID_HW_TAGS = new Set([
+  'leg',
+  'drawer_front',
+  'drawer_box',
+  'door_overlay',
+  'door_inset',
+  'sliding_door',
+  'wall_filler',
+]);
+const VALID_OBSTACLE_TYPES = new Set<RoomObstacleType>(['radiator', 'socket', 'pipe', 'window']);
+
+function sanitizeRoomConfig(raw: unknown): RoomConfig | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const r = raw as Record<string, unknown>;
+  const rawObstacles = Array.isArray(r.obstacles) ? r.obstacles : [];
+  const obstacles: RoomObstacle[] = [];
+  for (let i = 0; i < rawObstacles.length; i++) {
+    const item = rawObstacles[i];
+    if (!item || typeof item !== 'object') continue;
+    const o = item as Record<string, unknown>;
+    const type: RoomObstacleType =
+      typeof o.type === 'string' && VALID_OBSTACLE_TYPES.has(o.type as RoomObstacleType)
+        ? (o.type as RoomObstacleType)
+        : 'socket';
+    const wall = o.wall === 'left' || o.wall === 'right' ? o.wall : 'back';
+    obstacles.push({
+      id: typeof o.id === 'string' && o.id.trim() ? o.id.trim() : `obs_${i}`,
+      type,
+      label: typeof o.label === 'string' && o.label.trim() ? o.label.trim().slice(0, 40) : type,
+      wall,
+      offsetMm: toFiniteNumber(o.offsetMm, 0, -5000, 5000),
+      elevationMm: toFiniteNumber(o.elevationMm, 300, 0, 4000),
+      widthMm: toFiniteNumber(o.widthMm, 120, 20, 4000),
+      heightMm: toFiniteNumber(o.heightMm, 120, 20, 4000),
+      depthMm: toFiniteNumber(o.depthMm ?? o.protrusionMm, 60, 10, 600),
+    });
+  }
+  const sc =
+    r.slopedCeiling && typeof r.slopedCeiling === 'object'
+      ? (r.slopedCeiling as Record<string, unknown>)
+      : null;
+  const slopedCeiling: RoomConfig['slopedCeiling'] = {
+    enabled: Boolean(sc?.enabled),
+    side: sc?.side === 'left' ? 'left' : 'right',
+    kneeWallHeightMm: toFiniteNumber(sc?.kneeWallHeightMm, 1350, 200, 3500),
+    slopeWidthMm: toFiniteNumber(sc?.slopeWidthMm, 1600, 200, 6000),
+  };
+  return {
+    enabled: Boolean(r.enabled),
+    widthMm: toFiniteNumber(r.widthMm, 2600, 600, 10000),
+    heightMm: toFiniteNumber(r.heightMm, 2500, 1200, 5000),
+    depthMm: toFiniteNumber(r.depthMm, 1600, 400, 10000),
+    backWallZMm: toFiniteNumber(r.backWallZMm, -340, -5000, 5000),
+    showLeftWall: r.showLeftWall !== false,
+    showRightWall: r.showRightWall !== false,
+    showBackWall: r.showBackWall !== false,
+    showCeiling: Boolean(r.showCeiling),
+    slopedCeiling,
+    obstacles,
+  };
+}
 
 function sanitizeCutouts(raw: unknown): PartCutout[] | undefined {
   if (!Array.isArray(raw) || raw.length === 0) return undefined;
@@ -224,7 +289,20 @@ export function sanitizeImportedProject(
       slopeBottomLeft: p.slopeBottomLeft !== undefined ? toFiniteNumber(p.slopeBottomLeft, 0, 0, height - 10) : undefined,
       slopeBottomRight: p.slopeBottomRight !== undefined ? toFiniteNumber(p.slopeBottomRight, 0, 0, height - 10) : undefined,
       handleSide,
+      handleStyle:
+        typeof p.handleStyle === 'string' && VALID_HANDLE_STYLES.has(p.handleStyle as HandleStyle)
+          ? (p.handleStyle as HandleStyle)
+          : undefined,
       grainRotated: Boolean(p.grainRotated),
+      system32ShelfHoles: p.system32ShelfHoles ? true : undefined,
+      slidingDirection:
+        p.slidingDirection === 'left' || p.slidingDirection === 'right'
+          ? p.slidingDirection
+          : undefined,
+      slidingTravelMm:
+        p.slidingTravelMm !== undefined
+          ? toFiniteNumber(p.slidingTravelMm, 400, 40, 3000)
+          : undefined,
       customPolygon: kind === 'custom' ? customPolygon : undefined,
       edgeBanding: sanitizeEdgeBanding(p.edgeBanding),
       groupId:
@@ -333,6 +411,7 @@ export function sanitizeImportedProject(
         : 'Zaimportowany projekt',
     parts: sanitizedParts,
     fasteners: sanitizedFasteners,
+    room: sanitizeRoomConfig(obj.room),
     updatedAt: typeof obj.updatedAt === 'number' && Number.isFinite(obj.updatedAt) ? obj.updatedAt : Date.now(),
   };
 

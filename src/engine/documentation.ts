@@ -10,7 +10,13 @@ import {
 } from '../types/furniture';
 import { getPartQuaternion, getPartWorldBox } from './carpentry';
 import { getProjectDimensionsMm } from './geometry';
-import { type CarpentryCutSpec, type MaterialNestingResult } from './nesting';
+import {
+  nestLinearProfiles,
+  type CarpentryCutSpec,
+  type MaterialLinearResult,
+  type MaterialNestingResult,
+} from './nesting';
+import { buildAssemblyPlan } from './assembly';
 
 export interface DrillHole2D {
   id: string;
@@ -21,7 +27,14 @@ export interface DrillHole2D {
   diameterMm: number;
   depthMm: number;
   face: 'Lico' | 'Tył/Wnętrze' | 'Krawędź';
-  kind: 'screw' | 'minifix_cam' | 'hinge_cup' | 'dowel';
+  kind:
+    | 'screw'
+    | 'minifix_cam'
+    | 'hinge_cup'
+    | 'hinge_plate'
+    | 'slide_rail'
+    | 'shelf_pin'
+    | 'dowel';
   label: string;
 }
 
@@ -41,6 +54,9 @@ export interface HardwareBomSummary {
   ballSlidePairs: number;
   undermountSlidePairs: number;
   handlesCount: number;
+  tipOnCount: number;
+  golaLinearM: number;
+  slidingDoorsCount: number;
   legsCount: number;
   fastenersTotal: number;
   appliancesCount: number;
@@ -50,6 +66,8 @@ export interface HardwareBomSummary {
 export interface CommercialQuoteBreakdown {
   hardware: HardwareBomSummary;
   sheetsCostPln: number;
+  linearBarsCount: number;
+  linearProfilesCostPln: number;
   cuttingLinearM: number;
   cuttingCostPln: number;
   edgeBandingLinearM: number;
@@ -202,6 +220,127 @@ export function extractBoardDrillingMap(
     }
   }
 
+  // System 32 auto-drilling on vertical side walls (thinAxis === 'x')
+  if (thinAxis === 'x' && part.kind === 'panel' && faceW >= 200 && faceH >= 200) {
+    const sideBox = getPartWorldBox(part);
+    const frontEdgeX = faceW; // local +Z maps to X = faceW on vertical side walls
+
+    // 1. Matching System 32 Hinge Mounting Plates (37 mm from front edge, ±16 mm = 32 mm pitch)
+    for (const other of allParts) {
+      if (other.id === part.id || other.kind !== 'door') continue;
+      if (!other.hingeSide || other.hingeSide === 'none' || other.hingeSide === 'top') continue;
+      const ob = getPartWorldBox(other);
+      // Door must sit near the front face of this side wall
+      if (Math.abs(ob.minZ - sideBox.maxZ) > 35 && Math.abs(ob.maxZ - sideBox.maxZ) > 35) continue;
+      const hingeWorldX = other.hingeSide === 'left' ? ob.minX : ob.maxX;
+      if (Math.abs(hingeWorldX - part.position[0]) > 35) continue;
+
+      const count = Math.max(
+        2,
+        Math.min(5, other.hingeCount ?? (other.height > 1500 ? 4 : other.height > 950 ? 3 : 2))
+      );
+      const margin = Math.min(100, other.height * 0.18);
+      for (let i = 0; i < count; i++) {
+        const frac = count === 1 ? 0.5 : i / (count - 1);
+        const hingeWorldY = ob.minY + margin + frac * Math.max(40, other.height - margin * 2);
+        const localY = hingeWorldY - sideBox.minY;
+        if (localY < 24 || localY > faceH - 24) continue;
+        const px = Math.max(12, Math.round((frontEdgeX - 37) * 10) / 10);
+        holes.push(
+          {
+            id: `${part.id}_hplate_${other.id}_${i}_a`,
+            xMm: px,
+            yMm: Math.round((localY - 16) * 10) / 10,
+            diameterMm: 5,
+            depthMm: 12,
+            face: 'Tył/Wnętrze',
+            kind: 'hinge_plate',
+            label: `Prowadnik zawiasu S32 (37mm) #${i + 1}A`,
+          },
+          {
+            id: `${part.id}_hplate_${other.id}_${i}_b`,
+            xMm: px,
+            yMm: Math.round((localY + 16) * 10) / 10,
+            diameterMm: 5,
+            depthMm: 12,
+            face: 'Tył/Wnętrze',
+            kind: 'hinge_plate',
+            label: `Prowadnik zawiasu S32 (37mm) #${i + 1}B`,
+          }
+        );
+      }
+    }
+
+    // 2. Matching System 32 Drawer Slide Rail Holes (37 mm from front + 32 mm multiples)
+    for (const other of allParts) {
+      if (other.id === part.id || !other.drawerSlideType || other.drawerSlideType === 'none') continue;
+      const ob = getPartWorldBox(other);
+      // Drawer must lie within this side wall's vertical range and flank this side in X
+      if (ob.maxY < sideBox.minY + 10 || ob.minY > sideBox.maxY - 10) continue;
+      const nearSideX =
+        Math.abs(ob.minX - sideBox.maxX) <= 45 ||
+        Math.abs(ob.maxX - sideBox.minX) <= 45 ||
+        Math.abs(ob.minX - sideBox.minX) <= 30 ||
+        Math.abs(ob.maxX - sideBox.maxX) <= 30;
+      if (!nearSideX) continue;
+
+      const railY = Math.round(
+        (other.drawerSlideType === 'undermount_blum'
+          ? ob.minY + 28 - sideBox.minY
+          : (ob.minY + ob.maxY) / 2 - sideBox.minY) * 10
+      ) / 10;
+      if (railY < 20 || railY > faceH - 20) continue;
+
+      const railOffsets = [37, 37 + 96, 37 + 224].filter((off) => frontEdgeX - off >= 35);
+      railOffsets.forEach((off, idx) => {
+        holes.push({
+          id: `${part.id}_slide_${other.id}_${idx}`,
+          xMm: Math.round((frontEdgeX - off) * 10) / 10,
+          yMm: railY,
+          diameterMm: 5,
+          depthMm: 12,
+          face: 'Tył/Wnętrze',
+          kind: 'slide_rail',
+          label: `Prowadnica S32 (${off}mm od przodu)`,
+        });
+      });
+    }
+
+    // 3. Optional System 32 Adjustable Shelf-Pin Rows (dual Ø5×12 columns, 37 mm from front & rear)
+    if (part.system32ShelfHoles) {
+      const colFrontX = Math.max(20, frontEdgeX - 37);
+      const colRearX = Math.min(colFrontX - 64, 37 + (part.dadoGroove?.enabled ? 20 : 0));
+      const startY = 128;
+      const endY = faceH - 128;
+      let idx = 0;
+      for (let y = startY; y <= endY; y += 32) {
+        idx++;
+        holes.push({
+          id: `${part.id}_s32_f_${idx}`,
+          xMm: Math.round(colFrontX * 10) / 10,
+          yMm: y,
+          diameterMm: 5,
+          depthMm: 12,
+          face: 'Tył/Wnętrze',
+          kind: 'shelf_pin',
+          label: `System 32 podpórka P #${idx}`,
+        });
+        if (colRearX >= 25 && colRearX < colFrontX - 40) {
+          holes.push({
+            id: `${part.id}_s32_r_${idx}`,
+            xMm: Math.round(colRearX * 10) / 10,
+            yMm: y,
+            diameterMm: 5,
+            depthMm: 12,
+            face: 'Tył/Wnętrze',
+            kind: 'shelf_pin',
+            label: `System 32 podpórka T #${idx}`,
+          });
+        }
+      }
+    }
+  }
+
   return {
     part,
     faceWidthMm: Math.round(faceW),
@@ -220,12 +359,17 @@ export function computeCommercialQuote(
   project: FurnitureProject,
   nestingResults: MaterialNestingResult[],
   cutSpecs: Map<string, CarpentryCutSpec>,
-  settings: QuoteSettings
+  settings: QuoteSettings,
+  linearResults?: MaterialLinearResult[]
 ): CommercialQuoteBreakdown {
   let sheetsCostPln = 0;
   for (const nr of nestingResults) {
     sheetsCostPln += nr.estimatedCostPln;
   }
+
+  const linear = linearResults ?? nestLinearProfiles(project.parts);
+  const linearBarsCount = linear.reduce((s, r) => s + r.totalBars, 0);
+  const linearProfilesCostPln = linear.reduce((s, r) => s + r.estimatedCostPln, 0);
 
   let cuttingLinearM = 0;
   let edgeBandingLinearM = 0;
@@ -233,6 +377,9 @@ export function computeCommercialQuote(
   let ballSlidePairs = 0;
   let undermountSlidePairs = 0;
   let handlesCount = 0;
+  let tipOnCount = 0;
+  let golaLinearMm = 0;
+  let slidingDoorsCount = 0;
   let legsCount = 0;
   let appliancesCount = 0;
   let appliancesCostPln = 0;
@@ -245,18 +392,25 @@ export function computeCommercialQuote(
     }
 
     const spec = cutSpecs.get(p.id);
-    if (spec) {
+    if (spec && p.kind !== 'profile') {
       cuttingLinearM += (spec.sawLenMm + spec.sawWidMm) / 1000;
       edgeBandingLinearM += spec.edgeBandingLinearM;
-      if (p.kind === 'profile') {
-        sheetsCostPln += Math.round(spec.areaM2 * getMaterialMeta(p.materialId).pricePerM2Pln);
-      }
     }
 
     if (p.kind === 'door') {
-      if (p.handleSide && p.handleSide !== 'none') handlesCount += 1;
+      const style = p.handleStyle ?? 'bar';
+      if (style === 'tip_on') {
+        tipOnCount += 1;
+      } else if (style === 'gola_j' && p.handleSide && p.handleSide !== 'none') {
+        golaLinearMm += p.handleSide === 'top' ? p.width : p.height;
+      } else if (style === 'bar' && p.handleSide && p.handleSide !== 'none') {
+        handlesCount += 1;
+      }
       if (p.hingeSide && p.hingeSide !== 'none') {
         hingeCupsCount += p.hingeCount ?? (p.height > 1500 ? 4 : p.height > 950 ? 3 : 2);
+      }
+      if (p.hardwareTag === 'sliding_door') {
+        slidingDoorsCount += 1;
       }
     }
     if (p.drawerSlideType === 'ball_26mm') ballSlidePairs += 1;
@@ -267,6 +421,7 @@ export function computeCommercialQuote(
 
   const drawerSlidePairs = ballSlidePairs + undermountSlidePairs;
   const fastenersTotal = project.fasteners.length;
+  const golaLinearM = Math.round((golaLinearMm / 1000) * 100) / 100;
 
   const cuttingCostPln = Math.round(cuttingLinearM * settings.cuttingPricePerMbPln);
   const edgeBandingCostPln = Math.round(edgeBandingLinearM * settings.edgeBandingPricePerMbPln);
@@ -274,12 +429,21 @@ export function computeCommercialQuote(
     hingeCupsCount * settings.hingePricePln +
       drawerSlidePairs * settings.slidePairPricePln +
       handlesCount * settings.handlePricePln +
+      tipOnCount * 22 +
+      golaLinearM * 68 +
+      slidingDoorsCount * 145 +
       legsCount * settings.legPricePln +
       fastenersTotal * settings.fastenerPricePln +
       appliancesCostPln
   );
   const laborCostPln = Math.round(settings.laborHours * settings.laborRatePln);
-  const subtotalPln = sheetsCostPln + cuttingCostPln + edgeBandingCostPln + hardwareCostPln + laborCostPln;
+  const subtotalPln =
+    sheetsCostPln +
+    linearProfilesCostPln +
+    cuttingCostPln +
+    edgeBandingCostPln +
+    hardwareCostPln +
+    laborCostPln;
   const marginPln = Math.round(subtotalPln * (settings.marginPercent / 100));
   const netTotalPln = subtotalPln + marginPln;
   const vatPln = Math.round(netTotalPln * (settings.vatPercent / 100));
@@ -292,12 +456,17 @@ export function computeCommercialQuote(
       ballSlidePairs,
       undermountSlidePairs,
       handlesCount,
+      tipOnCount,
+      golaLinearM,
+      slidingDoorsCount,
       legsCount,
       fastenersTotal,
       appliancesCount,
       appliancesCostPln,
     },
     sheetsCostPln,
+    linearBarsCount,
+    linearProfilesCostPln,
     cuttingLinearM: Math.round(cuttingLinearM * 10) / 10,
     cuttingCostPln,
     edgeBandingLinearM: Math.round(edgeBandingLinearM * 100) / 100,
@@ -592,10 +761,21 @@ export function printTechnicalDocumentation(params: {
         .map((h, hi) => {
           const hx = pad + h.xMm;
           const hy = pad + map.faceHeightMm - h.yMm;
-          const r = Math.max(6, h.diameterMm / 2);
-          const stroke = h.kind === 'hinge_cup' ? '#2563EB' : h.kind === 'minifix_cam' ? '#7C3AED' : '#D97706';
+          const r = Math.max(5, h.diameterMm / 2);
+          const stroke =
+            h.kind === 'hinge_cup'
+              ? '#2563EB'
+              : h.kind === 'hinge_plate'
+                ? '#0284C7'
+                : h.kind === 'slide_rail'
+                  ? '#059669'
+                  : h.kind === 'shelf_pin'
+                    ? '#64748B'
+                    : h.kind === 'minifix_cam'
+                      ? '#7C3AED'
+                      : '#D97706';
           return `<circle cx="${hx}" cy="${hy}" r="${r}" fill="none" stroke="${stroke}" stroke-width="3" />
-            <text x="${hx + r + 5}" y="${hy + fs * 0.3}" font-size="${(fs * 0.85).toFixed(0)}" fill="#18181B" font-family="monospace">O${hi + 1}</text>`;
+            ${h.kind === 'shelf_pin' ? '' : `<text x="${hx + r + 5}" y="${hy + fs * 0.3}" font-size="${(fs * 0.85).toFixed(0)}" fill="#18181B" font-family="monospace">O${hi + 1}</text>`}`;
         })
         .join('');
       const holeTable = map.holes
@@ -624,6 +804,27 @@ export function printTechnicalDocumentation(params: {
           </table>
         </div>
       </div>`;
+    })
+    .join('');
+
+  const assemblyPlan = buildAssemblyPlan(project.parts, project.fasteners, 'grouped');
+  const assemblyRowsHtml = assemblyPlan.steps
+    .map((s) => {
+      const partsList = s.items
+        .map((it) => {
+          const target =
+            it.attachToNames.length > 0
+              ? ` <span style="color:#0369A1;">(→ ${escapeHtml(it.attachToNames.slice(0, 2).join(', '))}${it.attachToNames.length > 2 ? ` +${it.attachToNames.length - 2}` : ''})</span>`
+              : ' <span style="color:#047857;">(baza startowa)</span>';
+          return `<div>• <strong>${escapeHtml(it.partName)}</strong>${target}</div>`;
+        })
+        .join('');
+      return `<tr>
+        <td class="num"><strong>${s.step}</strong></td>
+        <td><strong>${escapeHtml(s.title)}</strong><div style="color:#52525B;margin-top:2px;">${escapeHtml(s.instruction)}</div></td>
+        <td>${partsList}</td>
+        <td>${escapeHtml(s.fastenerSummary || '—')}</td>
+      </tr>`;
     })
     .join('');
 
@@ -682,7 +883,8 @@ export function printTechnicalDocumentation(params: {
   <table>
     <thead><tr><th>Pozycja</th><th>Zakres / Ilość</th><th class="num">Wartość netto [zł]</th></tr></thead>
     <tbody>
-      <tr><td>Materiał płytowy (arkusze 2D, rzaz ${kerfMm} mm)</td><td>${nestingResults.reduce((s, n) => s + n.totalSheets, 0)} ark.</td><td class="num">${quote.sheetsCostPln} zł</td></tr>
+      <tr><td>Materiał płytowy (arkusze 2D wg grubości, rzaz ${kerfMm} mm)</td><td>${nestingResults.reduce((s, n) => s + n.totalSheets, 0)} ark.</td><td class="num">${quote.sheetsCostPln} zł</td></tr>
+      ${quote.linearBarsCount > 0 ? `<tr><td>Profile liniowe / sztangi 1D</td><td>${quote.linearBarsCount} sztang</td><td class="num">${quote.linearProfilesCostPln} zł</td></tr>` : ''}
       <tr><td>Usługa rozkroju na pile formatowej</td><td>${quote.cuttingLinearM} mb × ${quoteSettings.cuttingPricePerMbPln} zł</td><td class="num">${quote.cuttingCostPln} zł</td></tr>
       <tr><td>Okleinowanie krawędzi ABS/PCV</td><td>${quote.edgeBandingLinearM} mb × ${quoteSettings.edgeBandingPricePerMbPln} zł</td><td class="num">${quote.edgeBandingCostPln} zł</td></tr>
       <tr><td>Okucia i akcesoria meblowe</td><td>Zawiasy: ${quote.hardware.hingeCupsCount} · Prowadnice: ${quote.hardware.drawerSlidePairs} kpl · Uchwyty: ${quote.hardware.handlesCount} · Nóżki: ${quote.hardware.legsCount} · Wkręty: ${quote.hardware.fastenersTotal}</td><td class="num">${quote.hardwareCostPln} zł</td></tr>
@@ -709,6 +911,19 @@ export function printTechnicalDocumentation(params: {
       ? `<div class="page-break"></div>
   <h2>4. Karty wierceń 2D i wycięć (współrzędne X/Y od lewego dolnego narożnika)</h2>
   ${drillCardsHtml}`
+      : ''
+  }
+
+  ${
+    assemblyPlan.steps.length > 0
+      ? `<div class="page-break"></div>
+  <h2>5. Kolejność montażu (wykryta automatycznie ze styków fizycznych: ${assemblyPlan.totalContacts} styków)</h2>
+  <table>
+    <thead>
+      <tr><th class="num">Krok</th><th>Etap i wskazówka warsztatowa</th><th>Elementy i baza styku</th><th>Łączniki</th></tr>
+    </thead>
+    <tbody>${assemblyRowsHtml}</tbody>
+  </table>`
       : ''
   }
 </body>

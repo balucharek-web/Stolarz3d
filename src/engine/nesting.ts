@@ -55,7 +55,11 @@ export interface NestedSheet {
 }
 
 export interface MaterialNestingResult {
+  /** Unique group key combining materialId and board thickness (e.g. "osb3__22") */
+  groupKey: string;
   materialId: MaterialId;
+  /** Exact board thickness for this sheet group (mm) */
+  thicknessMm: number;
   sheetWidthMm: number;
   sheetHeightMm: number;
   kerfMm: number;
@@ -68,6 +72,43 @@ export interface MaterialNestingResult {
   wastePercent: number;
   estimatedCostPln: number;
   sheets: NestedSheet[];
+}
+
+export interface LinearCutPlacement {
+  partId: string;
+  partName: string;
+  labelIndex: number;
+  startMm: number;
+  lengthMm: number;
+  oversized?: boolean;
+}
+
+export interface LinearStockBar {
+  barIndex: number;
+  stockLengthMm: number;
+  usedMm: number;
+  wasteMm: number;
+  wastePercent: number;
+  cuts: LinearCutPlacement[];
+}
+
+export interface MaterialLinearResult {
+  groupKey: string;
+  materialId: MaterialId;
+  /** Cross-section label e.g. "40×40 mm" */
+  profileSectionLabel: string;
+  sectionWidthMm: number;
+  sectionDepthMm: number;
+  stockLengthMm: number;
+  kerfMm: number;
+  totalParts: number;
+  totalBars: number;
+  totalCutLengthM: number;
+  totalStockLengthM: number;
+  wastePercent: number;
+  pricePerLinearMPln: number;
+  estimatedCostPln: number;
+  bars: LinearStockBar[];
 }
 
 const DIRECTIONAL_GRAIN_MATERIALS = new Set<MaterialId>(['oak_craft', 'walnut']);
@@ -310,28 +351,36 @@ function tryPlaceOnSheet(
 }
 
 /**
- * Runs real 2D guillotine sheet nesting grouped by material.
- * Accounts for perimeter trim (default 10 mm), saw kerf (3-5 mm), and wood grain lock.
+ * Runs real 2D guillotine sheet nesting grouped strictly by material + board thickness.
+ * Prevents mixing e.g. 18 mm and 22 mm OSB or 3 mm HDF and 16 mm plywood onto the same sheet.
  */
 export function nestMaterialSheets(
   parts: FurniturePart[],
   kerfMm = 4,
   trimMm = 10
 ): MaterialNestingResult[] {
-  const byMaterial = new Map<MaterialId, CarpentryCutSpec[]>();
+  const byGroup = new Map<
+    string,
+    { materialId: MaterialId; thicknessMm: number; specs: CarpentryCutSpec[] }
+  >();
 
   for (const part of parts) {
     // Steel linear profiles and 3D appliances/accessories are excluded from flat sheet nesting
     if (part.kind === 'profile' || part.kind === 'appliance') continue;
     const spec = getCarpentryCutSpec(part);
-    const list = byMaterial.get(part.materialId) ?? [];
-    list.push(spec);
-    byMaterial.set(part.materialId, list);
+    const groupKey = `${part.materialId}__${spec.thicknessMm}`;
+    const bucket = byGroup.get(groupKey) ?? {
+      materialId: part.materialId,
+      thicknessMm: spec.thicknessMm,
+      specs: [],
+    };
+    bucket.specs.push(spec);
+    byGroup.set(groupKey, bucket);
   }
 
   const results: MaterialNestingResult[] = [];
 
-  for (const [materialId, specs] of byMaterial.entries()) {
+  for (const [groupKey, { materialId, thicknessMm, specs }] of byGroup.entries()) {
     const meta = getMaterialMeta(materialId);
     const sheetW = meta.sheetWidthMm;
     const sheetH = meta.sheetHeightMm;
@@ -447,7 +496,9 @@ export function nestMaterialSheets(
         : 0;
 
     results.push({
+      groupKey,
       materialId,
+      thicknessMm,
       sheetWidthMm: sheetW,
       sheetHeightMm: sheetH,
       kerfMm,
@@ -460,6 +511,166 @@ export function nestMaterialSheets(
       wastePercent: totalWastePercent,
       estimatedCostPln: Math.round(totalSheetAreaM2 * meta.pricePerM2Pln),
       sheets,
+    });
+  }
+
+  return results;
+}
+
+/**
+ * 1D Linear Bar Cutting Optimization (Best-Fit-Decreasing) for steel profiles,
+ * aluminum tracks, and wooden battens (`kind === 'profile'`).
+ * Groups by material + cross-section (e.g. 40×40 mm) onto standard stock lengths (6000 mm / 3000 mm).
+ */
+export function nestLinearProfiles(
+  parts: FurniturePart[],
+  kerfMm = 3,
+  endTrimMm = 20
+): MaterialLinearResult[] {
+  const groups = new Map<
+    string,
+    {
+      materialId: MaterialId;
+      secW: number;
+      secD: number;
+      items: Array<{ partId: string; partName: string; lengthMm: number }>;
+    }
+  >();
+
+  for (const p of parts) {
+    if (p.kind !== 'profile') continue;
+    const dims = [Math.round(p.width), Math.round(p.height), Math.round(p.depth)].sort(
+      (a, b) => a - b
+    );
+    const secW = dims[0];
+    const secD = dims[1];
+    const lengthMm = dims[2];
+    const key = `${p.materialId}__${secW}x${secD}`;
+    const bucket = groups.get(key) ?? {
+      materialId: p.materialId,
+      secW,
+      secD,
+      items: [],
+    };
+    bucket.items.push({ partId: p.id, partName: p.name, lengthMm });
+    groups.set(key, bucket);
+  }
+
+  const results: MaterialLinearResult[] = [];
+
+  for (const [groupKey, g] of groups.entries()) {
+    const meta = getMaterialMeta(g.materialId);
+    const isSteel =
+      g.materialId === 'steel_black' ||
+      g.materialId === 'steel_galv' ||
+      meta.category === 'Stal i szkło';
+    const stockLengthMm = meta.barLengthMm ?? (isSteel ? 6000 : 3000);
+    const pricePerLinearMPln =
+      meta.pricePerLinearMPln ?? (isSteel ? 30 : Math.max(12, Math.round(meta.pricePerM2Pln * 0.25)));
+
+    const usableLen = Math.max(200, stockLengthMm - endTrimMm * 2);
+
+    // Sort longest pieces first for Best-Fit-Decreasing 1D bin packing
+    const sorted = g.items
+      .map((it, idx) => ({ ...it, labelIndex: idx + 1 }))
+      .sort((a, b) => b.lengthMm - a.lengthMm);
+
+    const openBars: Array<{
+      cursorMm: number;
+      remainingMm: number;
+      cuts: LinearCutPlacement[];
+    }> = [];
+
+    for (const piece of sorted) {
+      const needMm = piece.lengthMm;
+      let bestBarIdx = -1;
+      let bestLeftover = Infinity;
+
+      for (let i = 0; i < openBars.length; i++) {
+        const bar = openBars[i];
+        const extraKerf = bar.cuts.length > 0 ? kerfMm : 0;
+        const required = needMm + extraKerf;
+        if (required <= bar.remainingMm) {
+          const leftover = bar.remainingMm - required;
+          if (leftover < bestLeftover) {
+            bestLeftover = leftover;
+            bestBarIdx = i;
+          }
+        }
+      }
+
+      if (bestBarIdx >= 0) {
+        const bar = openBars[bestBarIdx];
+        const startMm = bar.cursorMm + (bar.cuts.length > 0 ? kerfMm : 0);
+        bar.cuts.push({
+          partId: piece.partId,
+          partName: piece.partName,
+          labelIndex: piece.labelIndex,
+          startMm,
+          lengthMm: needMm,
+        });
+        bar.cursorMm = startMm + needMm;
+        bar.remainingMm = Math.max(0, stockLengthMm - endTrimMm - bar.cursorMm);
+      } else {
+        const oversized = needMm > usableLen;
+        openBars.push({
+          cursorMm: endTrimMm + Math.min(needMm, usableLen),
+          remainingMm: Math.max(0, usableLen - needMm),
+          cuts: [
+            {
+              partId: piece.partId,
+              partName: piece.partName,
+              labelIndex: piece.labelIndex,
+              startMm: endTrimMm,
+              lengthMm: needMm,
+              oversized,
+            },
+          ],
+        });
+      }
+    }
+
+    const bars: LinearStockBar[] = openBars.map((b, idx) => {
+      const usedMm = b.cuts.reduce((s, c) => s + c.lengthMm, 0);
+      const wasteMm = Math.max(0, stockLengthMm - usedMm);
+      const wastePercent = Math.max(
+        0,
+        Math.min(99, Math.round((wasteMm / stockLengthMm) * 100))
+      );
+      return {
+        barIndex: idx + 1,
+        stockLengthMm,
+        usedMm,
+        wasteMm,
+        wastePercent,
+        cuts: b.cuts,
+      };
+    });
+
+    const totalCutMm = g.items.reduce((s, it) => s + it.lengthMm, 0);
+    const totalStockMm = bars.length * stockLengthMm;
+    const totalWastePercent =
+      totalStockMm > 0
+        ? Math.max(0, Math.min(99, Math.round(((totalStockMm - totalCutMm) / totalStockMm) * 100)))
+        : 0;
+    const totalStockLengthM = Math.round((totalStockMm / 1000) * 100) / 100;
+
+    results.push({
+      groupKey,
+      materialId: g.materialId,
+      profileSectionLabel: `${g.secW}×${g.secD} mm`,
+      sectionWidthMm: g.secW,
+      sectionDepthMm: g.secD,
+      stockLengthMm,
+      kerfMm,
+      totalParts: g.items.length,
+      totalBars: bars.length,
+      totalCutLengthM: Math.round((totalCutMm / 1000) * 100) / 100,
+      totalStockLengthM,
+      wastePercent: totalWastePercent,
+      pricePerLinearMPln,
+      estimatedCostPln: Math.round(totalStockLengthM * pricePerLinearMPln),
+      bars,
     });
   }
 

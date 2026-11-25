@@ -5,6 +5,8 @@ export type BuiltInMaterialId =
   | 'birch_plywood'
   | 'white_matte'
   | 'anthracite_matte'
+  | 'hdf_white'
+  | 'hdf_black'
   | 'concrete_top'
   | 'steel_black'
   | 'steel_galv'
@@ -46,6 +48,8 @@ export type ScrewType =
 
 export type HandleSide = 'left' | 'right' | 'top' | 'none';
 
+export type HandleStyle = 'bar' | 'tip_on' | 'gola_j' | 'chamfer_45';
+
 export type SurfaceFinish = 'matte' | 'satin' | 'gloss';
 
 export type DrawerSlideType = 'none' | 'ball_26mm' | 'undermount_blum';
@@ -68,6 +72,10 @@ export interface MaterialMeta {
   swatchFallbackHex: string;
   isCustom?: boolean;
   grainDirectional?: boolean;
+  /** Standard stock bar length for linear profiles (e.g. 6000 mm steel, 3000 mm timber) */
+  barLengthMm?: number;
+  /** Price per linear meter (PLN/mb) for 1D linear profile cutting */
+  pricePerLinearMPln?: number;
 }
 
 export interface BuiltInMaterialOverride {
@@ -165,6 +173,8 @@ export interface FurniturePart {
   slopeBottomRight?: number;
   /** Handle placement for cabinet doors/drawers */
   handleSide?: HandleSide;
+  /** Front opening style: classic bar handle, handleless Tip-On, Gola J-profile, or 45° chamfer pull */
+  handleStyle?: HandleStyle;
   /** Rotate texture grain 90 degrees */
   grainRotated?: boolean;
   /** Custom 2D polygon vertices [xMm, yMm] centered around (0, 0) for kind === 'custom' */
@@ -188,8 +198,20 @@ export interface FurniturePart {
   hingeCount?: number;
   /** Drawer slide hardware specification (counted on drawer front/box) */
   drawerSlideType?: DrawerSlideType;
-  /** Optional hardware role tag for BOM counting (e.g. adjustable leg) */
-  hardwareTag?: 'leg' | 'drawer_front' | 'drawer_box' | 'door_overlay' | 'door_inset';
+  /** Optional hardware role tag for BOM counting */
+  hardwareTag?:
+    | 'leg'
+    | 'drawer_front'
+    | 'drawer_box'
+    | 'door_overlay'
+    | 'door_inset'
+    | 'sliding_door'
+    | 'wall_filler';
+  /** Enable dual System 32 (Ø5 mm every 32 mm, 37 mm inset) adjustable shelf-pin drilling rows */
+  system32ShelfHoles?: boolean;
+  /** Horizontal slide direction and travel (mm) for sliding wardrobe doors */
+  slidingDirection?: 'left' | 'right';
+  slidingTravelMm?: number;
   /** Procedural 3D interior accessory or kitchen appliance model (when kind === 'appliance') */
   applianceModel?: ApplianceModel;
   /** Optional unit price in PLN for appliance/interior accessory BOM */
@@ -252,11 +274,75 @@ export const DEFAULT_QUOTE_SETTINGS: QuoteSettings = {
   notes: 'Cena obejmuje materiał, rozkrój, okleinowanie ABS, okucia oraz montaż próbny na warsztacie.',
 };
 
+export type RoomObstacleType = 'socket' | 'pipe' | 'radiator' | 'window';
+
+export interface RoomObstacle {
+  id: string;
+  type: RoomObstacleType;
+  label: string;
+  wall: 'back' | 'left' | 'right';
+  /** Horizontal offset along the wall from its left/back edge (mm) */
+  offsetMm: number;
+  /** Height of obstacle bottom from floor (mm) */
+  elevationMm: number;
+  widthMm: number;
+  heightMm: number;
+  /** Protrusion out from wall into the room (mm) */
+  depthMm: number;
+}
+
+export interface RoomSlopedCeiling {
+  enabled: boolean;
+  side: 'left' | 'right';
+  /** Knee wall height where slope starts (mm), e.g. 1350 mm */
+  kneeWallHeightMm: number;
+  /** Horizontal run of the ceiling slope into the room (mm) */
+  slopeWidthMm: number;
+}
+
+export interface RoomConfig {
+  enabled: boolean;
+  /** Total room / alcove width (X, centered around 0, mm) */
+  widthMm: number;
+  /** Ceiling height (Y from floor, mm) */
+  heightMm: number;
+  /** Distance from back wall to front of alcove (mm); back wall sits at Z = backWallZMm */
+  depthMm: number;
+  /** World Z coordinate of the inner face of the back wall (mm), default -320 */
+  backWallZMm: number;
+  showBackWall: boolean;
+  showLeftWall: boolean;
+  showRightWall: boolean;
+  showCeiling: boolean;
+  slopedCeiling: RoomSlopedCeiling;
+  obstacles: RoomObstacle[];
+}
+
+export const DEFAULT_ROOM_CONFIG: RoomConfig = {
+  enabled: false,
+  widthMm: 2200,
+  heightMm: 2500,
+  depthMm: 1000,
+  backWallZMm: -310,
+  showBackWall: true,
+  showLeftWall: true,
+  showRightWall: true,
+  showCeiling: false,
+  slopedCeiling: {
+    enabled: false,
+    side: 'right',
+    kneeWallHeightMm: 1350,
+    slopeWidthMm: 1600,
+  },
+  obstacles: [],
+};
+
 export interface FurnitureProject {
   id: string;
   name: string;
   parts: FurniturePart[];
   fasteners: Fastener[];
+  room?: RoomConfig;
   updatedAt?: number;
 }
 
@@ -328,6 +414,28 @@ export const MATERIAL_CATALOG: MaterialMeta[] = [
     swatchFallbackHex: '#35383E',
   },
   {
+    id: 'hdf_white',
+    name: 'Płyta HDF Biała 3 mm',
+    shortName: 'HDF Biały 3mm',
+    category: 'Płyty meblowe',
+    defaultThicknessMm: 3,
+    sheetWidthMm: 2800,
+    sheetHeightMm: 2070,
+    pricePerM2Pln: 24,
+    swatchFallbackHex: '#F0EFEA',
+  },
+  {
+    id: 'hdf_black',
+    name: 'Płyta HDF Czarna 3 mm',
+    shortName: 'HDF Czarny 3mm',
+    category: 'Płyty meblowe',
+    defaultThicknessMm: 3,
+    sheetWidthMm: 2800,
+    sheetHeightMm: 2070,
+    pricePerM2Pln: 26,
+    swatchFallbackHex: '#2C2E33',
+  },
+  {
     id: 'concrete_top',
     name: 'Blat Beton Architektoniczny',
     shortName: 'Beton Blat',
@@ -348,6 +456,8 @@ export const MATERIAL_CATALOG: MaterialMeta[] = [
     sheetHeightMm: 1000,
     pricePerM2Pln: 140,
     swatchFallbackHex: '#25272B',
+    barLengthMm: 6000,
+    pricePerLinearMPln: 32,
   },
   {
     id: 'steel_galv',
@@ -359,6 +469,8 @@ export const MATERIAL_CATALOG: MaterialMeta[] = [
     sheetHeightMm: 1000,
     pricePerM2Pln: 125,
     swatchFallbackHex: '#ADB4BC',
+    barLengthMm: 6000,
+    pricePerLinearMPln: 28,
   },
   {
     id: 'glass_clear',

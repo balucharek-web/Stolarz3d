@@ -405,6 +405,17 @@ export function detectPartCollisions(
         continue;
       }
 
+      // Allow legitimate dado-groove joints (e.g. 3-4mm HDF back or recessed Blum drawer bottom inside a grooved board)
+      const isThinHdf = (p: FurniturePart) =>
+        Math.min(p.width, p.height, p.depth) <= 4.5 &&
+        (p.materialId === 'hdf_white' || p.materialId === 'hdf_black' || /hdf|plecy|dno/i.test(p.name));
+      if (
+        (isThinHdf(a) && b.dadoGroove?.enabled && Math.min(dx, dy, dz) <= (b.dadoGroove.widthMm ?? 4) + 1) ||
+        (isThinHdf(b) && a.dadoGroove?.enabled && Math.min(dx, dy, dz) <= (a.dadoGroove.widthMm ?? 4) + 1)
+      ) {
+        continue;
+      }
+
       // Check if either part is rotated non-orthogonally, sloped, or custom polygon
       const needsExactSample =
         a.kind === 'custom' ||
@@ -1812,4 +1823,355 @@ export function ungroupSelectedParts(
       : p
   );
 }
+
+export type ShelfLoadStatus = 'ok' | 'warning' | 'critical';
+
+export interface ShelfDeflectionAudit {
+  partId: string;
+  partName: string;
+  /** Longest unsupported clear span between physical vertical supports (mm) */
+  maxUnsupportedSpanMm: number;
+  thicknessMm: number;
+  depthMm: number;
+  /** Assumed uniform distributed load (kg per linear meter, e.g. 30 kg/m books) */
+  loadKgPerM: number;
+  /** Total load on that unsupported span (kg) */
+  spanLoadKg: number;
+  /** Estimated mid-span sag under load (mm) using Euler-Bernoulli beam formula */
+  deflectionMm: number;
+  /** Safe recommended max load on this span keeping sag <= 2.0 mm (kg) */
+  safeMaxLoadKg: number;
+  status: ShelfLoadStatus;
+  recommendation: string;
+}
+
+function getMaterialElasticModulusMpa(materialId: string): number {
+  switch (materialId) {
+    case 'steel_black':
+    case 'steel_galv':
+      return 200_000;
+    case 'glass_clear':
+      return 70_000;
+    case 'birch_plywood':
+      return 6800;
+    case 'osb3':
+      return 3500;
+    case 'concrete_top':
+      return 12_000;
+    case 'hdf_white':
+    case 'hdf_black':
+      return 3200;
+    default:
+      // Standard laminated furniture particleboard / MDF (E ≈ 2400 MPa long-term creep-adjusted ≈ 1850 MPa)
+      return 1900;
+  }
+}
+
+/**
+ * Real-world carpentry Shelf Deflection (Sag) Analyzer.
+ * Finds every horizontal shelf/deck in the project, detects physical vertical supports
+ * underneath or flanking it (sides, dividers, posts), computes the longest unsupported
+ * clear span L, and evaluates mid-span deflection δ = 5 w L⁴ / (384 E I).
+ */
+export function analyzeShelfDeflection(
+  parts: FurniturePart[],
+  loadKgPerM = 30
+): Map<string, ShelfDeflectionAudit> {
+  const result = new Map<string, ShelfDeflectionAudit>();
+  const boxes = new Map<string, WorldBox>();
+  for (const p of parts) {
+    boxes.set(p.id, getPartWorldBox(p));
+  }
+
+  for (const p of parts) {
+    if (
+      p.kind === 'appliance' ||
+      p.kind === 'door' ||
+      p.kind === 'profile' ||
+      p.hardwareTag === 'drawer_box' ||
+      p.hardwareTag === 'leg'
+    ) {
+      continue;
+    }
+
+    const b = boxes.get(p.id)!;
+    const dx = b.maxX - b.minX;
+    const dy = b.maxY - b.minY;
+    const dz = b.maxZ - b.minZ;
+
+    // Only evaluate horizontal shelves/tops (not floor-resting base boards sitting on Y=0)
+    const isHorizontalBoard =
+      Math.abs(p.rotation[2] % 90) < 2 &&
+      dy <= 44 &&
+      dx >= 320 &&
+      dz >= 140 &&
+      b.minY > 35;
+
+    if (!isHorizontalBoard) continue;
+
+    // Collect X positions of all vertical structural supports underneath or abutting this shelf
+    const supportIntervals: Array<[number, number]> = [];
+    for (const other of parts) {
+      if (other.id === p.id || other.kind === 'door' || other.kind === 'appliance') continue;
+      const ob = boxes.get(other.id)!;
+      const ody = ob.maxY - ob.minY;
+      const odx = ob.maxX - ob.minX;
+      // Ignore thin horizontal boards; keep vertical walls, dividers, posts, gussets, or back walls
+      if (ody < 60) continue;
+
+      const zOverlap = Math.min(b.maxZ, ob.maxZ) - Math.max(b.minZ, ob.minZ);
+      if (zOverlap < 20) continue;
+
+      // Support either sits directly underneath (ob.maxY ≈ b.minY) OR flanks the shelf vertically
+      const supportsUnder = ob.maxY >= b.minY - 8 && ob.minY < b.minY - 20;
+      const flanksVertical =
+        ob.minY <= b.minY + 12 &&
+        ob.maxY >= b.maxY - 12 &&
+        odx <= 90 &&
+        ob.maxX >= b.minX - 8 &&
+        ob.minX <= b.maxX + 8;
+
+      if (supportsUnder || flanksVertical) {
+        // Ignore thin back wall spanning the entire width (it stiffens only rear edge, not front sag unless deep)
+        const isRearBackWall = ob.maxZ - ob.minZ <= 24 && ob.maxZ <= b.minZ + 32;
+        if (isRearBackWall) continue;
+
+        const clampedMin = Math.max(b.minX, ob.minX);
+        const clampedMax = Math.min(b.maxX, ob.maxX);
+        if (clampedMax >= clampedMin - 8) {
+          supportIntervals.push([clampedMin, clampedMax]);
+        }
+      }
+    }
+
+    // Sort support intervals along X and compute longest clear unsupported gap
+    supportIntervals.sort((u, v) => u[0] - v[0]);
+
+    let maxSpanMm = dx;
+    if (supportIntervals.length > 0) {
+      let longest = 0;
+      // Left overhang / span from left edge to first support
+      longest = Math.max(longest, supportIntervals[0][0] - b.minX);
+      for (let i = 0; i < supportIntervals.length - 1; i++) {
+        longest = Math.max(longest, supportIntervals[i + 1][0] - supportIntervals[i][1]);
+      }
+      // Right overhang / span from last support to right edge
+      longest = Math.max(longest, b.maxX - supportIntervals[supportIntervals.length - 1][1]);
+      maxSpanMm = Math.max(120, Math.round(longest));
+    } else {
+      maxSpanMm = Math.round(dx);
+    }
+
+    // Euler-Bernoulli simply-supported beam deflection: δ = 5 * w * L⁴ / (384 * E * I)
+    // Units: N and mm (1 MPa = 1 N/mm²). w [N/mm] = (loadKgPerM * 9.81) / 1000
+    const E = getMaterialElasticModulusMpa(p.materialId);
+    const thicknessMm = Math.max(4, Math.round(p.height));
+    const depthMm = Math.max(80, Math.round(p.depth));
+    const I = (depthMm * Math.pow(thicknessMm, 3)) / 12; // mm⁴
+    const wNPerMm = (loadKgPerM * 9.81) / 1000;
+    const L = maxSpanMm;
+
+    // Long-term wood creep factor (~1.45× immediate elastic sag for furniture boards)
+    const creepFactor = p.materialId.startsWith('steel') || p.materialId === 'glass_clear' ? 1.0 : 1.45;
+    const rawDeflectionMm =
+      ((5 * wNPerMm * Math.pow(L, 4)) / (384 * E * I)) * creepFactor;
+    const deflectionMm = Math.round(rawDeflectionMm * 100) / 100;
+    const spanLoadKg = Math.round((loadKgPerM * (L / 1000)) * 10) / 10;
+
+    // Max safe load keeping deflection <= 2.0 mm
+    const safeMaxLoadKg =
+      rawDeflectionMm > 0.001
+        ? Math.min(250, Math.round((spanLoadKg * (2.0 / rawDeflectionMm)) * 10) / 10)
+        : 250;
+
+    const limitWarn = Math.min(2.2, L / 350);
+    const limitCrit = Math.min(3.8, L / 220);
+
+    let status: ShelfLoadStatus = 'ok';
+    let recommendation = `Sztywność OK — ugięcie ~${deflectionMm.toFixed(1)} mm przy ${spanLoadKg} kg (udźwig bezpieczny ok. ${safeMaxLoadKg} kg).`;
+    if (deflectionMm >= limitCrit) {
+      status = 'critical';
+      recommendation = `Ryzyko ugięcia (${deflectionMm.toFixed(1)} mm na rozpiętości ${L} mm)! Dodaj przegrodę pionową lub zwiększ grubość płyty do min. 22–25 mm.`;
+    } else if (deflectionMm >= limitWarn) {
+      status = 'warning';
+      recommendation = `Graniczna rozpiętość (${L} mm, ugięcie ~${deflectionMm.toFixed(1)} mm). Pod ciężkie książki/narzędzia warto dodać podparcie pośrodku.`;
+    }
+
+    result.set(p.id, {
+      partId: p.id,
+      partName: p.name,
+      maxUnsupportedSpanMm: L,
+      thicknessMm,
+      depthMm,
+      loadKgPerM,
+      spanLoadKg,
+      deflectionMm,
+      safeMaxLoadKg,
+      status,
+      recommendation,
+    });
+  }
+
+  return result;
+}
+
+export interface RoomClearanceIssue {
+  partId: string;
+  partName: string;
+  kind: 'wall_out' | 'ceiling_out' | 'slope_hit' | 'obstacle_hit';
+  message: string;
+}
+
+/**
+ * Computes exact world-space AABB (mm) for a room obstacle mounted on back, left, or right wall.
+ */
+export function getRoomObstacleWorldBox(
+  obs: import('../types/furniture').RoomObstacle,
+  room: import('../types/furniture').RoomConfig
+): WorldBox {
+  const halfW = room.widthMm / 2;
+  const minY = obs.elevationMm;
+  const maxY = obs.elevationMm + obs.heightMm;
+
+  if (obs.wall === 'back') {
+    const minX = -halfW + obs.offsetMm;
+    const maxX = minX + obs.widthMm;
+    const minZ = room.backWallZMm;
+    const maxZ = room.backWallZMm + obs.depthMm;
+    return { minX, maxX, minY, maxY, minZ, maxZ };
+  }
+  if (obs.wall === 'left') {
+    const minX = -halfW;
+    const maxX = -halfW + obs.depthMm;
+    const minZ = room.backWallZMm + obs.offsetMm;
+    const maxZ = minZ + obs.widthMm;
+    return { minX, maxX, minY, maxY, minZ, maxZ };
+  }
+  // right wall
+  const maxX = halfW;
+  const minX = halfW - obs.depthMm;
+  const minZ = room.backWallZMm + obs.offsetMm;
+  const maxZ = minZ + obs.widthMm;
+  return { minX, maxX, minY, maxY, minZ, maxZ };
+}
+
+/**
+ * Evaluates maximum allowable ceiling height at world X inside a room with optional attic slope.
+ */
+export function getRoomCeilingHeightAtX(
+  xMm: number,
+  room: import('../types/furniture').RoomConfig
+): number {
+  if (!room.slopedCeiling.enabled) return room.heightMm;
+  const halfW = room.widthMm / 2;
+  const kneeH = Math.min(room.heightMm, Math.max(200, room.slopedCeiling.kneeWallHeightMm));
+  const run = Math.max(100, Math.min(room.widthMm, room.slopedCeiling.slopeWidthMm));
+
+  if (room.slopedCeiling.side === 'right') {
+    const distFromRight = halfW - xMm;
+    if (distFromRight <= 0) return kneeH;
+    if (distFromRight >= run) return room.heightMm;
+    return kneeH + ((room.heightMm - kneeH) * distFromRight) / run;
+  }
+  // left slope
+  const distFromLeft = xMm + halfW;
+  if (distFromLeft <= 0) return kneeH;
+  if (distFromLeft >= run) return room.heightMm;
+  return kneeH + ((room.heightMm - kneeH) * distFromLeft) / run;
+}
+
+/**
+ * Audits all furniture parts against enabled Room / Alcove walls, attic ceiling slope,
+ * and placed obstacles (radiators, electrical sockets, pipes, windows).
+ */
+export function auditRoomClearances(
+  parts: FurniturePart[],
+  room?: import('../types/furniture').RoomConfig
+): RoomClearanceIssue[] {
+  if (!room || !room.enabled) return [];
+  const issues: RoomClearanceIssue[] = [];
+  const halfW = room.widthMm / 2;
+  const tol = 3; // 3 mm tolerance
+
+  const obstacleBoxes = room.obstacles.map((o) => ({
+    obs: o,
+    box: getRoomObstacleWorldBox(o, room),
+  }));
+
+  for (const p of parts) {
+    const b = getPartWorldBox(p);
+
+    if (room.showLeftWall && b.minX < -halfW - tol) {
+      issues.push({
+        partId: p.id,
+        partName: p.name,
+        kind: 'wall_out',
+        message: `„${p.name}” wchodzi w lewą ścianę wnęki o ${Math.round(-halfW - b.minX)} mm.`,
+      });
+    }
+    if (room.showRightWall && b.maxX > halfW + tol) {
+      issues.push({
+        partId: p.id,
+        partName: p.name,
+        kind: 'wall_out',
+        message: `„${p.name}” wchodzi w prawą ścianę wnęki o ${Math.round(b.maxX - halfW)} mm.`,
+      });
+    }
+    if (room.showBackWall && b.minZ < room.backWallZMm - tol) {
+      issues.push({
+        partId: p.id,
+        partName: p.name,
+        kind: 'wall_out',
+        message: `„${p.name}” przekracza tylną ścianę o ${Math.round(room.backWallZMm - b.minZ)} mm.`,
+      });
+    }
+    if (b.maxY > room.heightMm + tol) {
+      issues.push({
+        partId: p.id,
+        partName: p.name,
+        kind: 'ceiling_out',
+        message: `„${p.name}” przekracza wysokość sufitu (${room.heightMm} mm) o ${Math.round(b.maxY - room.heightMm)} mm.`,
+      });
+    }
+
+    if (room.slopedCeiling.enabled) {
+      // Check actual top corners against attic slope ceiling
+      const checkXs = [b.minX, (b.minX + b.maxX) / 2, b.maxX];
+      for (const cx of checkXs) {
+        const ceilAtX = getRoomCeilingHeightAtX(cx, room);
+        // For sloped/rotated parts verify actual solid top point at cx rather than raw AABB corner
+        const testY = b.maxY;
+        if (testY > ceilAtX + tol) {
+          const probe = new THREE.Vector3(cx, ceilAtX + tol + 2, (b.minZ + b.maxZ) / 2);
+          if (isWorldPointInsidePart(probe, p, 2)) {
+            issues.push({
+              partId: p.id,
+              partName: p.name,
+              kind: 'slope_hit',
+              message: `„${p.name}” koliduje ze skosem dachu poddasza (wysokość skosu w tym miejscu: ${Math.round(ceilAtX)} mm).`,
+            });
+            break;
+          }
+        }
+      }
+    }
+
+    for (const { obs, box: ob } of obstacleBoxes) {
+      const ox = Math.min(b.maxX, ob.maxX) - Math.max(b.minX, ob.minX);
+      const oy = Math.min(b.maxY, ob.maxY) - Math.max(b.minY, ob.minY);
+      const oz = Math.min(b.maxZ, ob.maxZ) - Math.max(b.minZ, ob.minZ);
+      if (ox > tol && oy > tol && oz > tol) {
+        issues.push({
+          partId: p.id,
+          partName: p.name,
+          kind: 'obstacle_hit',
+          message: `„${p.name}” zasłania / koliduje z przeszkodą: ${obs.label}.`,
+        });
+      }
+    }
+  }
+
+  return issues;
+}
+
 

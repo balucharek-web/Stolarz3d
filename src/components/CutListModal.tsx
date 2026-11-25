@@ -28,9 +28,12 @@ import { getProjectDimensionsMm } from '../engine/geometry';
 import {
   computeSawCutAngles,
   type FastenerAudit,
+  type RoomClearanceIssue,
+  type ShelfDeflectionAudit,
 } from '../engine/carpentry';
 import {
   getCarpentryCutSpec,
+  nestLinearProfiles,
   nestMaterialSheets,
   type CarpentryCutSpec,
 } from '../engine/nesting';
@@ -49,6 +52,8 @@ interface CutListModalProps {
   project: FurnitureProject;
   materialsVersion: number;
   fastenerAuditMap: Map<string, FastenerAudit>;
+  shelfDeflectionMap: Map<string, ShelfDeflectionAudit>;
+  roomIssues: RoomClearanceIssue[];
   collisionCount: number;
   quoteSettings: QuoteSettings;
   onChangeQuoteSettings: (next: QuoteSettings) => void;
@@ -105,6 +110,8 @@ export const CutListModal: React.FC<CutListModalProps> = ({
   project,
   materialsVersion,
   fastenerAuditMap,
+  shelfDeflectionMap,
+  roomIssues,
   collisionCount,
   quoteSettings,
   onChangeQuoteSettings,
@@ -116,7 +123,7 @@ export const CutListModal: React.FC<CutListModalProps> = ({
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [activeTab, setActiveTab] = useState<ModalTab>('list');
   const [kerfMm, setKerfMm] = useState<number>(4);
-  const [selectedNestMat, setSelectedNestMat] = useState<MaterialId | null>(null);
+  const [selectedNestKey, setSelectedNestKey] = useState<string | null>(null);
   const [selectedDrillPartId, setSelectedDrillPartId] = useState<string | null>(null);
 
   const cutSpecs = useMemo(() => {
@@ -133,10 +140,21 @@ export const CutListModal: React.FC<CutListModalProps> = ({
     return nestMaterialSheets(project.parts, kerfMm, 10);
   }, [project.parts, kerfMm, materialsVersion]);
 
+  const linearResults = useMemo(() => {
+    void materialsVersion;
+    return nestLinearProfiles(project.parts, kerfMm);
+  }, [project.parts, kerfMm, materialsVersion]);
+
   const quote = useMemo(() => {
     void materialsVersion;
-    return computeCommercialQuote(project, nestingResults, cutSpecs, quoteSettings);
-  }, [project, nestingResults, cutSpecs, quoteSettings, materialsVersion]);
+    return computeCommercialQuote(
+      project,
+      nestingResults,
+      cutSpecs,
+      quoteSettings,
+      linearResults
+    );
+  }, [project, nestingResults, cutSpecs, quoteSettings, linearResults, materialsVersion]);
 
   const orthoSvgs = useMemo(() => {
     if (!open || activeTab !== 'drilling') return null;
@@ -220,7 +238,7 @@ export const CutListModal: React.FC<CutListModalProps> = ({
   if (!open) return null;
 
   const activeNesting =
-    nestingResults.find((n) => n.materialId === selectedNestMat) ?? nestingResults[0] ?? null;
+    nestingResults.find((n) => n.groupKey === selectedNestKey) ?? nestingResults[0] ?? null;
 
   const activeDrillEntry =
     drillingMaps.find((d) => d.map.part.id === selectedDrillPartId) ??
@@ -380,11 +398,17 @@ export const CutListModal: React.FC<CutListModalProps> = ({
 
   const boardParts = project.parts.filter((p) => p.kind !== 'appliance');
   const screwWarnings = summary.screwsThrough + summary.screwsAir;
+  const sagWarnings = Array.from(shelfDeflectionMap.values()).filter(
+    (a) => a.status === 'critical' || a.status === 'warning'
+  );
   const hw = quote.hardware;
   const hasHardware =
     hw.hingeCupsCount > 0 ||
     hw.drawerSlidePairs > 0 ||
     hw.handlesCount > 0 ||
+    hw.tipOnCount > 0 ||
+    hw.golaLinearM > 0 ||
+    hw.slidingDoorsCount > 0 ||
     hw.legsCount > 0 ||
     hw.appliancesCount > 0;
 
@@ -445,7 +469,7 @@ export const CutListModal: React.FC<CutListModalProps> = ({
           {activeTab === 'list' && (
             <>
               {/* Structural Audit Banner */}
-              {collisionCount > 0 || screwWarnings > 0 ? (
+              {collisionCount > 0 || screwWarnings > 0 || sagWarnings.length > 0 || roomIssues.length > 0 ? (
                 <div className="flex flex-wrap items-center gap-3 rounded-xl border border-red-500/40 bg-red-950/35 px-3.5 py-2.5 text-xs text-red-200">
                   <AlertTriangle className="h-4 w-4 text-red-400 shrink-0" />
                   <div className="flex flex-wrap gap-x-4 gap-y-1">
@@ -464,6 +488,17 @@ export const CutListModal: React.FC<CutListModalProps> = ({
                         <strong>{summary.screwsAir}</strong> wkrętów nie łapie sąsiedniej płyty
                       </span>
                     )}
+                    {sagWarnings.length > 0 && (
+                      <span className="text-amber-200">
+                        <strong>{sagWarnings.length}</strong> półek z ryzykiem ugięcia (np.{' '}
+                        {sagWarnings[0].partName}: {sagWarnings[0].deflectionMm} mm)
+                      </span>
+                    )}
+                    {roomIssues.length > 0 && (
+                      <span>
+                        <strong>{roomIssues.length}</strong> kolizji z wnęką/przeszkodą
+                      </span>
+                    )}
                   </div>
                 </div>
               ) : (
@@ -471,7 +506,7 @@ export const CutListModal: React.FC<CutListModalProps> = ({
                   <div className="flex items-center gap-2 rounded-xl border border-emerald-500/30 bg-emerald-950/25 px-3.5 py-2 text-xs text-emerald-200">
                     <CheckCircle2 className="h-4 w-4 text-emerald-400 shrink-0" />
                     <span>
-                      Audyt stolarski: brak kolizji płyt
+                      Audyt stolarski: brak kolizji płyt, półki sztywne
                       {project.fasteners.length > 0
                         ? `, wszystkie ${summary.screwsOk} łączników prawidłowo osadzone.`
                         : '.'}
@@ -535,9 +570,12 @@ export const CutListModal: React.FC<CutListModalProps> = ({
                       {nestingResults.map((nr) => {
                         const meta = getMaterialMeta(nr.materialId);
                         return (
-                          <tr key={nr.materialId} className="text-zinc-200">
+                          <tr key={nr.groupKey} className="text-zinc-200">
                             <td className="py-2 pr-3 font-medium">
-                              {meta.name}
+                              {meta.name}{' '}
+                              <span className="font-mono-num text-amber-300/90">
+                                ({nr.thicknessMm} mm)
+                              </span>
                               {nr.grainLocked && (
                                 <span className="ml-1.5 text-[10px] text-amber-400/90">
                                   (usłojenie)
@@ -556,6 +594,32 @@ export const CutListModal: React.FC<CutListModalProps> = ({
                             </td>
                             <td className="py-2 pl-2 text-right font-mono-num text-amber-300">
                               ~{nr.estimatedCostPln} zł
+                            </td>
+                          </tr>
+                        );
+                      })}
+                      {linearResults.map((lr) => {
+                        const meta = getMaterialMeta(lr.materialId);
+                        return (
+                          <tr key={lr.groupKey} className="text-zinc-200 bg-sky-950/15">
+                            <td className="py-2 pr-3 font-medium">
+                              {meta.name}{' '}
+                              <span className="font-mono-num text-sky-300">
+                                (profil {lr.profileSectionLabel} · 1D)
+                              </span>
+                            </td>
+                            <td className="py-2 px-2 text-right font-mono-num text-zinc-400 whitespace-nowrap">
+                              sztanga {lr.stockLengthMm} mm
+                            </td>
+                            <td className="py-2 px-2 text-right font-mono-num">{lr.totalParts}</td>
+                            <td className="py-2 px-2 text-right font-mono-num font-semibold text-sky-300">
+                              {lr.totalBars} szt.
+                            </td>
+                            <td className="py-2 px-2 text-right font-mono-num text-zinc-400">
+                              {lr.wastePercent}%
+                            </td>
+                            <td className="py-2 pl-2 text-right font-mono-num text-amber-300">
+                              ~{lr.estimatedCostPln} zł
                             </td>
                           </tr>
                         );
@@ -655,9 +719,33 @@ export const CutListModal: React.FC<CutListModalProps> = ({
                     )}
                     {hw.handlesCount > 0 && (
                       <div className="rounded-xl border border-zinc-800 bg-zinc-900/70 px-3 py-2.5">
-                        <div className="text-[11px] text-zinc-400">Uchwyty meblowe</div>
+                        <div className="text-[11px] text-zinc-400">Uchwyty relingowe</div>
                         <div className="mt-0.5 text-sm font-semibold text-sky-300 font-mono-num">
                           {hw.handlesCount} szt.
+                        </div>
+                      </div>
+                    )}
+                    {hw.tipOnCount > 0 && (
+                      <div className="rounded-xl border border-zinc-800 bg-zinc-900/70 px-3 py-2.5">
+                        <div className="text-[11px] text-zinc-400">Odbojniki Tip-On</div>
+                        <div className="mt-0.5 text-sm font-semibold text-emerald-300 font-mono-num">
+                          {hw.tipOnCount} szt.
+                        </div>
+                      </div>
+                    )}
+                    {hw.golaLinearM > 0 && (
+                      <div className="rounded-xl border border-zinc-800 bg-zinc-900/70 px-3 py-2.5">
+                        <div className="text-[11px] text-zinc-400">Listwa alum. Gola (J)</div>
+                        <div className="mt-0.5 text-sm font-semibold text-emerald-300 font-mono-num">
+                          {hw.golaLinearM} mb
+                        </div>
+                      </div>
+                    )}
+                    {hw.slidingDoorsCount > 0 && (
+                      <div className="rounded-xl border border-zinc-800 bg-zinc-900/70 px-3 py-2.5">
+                        <div className="text-[11px] text-zinc-400">System drzwi przesuwnych</div>
+                        <div className="mt-0.5 text-sm font-semibold text-emerald-300 font-mono-num">
+                          {hw.slidingDoorsCount} skrz.
                         </div>
                       </div>
                     )}
@@ -718,19 +806,19 @@ export const CutListModal: React.FC<CutListModalProps> = ({
               <div className="flex flex-wrap items-center justify-between gap-2 border-b border-zinc-800/80 pb-3">
                 <div className="flex flex-wrap items-center gap-1.5">
                   {nestingResults.map((nr) => {
-                    const active = activeNesting?.materialId === nr.materialId;
+                    const active = activeNesting?.groupKey === nr.groupKey;
                     return (
                       <button
-                        key={nr.materialId}
+                        key={nr.groupKey}
                         type="button"
-                        onClick={() => setSelectedNestMat(nr.materialId)}
+                        onClick={() => setSelectedNestKey(nr.groupKey)}
                         className={`rounded-lg border px-2.5 py-1.5 text-xs font-medium transition-colors cursor-pointer ${
                           active
                             ? 'border-amber-500 bg-amber-500/15 text-amber-300 font-semibold'
                             : 'border-zinc-800 bg-zinc-900 text-zinc-300 hover:border-zinc-700'
                         }`}
                       >
-                        {getMaterialMeta(nr.materialId).shortName} ({nr.totalSheets} ark.)
+                        {getMaterialMeta(nr.materialId).shortName} {nr.thicknessMm} mm ({nr.totalSheets} ark.)
                       </button>
                     );
                   })}
@@ -763,7 +851,7 @@ export const CutListModal: React.FC<CutListModalProps> = ({
                 <div className="space-y-5">
                   <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-zinc-400">
                     <span>
-                      Arkusz <strong className="text-zinc-200">{getMaterialMeta(activeNesting.materialId).name}</strong>{' '}
+                      Arkusz <strong className="text-zinc-200">{getMaterialMeta(activeNesting.materialId).name} ({activeNesting.thicknessMm} mm)</strong>{' '}
                       <span className="font-mono-num">
                         {activeNesting.sheetWidthMm} × {activeNesting.sheetHeightMm} mm
                       </span>{' '}
@@ -878,6 +966,88 @@ export const CutListModal: React.FC<CutListModalProps> = ({
                             {pl.rotated ? ' ↻' : ''}
                             {pl.oversized ? ' — ZA DUŻA NA ARKUSZ!' : ''})
                           </span>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* 1D Linear Bar Cutting Optimization for Steel Profiles & Timber Battens */}
+              {linearResults.length > 0 && (
+                <div className="space-y-3 border-t border-zinc-800 pt-4">
+                  <div className="flex items-center justify-between">
+                    <h3 className="text-xs font-semibold text-sky-300">
+                      Rozkrój liniowy 1D — profile stalowe i listwy (sztangi handlowe)
+                    </h3>
+                    <span className="text-[11px] text-zinc-400 font-mono-num">
+                      Rzaz: {kerfMm} mm · Obrzyn końcówek: 20 mm
+                    </span>
+                  </div>
+                  {linearResults.map((lr) => (
+                    <div
+                      key={lr.groupKey}
+                      className="rounded-xl border border-zinc-800 bg-zinc-950/70 p-3 space-y-2.5"
+                    >
+                      <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+                        <span className="font-semibold text-white">
+                          {getMaterialMeta(lr.materialId).name} · przekrój{' '}
+                          <span className="font-mono-num text-sky-300">{lr.profileSectionLabel}</span>
+                        </span>
+                        <span className="font-mono-num text-zinc-400">
+                          {lr.totalBars} sztang × {lr.stockLengthMm} mm · Odpad {lr.wastePercent}% · ~{lr.estimatedCostPln} zł
+                        </span>
+                      </div>
+
+                      <div className="space-y-2">
+                        {lr.bars.map((bar) => (
+                          <div key={bar.barIndex} className="space-y-1">
+                            <div className="flex items-center justify-between text-[11px] font-mono-num text-zinc-400">
+                              <span>Sztanga #{bar.barIndex} ({bar.stockLengthMm} mm)</span>
+                              <span>
+                                Wykorzystano: {bar.usedMm} mm · Odpad: {bar.wasteMm} mm ({bar.wastePercent}%)
+                              </span>
+                            </div>
+                            <svg
+                              viewBox={`0 0 ${bar.stockLengthMm} 210`}
+                              className="w-full h-10 rounded-md border border-zinc-700 bg-[#1B1D22]"
+                              preserveAspectRatio="none"
+                            >
+                              <rect x={0} y={0} width={bar.stockLengthMm} height={210} fill="#23262D" />
+                              {bar.cuts.map((c, ci) => {
+                                const fill = c.oversized
+                                  ? '#DC2626'
+                                  : SHEET_PIECE_COLORS[(c.labelIndex - 1) % SHEET_PIECE_COLORS.length];
+                                return (
+                                  <g key={`${c.partId}_${ci}`}>
+                                    <rect
+                                      x={c.startMm}
+                                      y={14}
+                                      width={Math.min(c.lengthMm, bar.stockLengthMm - c.startMm)}
+                                      height={182}
+                                      fill={fill}
+                                      fillOpacity={0.34}
+                                      stroke={fill}
+                                      strokeWidth={10}
+                                    />
+                                    {c.lengthMm > bar.stockLengthMm * 0.08 && (
+                                      <text
+                                        x={c.startMm + c.lengthMm / 2}
+                                        y={118}
+                                        textAnchor="middle"
+                                        fill="#FAFAFA"
+                                        fontSize={86}
+                                        fontFamily="JetBrains Mono, monospace"
+                                        fontWeight={700}
+                                      >
+                                        #{c.labelIndex} ({c.lengthMm})
+                                      </text>
+                                    )}
+                                  </g>
+                                );
+                              })}
+                            </svg>
+                          </div>
                         ))}
                       </div>
                     </div>
@@ -1024,11 +1194,15 @@ export const CutListModal: React.FC<CutListModalProps> = ({
                               const hy = pad + m.faceHeightMm - h.yMm;
                               const r = Math.max(8, h.diameterMm / 2);
                               const stroke =
-                                h.kind === 'hinge_cup'
+                                h.kind === 'hinge_cup' || h.kind === 'hinge_plate'
                                   ? '#38BDF8'
                                   : h.kind === 'minifix_cam'
                                     ? '#A78BFA'
-                                    : '#F59E0B';
+                                    : h.kind === 'slide_rail'
+                                      ? '#10B981'
+                                      : h.kind === 'shelf_pin'
+                                        ? '#94A3B8'
+                                        : '#F59E0B';
                               return (
                                 <g key={h.id}>
                                   <circle
@@ -1040,16 +1214,18 @@ export const CutListModal: React.FC<CutListModalProps> = ({
                                     stroke={stroke}
                                     strokeWidth={Math.max(3, fs * 0.12)}
                                   />
-                                  <text
-                                    x={hx + r + 8}
-                                    y={hy + fs * 0.28}
-                                    fontSize={fs * 0.8}
-                                    fill="#FAFAFA"
-                                    fontFamily="JetBrains Mono, monospace"
-                                    fontWeight={700}
-                                  >
-                                    O{hi + 1}
-                                  </text>
+                                  {h.kind !== 'shelf_pin' && (
+                                    <text
+                                      x={hx + r + 8}
+                                      y={hy + fs * 0.28}
+                                      fontSize={fs * 0.8}
+                                      fill="#FAFAFA"
+                                      fontFamily="JetBrains Mono, monospace"
+                                      fontWeight={700}
+                                    >
+                                      O{hi + 1}
+                                    </text>
+                                  )}
                                 </g>
                               );
                             })}
@@ -1088,7 +1264,13 @@ export const CutListModal: React.FC<CutListModalProps> = ({
                           <span className="h-2.5 w-2.5 rounded-full bg-violet-400 inline-block" /> Minifix Ø15
                         </span>
                         <span className="flex items-center gap-1">
-                          <span className="h-2.5 w-2.5 rounded-full bg-sky-400 inline-block" /> Zawias Ø35 / Nut
+                          <span className="h-2.5 w-2.5 rounded-full bg-sky-400 inline-block" /> Zawias Ø35 / Prowadnik S32
+                        </span>
+                        <span className="flex items-center gap-1">
+                          <span className="h-2.5 w-2.5 rounded-full bg-emerald-400 inline-block" /> Prowadnica S32
+                        </span>
+                        <span className="flex items-center gap-1">
+                          <span className="h-2.5 w-2.5 rounded-full bg-slate-400 inline-block" /> Podpórka Ø5 (S32)
                         </span>
                         <span className="flex items-center gap-1">
                           <span className="h-2.5 w-2.5 rounded-full bg-red-400 inline-block" /> Wycięcie
@@ -1255,6 +1437,16 @@ export const CutListModal: React.FC<CutListModalProps> = ({
                         {quote.sheetsCostPln.toLocaleString('pl-PL')} zł
                       </span>
                     </div>
+                    {quote.linearBarsCount > 0 && (
+                      <div className="flex justify-between">
+                        <span className="text-zinc-400">
+                          Profile liniowe 1D ({quote.linearBarsCount} sztang)
+                        </span>
+                        <span className="font-mono-num text-sky-300">
+                          {quote.linearProfilesCostPln.toLocaleString('pl-PL')} zł
+                        </span>
+                      </div>
+                    )}
                     <div className="flex justify-between">
                       <span className="text-zinc-400">
                         Cięcie na pile ({quote.cuttingLinearM} mb)
