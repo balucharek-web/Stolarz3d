@@ -1,4 +1,4 @@
-export type MaterialId =
+export type BuiltInMaterialId =
   | 'osb3'
   | 'oak_craft'
   | 'walnut'
@@ -10,21 +10,51 @@ export type MaterialId =
   | 'steel_galv'
   | 'glass_clear';
 
-export type PartKind = 'panel' | 'sloped' | 'profile' | 'door' | 'countertop' | 'custom';
+export type MaterialId = BuiltInMaterialId | (string & {});
+
+export type PartKind =
+  | 'panel'
+  | 'sloped'
+  | 'profile'
+  | 'door'
+  | 'countertop'
+  | 'custom'
+  | 'appliance';
+
+export type ApplianceModel =
+  | 'wardrobe_rod'
+  | 'induction_hob'
+  | 'kitchen_sink'
+  | 'builtin_oven'
+  | 'wire_cargo';
+
+export type AlignMode =
+  | 'left'
+  | 'right'
+  | 'centerX'
+  | 'bottom'
+  | 'top'
+  | 'front'
+  | 'back';
 
 export type ScrewType =
   | 'wood_4x45'
   | 'confirmat_7x50'
+  | 'minifix_15'
   | 'bolt_m8'
   | 'dowel_8x35';
 
 export type HandleSide = 'left' | 'right' | 'top' | 'none';
 
-export type EditorTool = 'select' | 'move' | 'rotate' | 'screw';
+export type SurfaceFinish = 'matte' | 'satin' | 'gloss';
+
+export type DrawerSlideType = 'none' | 'ball_26mm' | 'undermount_blum';
+
+export type EditorTool = 'select' | 'move' | 'rotate' | 'resize' | 'screw' | 'measure';
 
 export type CameraPreset = 'iso' | 'front' | 'back' | 'left' | 'right' | 'side' | 'top';
 
-export type StudioLighting = 'daylight' | 'studio' | 'warm';
+export type StudioLighting = 'daylight' | 'studio' | 'warm' | 'photoreal';
 
 export interface MaterialMeta {
   id: MaterialId;
@@ -36,6 +66,20 @@ export interface MaterialMeta {
   sheetHeightMm: number;
   pricePerM2Pln: number;
   swatchFallbackHex: string;
+  isCustom?: boolean;
+  grainDirectional?: boolean;
+}
+
+export interface BuiltInMaterialOverride {
+  pricePerM2Pln?: number;
+  sheetWidthMm?: number;
+  sheetHeightMm?: number;
+  defaultThicknessMm?: number;
+}
+
+export interface MaterialsCatalogConfig {
+  customMaterials: MaterialMeta[];
+  builtInOverrides: Partial<Record<BuiltInMaterialId, BuiltInMaterialOverride>>;
 }
 
 export interface ScrewMeta {
@@ -57,6 +101,43 @@ export interface EdgeBandingConfig {
   bottom?: boolean;
   left?: boolean;
   right?: boolean;
+}
+
+/** Internal cutout (sink, induction hob, cable grommet, pipe pass-through) relative to board face center */
+export interface PartCutout {
+  id: string;
+  shape: 'rect' | 'circle';
+  /** Offset along the board's primary X/width span from center (mm) */
+  xMm: number;
+  /** Offset along the board's primary Y/depth span from center (mm) */
+  yMm: number;
+  /** Width for rectangular cutout (mm) */
+  widthMm: number;
+  /** Height for rectangular cutout (mm) */
+  heightMm: number;
+  /** Diameter for circular cutout (mm) */
+  diameterMm?: number;
+  label?: string;
+}
+
+/** Back/bottom dado groove (nut / wpust pod plecy HDF) */
+export interface DadoGrooveConfig {
+  enabled: boolean;
+  edge: 'back' | 'bottom' | 'top';
+  /** Distance from outer edge to groove center (mm), e.g. 16 mm */
+  insetMm: number;
+  /** Groove width (mm), e.g. 4 mm for 3–4 mm HDF */
+  widthMm: number;
+  /** Groove depth (mm), e.g. 8–10 mm */
+  depthMm: number;
+}
+
+/** 45-degree miter chamfer edges (zacinanie na 45° / gerung) */
+export interface MiterEdgesConfig {
+  left?: boolean;
+  right?: boolean;
+  top?: boolean;
+  bottom?: boolean;
 }
 
 export interface FurniturePart {
@@ -90,8 +171,29 @@ export interface FurniturePart {
   customPolygon?: [number, number][];
   /** Optional edge banding (okleina ABS/PCV) for cut list & sizing */
   edgeBanding?: EdgeBandingConfig;
-  /** Optional group name/id so grouped parts move together */
+  /** Optional group name/id so grouped parts move & smart-resize together */
   groupId?: string;
+  /** Surface lacquer finish for Studio PBR rendering */
+  surfaceFinish?: SurfaceFinish;
+  /** Rounded corners fillet radius in mm (R) */
+  cornerRadiusMm?: number;
+  /** Internal rectangular or circular cutouts (sink, hob, cable grommet, pipes) */
+  cutouts?: PartCutout[];
+  /** Dado groove (nut pod plecy HDF) */
+  dadoGroove?: DadoGrooveConfig;
+  /** 45-degree mitered edges (gerung) */
+  miter45?: MiterEdgesConfig;
+  /** Cabinet door hinge side & count (Ø35 mm cup hinges) */
+  hingeSide?: HandleSide;
+  hingeCount?: number;
+  /** Drawer slide hardware specification (counted on drawer front/box) */
+  drawerSlideType?: DrawerSlideType;
+  /** Optional hardware role tag for BOM counting (e.g. adjustable leg) */
+  hardwareTag?: 'leg' | 'drawer_front' | 'drawer_box' | 'door_overlay' | 'door_inset';
+  /** Procedural 3D interior accessory or kitchen appliance model (when kind === 'appliance') */
+  applianceModel?: ApplianceModel;
+  /** Optional unit price in PLN for appliance/interior accessory BOM */
+  appliancePricePln?: number;
 }
 
 export interface Fastener {
@@ -109,6 +211,46 @@ export interface Fastener {
   /** Normalized 0..1 parametric offset along the contact patch's long span */
   jointParamU?: number;
 }
+
+export interface MeasureSegment {
+  id: string;
+  startMm: [number, number, number];
+  endMm: [number, number, number];
+}
+
+export interface QuoteSettings {
+  companyName: string;
+  clientName: string;
+  cuttingPricePerMbPln: number;
+  edgeBandingPricePerMbPln: number;
+  hingePricePln: number;
+  slidePairPricePln: number;
+  handlePricePln: number;
+  legPricePln: number;
+  fastenerPricePln: number;
+  laborHours: number;
+  laborRatePln: number;
+  marginPercent: number;
+  vatPercent: 8 | 23;
+  notes: string;
+}
+
+export const DEFAULT_QUOTE_SETTINGS: QuoteSettings = {
+  companyName: 'Moja Pracownia Stolarska',
+  clientName: 'Klient indywidualny',
+  cuttingPricePerMbPln: 3.5,
+  edgeBandingPricePerMbPln: 7.5,
+  hingePricePln: 18,
+  slidePairPricePln: 85,
+  handlePricePln: 24,
+  legPricePln: 8,
+  fastenerPricePln: 0.45,
+  laborHours: 8,
+  laborRatePln: 110,
+  marginPercent: 20,
+  vatPercent: 23,
+  notes: 'Cena obejmuje materiał, rozkrój, okleinowanie ABS, okucia oraz montaż próbny na warsztacie.',
+};
 
 export interface FurnitureProject {
   id: string;
@@ -231,13 +373,127 @@ export const MATERIAL_CATALOG: MaterialMeta[] = [
   },
 ];
 
-export const MATERIAL_MAP: Record<MaterialId, MaterialMeta> = MATERIAL_CATALOG.reduce(
+export const DEFAULT_MATERIAL_CATALOG: MaterialMeta[] = MATERIAL_CATALOG.map((m) => ({
+  ...m,
+  grainDirectional: m.id === 'oak_craft' || m.id === 'walnut',
+}));
+
+export const MATERIAL_MAP: Record<string, MaterialMeta> = MATERIAL_CATALOG.reduce(
   (acc, item) => {
     acc[item.id] = item;
     return acc;
   },
-  {} as Record<MaterialId, MaterialMeta>
+  {} as Record<string, MaterialMeta>
 );
+
+/** Safe material metadata lookup (handles built-in, custom warehouse boards, and unknown fallbacks) */
+export function getMaterialMeta(id: MaterialId): MaterialMeta {
+  return MATERIAL_MAP[id] ?? MATERIAL_MAP['osb3'];
+}
+
+/** Synchronizes in-place MATERIAL_CATALOG and MATERIAL_MAP with user warehouse overrides & custom boards */
+export function syncCatalogMaterials(config: MaterialsCatalogConfig): void {
+  const rebuilt: MaterialMeta[] = DEFAULT_MATERIAL_CATALOG.map((base) => {
+    const ov = config.builtInOverrides[base.id as BuiltInMaterialId];
+    return ov
+      ? {
+          ...base,
+          pricePerM2Pln: ov.pricePerM2Pln ?? base.pricePerM2Pln,
+          sheetWidthMm: ov.sheetWidthMm ?? base.sheetWidthMm,
+          sheetHeightMm: ov.sheetHeightMm ?? base.sheetHeightMm,
+          defaultThicknessMm: ov.defaultThicknessMm ?? base.defaultThicknessMm,
+        }
+      : { ...base };
+  });
+
+  for (const cm of config.customMaterials) {
+    rebuilt.push({ ...cm, isCustom: true });
+  }
+
+  MATERIAL_CATALOG.length = 0;
+  MATERIAL_CATALOG.push(...rebuilt);
+
+  for (const key of Object.keys(MATERIAL_MAP)) {
+    delete MATERIAL_MAP[key];
+  }
+  for (const item of rebuilt) {
+    MATERIAL_MAP[item.id] = item;
+  }
+}
+
+export interface ApplianceMeta {
+  id: ApplianceModel;
+  name: string;
+  desc: string;
+  width: number;
+  height: number;
+  depth: number;
+  defaultY: number;
+  defaultPricePln: number;
+  slidesOut?: boolean;
+}
+
+export const APPLIANCE_CATALOG: ApplianceMeta[] = [
+  {
+    id: 'wardrobe_rod',
+    name: 'Drążek na wieszaki (chrom)',
+    desc: '764 × 35 × 35 mm · Z rozetami i 3 wieszakami',
+    width: 764,
+    height: 35,
+    depth: 35,
+    defaultY: 1650,
+    defaultPricePln: 65,
+  },
+  {
+    id: 'wire_cargo',
+    name: 'Kosz cargo / wysuwany',
+    desc: '360 × 520 × 460 mm · 2 poziomy, wysuwa się z szufladami',
+    width: 360,
+    height: 520,
+    depth: 460,
+    defaultY: 420,
+    defaultPricePln: 340,
+    slidesOut: true,
+  },
+  {
+    id: 'induction_hob',
+    name: 'Płyta indukcyjna 60 cm',
+    desc: '590 × 45 × 520 mm · Szkło ceramiczne, 4 pola grzewcze',
+    width: 590,
+    height: 45,
+    depth: 520,
+    defaultY: 855,
+    defaultPricePln: 1450,
+  },
+  {
+    id: 'kitchen_sink',
+    name: 'Zlewozmywak z baterią',
+    desc: '580 × 210 × 480 mm · Komora stalowa + bateria łukowa',
+    width: 580,
+    height: 210,
+    depth: 480,
+    defaultY: 790,
+    defaultPricePln: 890,
+  },
+  {
+    id: 'builtin_oven',
+    name: 'Piekarnik do zabudowy 60',
+    desc: '595 × 595 × 550 mm · Front czarny + stal, wyświetlacz',
+    width: 595,
+    height: 595,
+    depth: 550,
+    defaultY: 500,
+    defaultPricePln: 1850,
+  },
+];
+
+export const ASSEMBLY_STEPS: Array<{ step: number; title: string; desc: string }> = [
+  { step: 1, title: 'Korpus główny', desc: 'Skręcenie boków, wieńców, przegród i stelaża nośnego' },
+  { step: 2, title: 'Podstawa i plecy', desc: 'Montaż nóżek/cokołu oraz wbicie lub wsunięcie pleców HDF' },
+  { step: 3, title: 'Wnętrze, półki i szuflady', desc: 'Osadzenie półek, prowadnic, szuflad, cargo i drążków' },
+  { step: 4, title: 'Fronty i drzwiczki', desc: 'Zawieszenie frontów na zawiasach Ø35 i przykręcenie frontów szuflad' },
+  { step: 5, title: 'Blat i AGD', desc: 'Osadzenie blatu roboczego, zlewu, płyty grzewczej i piekarnika' },
+];
 
 export const SCREW_CATALOG: ScrewMeta[] = [
   {
@@ -257,6 +513,15 @@ export const SCREW_CATALOG: ScrewMeta[] = [
     lengthMm: 50,
     usage: 'Korpusy z płyt meblowych 18 mm',
     colorHex: '#C5CBD3',
+  },
+  {
+    id: 'minifix_15',
+    name: 'Mimośród Minifix Ø15 + trzpień 34 mm',
+    shortName: 'Minifix Ø15',
+    diameterMm: 15,
+    lengthMm: 42,
+    usage: 'Niewidoczne złącza meblowe bez łbów na boku',
+    colorHex: '#A7B1BC',
   },
   {
     id: 'bolt_m8',
@@ -293,4 +558,5 @@ export const PART_KIND_LABELS: Record<PartKind, string> = {
   door: 'Front z uchwytem',
   countertop: 'Blat kuchenny',
   custom: 'Własny kształt (2D)',
+  appliance: 'Wnętrze / AGD 3D',
 };

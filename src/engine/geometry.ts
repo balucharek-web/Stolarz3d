@@ -165,16 +165,95 @@ function assignFaceEdgeGroups(
   }
 }
 
+function createRoundedRectShape(
+  wM: number,
+  hM: number,
+  radiusM: number
+): THREE.Shape {
+  const hw = wM / 2;
+  const hh = hM / 2;
+  const r = Math.max(0, Math.min(radiusM, hw * 0.48, hh * 0.48));
+  const shape = new THREE.Shape();
+  if (r <= 0.0005) {
+    shape.moveTo(-hw, -hh);
+    shape.lineTo(hw, -hh);
+    shape.lineTo(hw, hh);
+    shape.lineTo(-hw, hh);
+    shape.closePath();
+    return shape;
+  }
+  shape.moveTo(-hw + r, -hh);
+  shape.lineTo(hw - r, -hh);
+  shape.quadraticCurveTo(hw, -hh, hw, -hh + r);
+  shape.lineTo(hw, hh - r);
+  shape.quadraticCurveTo(hw, hh, hw - r, hh);
+  shape.lineTo(-hw + r, hh);
+  shape.quadraticCurveTo(-hw, hh, -hw, hh - r);
+  shape.lineTo(-hw, -hh + r);
+  shape.quadraticCurveTo(-hw, -hh, -hw + r, -hh);
+  shape.closePath();
+  return shape;
+}
+
+function appendCutoutHoles(
+  shape: THREE.Shape,
+  cutouts: FurniturePart['cutouts'],
+  faceWM: number,
+  faceHM: number
+) {
+  if (!cutouts || cutouts.length === 0) return;
+  const maxHalfW = Math.max(0.005, faceWM / 2 - 0.008);
+  const maxHalfH = Math.max(0.005, faceHM / 2 - 0.008);
+
+  for (const c of cutouts) {
+    const cx = THREE.MathUtils.clamp(c.xMm * MM_TO_M, -maxHalfW + 0.005, maxHalfW - 0.005);
+    const cy = THREE.MathUtils.clamp(c.yMm * MM_TO_M, -maxHalfH + 0.005, maxHalfH - 0.005);
+    const hole = new THREE.Path();
+    if (c.shape === 'circle') {
+      const rRaw = ((c.diameterMm ?? c.widthMm) * 0.5) * MM_TO_M;
+      const r = Math.max(
+        0.004,
+        Math.min(
+          rRaw,
+          maxHalfW - Math.abs(cx),
+          maxHalfH - Math.abs(cy)
+        )
+      );
+      if (r < 0.004) continue;
+      hole.absarc(cx, cy, r, 0, Math.PI * 2, true);
+    } else {
+      const hw = Math.max(
+        0.005,
+        Math.min((c.widthMm * 0.5) * MM_TO_M, maxHalfW - Math.abs(cx))
+      );
+      const hh = Math.max(
+        0.005,
+        Math.min((c.heightMm * 0.5) * MM_TO_M, maxHalfH - Math.abs(cy))
+      );
+      if (hw < 0.005 || hh < 0.005) continue;
+      // Clockwise for holes
+      hole.moveTo(cx - hw, cy - hh);
+      hole.lineTo(cx - hw, cy + hh);
+      hole.lineTo(cx + hw, cy + hh);
+      hole.lineTo(cx + hw, cy - hh);
+      hole.closePath();
+    }
+    shape.holes.push(hole);
+  }
+}
+
 /**
  * Build a realistic beveled BufferGeometry for any FurniturePart (panel, sloped/angled board,
- * structural profile, cabinet door, or bullnose kitchen countertop).
+ * structural profile, cabinet door, bullnose kitchen countertop, with optional cutouts & rounded corners).
  */
 export function buildPartGeometry(part: FurniturePart): THREE.BufferGeometry {
   const w = Math.max(part.width, 6) * MM_TO_M;
   const h = Math.max(part.height, 6) * MM_TO_M;
   const d = Math.max(part.depth, 4) * MM_TO_M;
+  const hasCutouts = Boolean(part.cutouts && part.cutouts.length > 0);
+  const cornerR = Math.max(0, (part.cornerRadiusMm ?? 0) * MM_TO_M);
 
-  if (part.kind === 'countertop') {
+  if (part.kind === 'countertop' && !hasCutouts && cornerR <= 0.0005) {
     // Bullnose kitchen worktop cross-section in YZ, extruded along X (width)
     const r = Math.min(h * 0.34, 0.008);
     const shape = new THREE.Shape();
@@ -191,12 +270,74 @@ export function buildPartGeometry(part: FurniturePart): THREE.BufferGeometry {
       bevelEnabled: false,
       curveSegments: 8,
     });
-    // ExtrudeGeometry extrudes along +Z from XY; rotate so cross-section is YZ and length is X
     geo.rotateY(Math.PI / 2);
     geo.translate(-w / 2, 0, 0);
     geo.computeVertexNormals();
     applyWorldScaleUVs(geo, !!part.grainRotated, [w, h, d]);
     assignFaceEdgeGroups(geo, [w, h, d]);
+    return geo;
+  }
+
+  // Horizontal board (shelf, countertop, top/bottom) with internal cutouts or rounded corners -> extrude along Y!
+  if (
+    (hasCutouts || cornerR > 0.0005) &&
+    part.kind !== 'custom' &&
+    part.kind !== 'sloped' &&
+    h <= w &&
+    h <= d
+  ) {
+    const bevel = Math.min(0.0014, w * 0.04, d * 0.04, h * 0.14);
+    const innerW = Math.max(0.004, w - bevel * 2);
+    const innerD = Math.max(0.004, d - bevel * 2);
+    const innerH = Math.max(0.002, h - bevel * 2);
+    const shape = createRoundedRectShape(innerW, innerD, cornerR);
+    appendCutoutHoles(shape, part.cutouts, innerW, innerD);
+    const geo = new THREE.ExtrudeGeometry(shape, {
+      depth: innerH,
+      bevelEnabled: bevel > 0.0002,
+      bevelThickness: bevel,
+      bevelSize: bevel,
+      bevelSegments: 2,
+      curveSegments: 16,
+      steps: 1,
+    });
+    geo.translate(0, 0, -innerH / 2);
+    // Rotate so XY shape lies flat in XZ plane (local +Y = thickness)
+    geo.rotateX(-Math.PI / 2);
+    geo.computeVertexNormals();
+    applyWorldScaleUVs(geo, !!part.grainRotated, [w, h, d], 'y');
+    assignFaceEdgeGroups(geo, [w, h, d], 'y');
+    return geo;
+  }
+
+  // Vertical X-thin side wall with cutouts or rounded corners -> extrude along X!
+  if (
+    (hasCutouts || cornerR > 0.0005) &&
+    part.kind !== 'custom' &&
+    part.kind !== 'sloped' &&
+    w < h &&
+    w < d
+  ) {
+    const bevel = Math.min(0.0014, h * 0.04, d * 0.04, w * 0.14);
+    const innerD = Math.max(0.004, d - bevel * 2);
+    const innerH = Math.max(0.004, h - bevel * 2);
+    const innerW = Math.max(0.002, w - bevel * 2);
+    const shape = createRoundedRectShape(innerD, innerH, cornerR);
+    appendCutoutHoles(shape, part.cutouts, innerD, innerH);
+    const geo = new THREE.ExtrudeGeometry(shape, {
+      depth: innerW,
+      bevelEnabled: bevel > 0.0002,
+      bevelThickness: bevel,
+      bevelSize: bevel,
+      bevelSegments: 2,
+      curveSegments: 16,
+      steps: 1,
+    });
+    geo.translate(0, 0, -innerW / 2);
+    geo.rotateY(Math.PI / 2);
+    geo.computeVertexNormals();
+    applyWorldScaleUVs(geo, !!part.grainRotated, [w, h, d], 'x');
+    assignFaceEdgeGroups(geo, [w, h, d], 'x');
     return geo;
   }
 
@@ -237,6 +378,9 @@ export function buildPartGeometry(part: FurniturePart): THREE.BufferGeometry {
       else shape.lineTo(mx, my);
     });
     shape.closePath();
+    if (hasCutouts) {
+      appendCutoutHoles(shape, part.cutouts, Math.max(0.01, w - bevel * 2), Math.max(0.01, h - bevel * 2));
+    }
 
     const geo = new THREE.ExtrudeGeometry(shape, {
       depth: innerD,
@@ -274,12 +418,20 @@ export function buildPartGeometry(part: FurniturePart): THREE.BufferGeometry {
 
   // Shrink slightly on Y for bevel so total outer bounding box matches exact mm dimensions
   const insetY = bevel;
-  const shape = new THREE.Shape();
-  shape.moveTo(-innerW / 2, yBottomLeft + insetY);
-  shape.lineTo(innerW / 2, yBottomRight + insetY);
-  shape.lineTo(innerW / 2, Math.max(yBottomRight + insetY + 0.002, yTopRight - insetY));
-  shape.lineTo(-innerW / 2, Math.max(yBottomLeft + insetY + 0.002, yTopLeft - insetY));
-  shape.closePath();
+  let shape: THREE.Shape;
+  if (part.kind !== 'sloped' && cornerR > 0.0005) {
+    shape = createRoundedRectShape(innerW, Math.max(0.004, h - bevel * 2), cornerR);
+  } else {
+    shape = new THREE.Shape();
+    shape.moveTo(-innerW / 2, yBottomLeft + insetY);
+    shape.lineTo(innerW / 2, yBottomRight + insetY);
+    shape.lineTo(innerW / 2, Math.max(yBottomRight + insetY + 0.002, yTopRight - insetY));
+    shape.lineTo(-innerW / 2, Math.max(yBottomLeft + insetY + 0.002, yTopLeft - insetY));
+    shape.closePath();
+  }
+  if (hasCutouts) {
+    appendCutoutHoles(shape, part.cutouts, innerW, Math.max(0.01, h - bevel * 2));
+  }
 
   const geo = new THREE.ExtrudeGeometry(shape, {
     depth: innerD,
@@ -287,6 +439,7 @@ export function buildPartGeometry(part: FurniturePart): THREE.BufferGeometry {
     bevelThickness: bevel,
     bevelSize: bevel,
     bevelSegments: 2,
+    curveSegments: 16,
     steps: 1,
   });
 
@@ -496,6 +649,418 @@ export function buildDoorHandleGroup(part: FurniturePart): THREE.Group | null {
 }
 
 /**
+ * Procedural Ø35 mm concealed cup hinges (zawiasy puszkowe) mounted on the interior face of doors.
+ */
+export function buildDoorHingesGroup(part: FurniturePart): THREE.Group | null {
+  if (part.kind !== 'door' || !part.hingeSide || part.hingeSide === 'none') {
+    return null;
+  }
+  const count = Math.max(2, Math.min(5, part.hingeCount ?? (part.height > 1500 ? 4 : part.height > 950 ? 3 : 2)));
+  const group = new THREE.Group();
+  group.name = 'door_hinges';
+
+  const steelMat = new THREE.MeshStandardMaterial({
+    color: '#B8C0CA',
+    metalness: 0.9,
+    roughness: 0.24,
+  });
+
+  const w = part.width * MM_TO_M;
+  const h = part.height * MM_TO_M;
+  const d = part.depth * MM_TO_M;
+  const cupRadius = 0.0175; // Ø35 mm cup
+  const insetFromEdge = 0.0225; // standard K=5 + 17.5mm = 22.5mm cup center from edge
+
+  for (let i = 0; i < count; i++) {
+    const frac = count === 1 ? 0.5 : i / (count - 1);
+    const hingeUnit = new THREE.Group();
+
+    const cup = new THREE.Mesh(
+      new THREE.CylinderGeometry(cupRadius, cupRadius, 0.008, 18),
+      steelMat
+    );
+    cup.rotation.x = Math.PI / 2;
+    cup.position.z = -0.004;
+    cup.userData.disposeMaterial = true;
+    hingeUnit.add(cup);
+
+    const arm = new THREE.Mesh(
+      new THREE.BoxGeometry(0.044, 0.015, 0.012),
+      steelMat
+    );
+    arm.position.set(part.hingeSide === 'left' ? -0.018 : part.hingeSide === 'right' ? 0.018 : 0, 0, -0.012);
+    arm.userData.disposeMaterial = true;
+    hingeUnit.add(arm);
+
+    if (part.hingeSide === 'top') {
+      const margin = Math.min(0.1, w * 0.2);
+      const x = -w / 2 + margin + frac * Math.max(0.05, w - margin * 2);
+      hingeUnit.position.set(x, h / 2 - insetFromEdge, -d / 2);
+    } else {
+      const margin = Math.min(0.1, h * 0.18);
+      const y = -h / 2 + margin + frac * Math.max(0.05, h - margin * 2);
+      const x = part.hingeSide === 'left' ? -w / 2 + insetFromEdge : w / 2 - insetFromEdge;
+      hingeUnit.position.set(x, y, -d / 2);
+    }
+    group.add(hingeUnit);
+  }
+
+  return group;
+}
+
+/**
+ * Visual machining overlay for Dado Grooves (nut pod plecy HDF) & 45° miter chamfers (gerung).
+ */
+export function buildPartMachiningGroup(part: FurniturePart): THREE.Group | null {
+  const hasDado = Boolean(part.dadoGroove?.enabled);
+  const hasMiter = Boolean(
+    part.miter45 &&
+      (part.miter45.left || part.miter45.right || part.miter45.top || part.miter45.bottom)
+  );
+  if (!hasDado && !hasMiter) return null;
+
+  const group = new THREE.Group();
+  group.name = 'part_machining';
+  const w = part.width * MM_TO_M;
+  const h = part.height * MM_TO_M;
+  const d = part.depth * MM_TO_M;
+
+  if (hasDado && part.dadoGroove) {
+    const g = part.dadoGroove;
+    const grooveW = Math.max(0.003, g.widthMm * MM_TO_M);
+    const inset = g.insetMm * MM_TO_M;
+    const grooveMat = new THREE.MeshBasicMaterial({
+      color: '#1C1917',
+      polygonOffset: true,
+      polygonOffsetFactor: -2,
+      polygonOffsetUnits: -2,
+    });
+
+    // Place groove strip on the inner face of vertical side walls (X-thin) or horizontal tops/bottoms (Y-thin)
+    if (w <= h && w <= d) {
+      // Side panel: groove runs vertically near back edge (-Z + inset) on both faces subtly
+      const strip = new THREE.Mesh(
+        new THREE.BoxGeometry(w + 0.0008, h - 0.004, grooveW),
+        grooveMat
+      );
+      strip.position.set(0, 0, -d / 2 + inset);
+      strip.userData.disposeMaterial = true;
+      group.add(strip);
+    } else if (h <= w && h <= d) {
+      // Horizontal shelf/top/bottom: groove runs along X near back edge (-Z + inset)
+      const strip = new THREE.Mesh(
+        new THREE.BoxGeometry(w - 0.004, h + 0.0008, grooveW),
+        grooveMat
+      );
+      strip.position.set(0, 0, -d / 2 + inset);
+      strip.userData.disposeMaterial = true;
+      group.add(strip);
+    } else {
+      const strip = new THREE.Mesh(
+        new THREE.BoxGeometry(w - 0.004, grooveW, d + 0.0008),
+        grooveMat
+      );
+      strip.position.set(0, -h / 2 + inset, 0);
+      strip.userData.disposeMaterial = true;
+      group.add(strip);
+    }
+  }
+
+  if (hasMiter && part.miter45) {
+    const miterMat = new THREE.MeshBasicMaterial({
+      color: '#F59E0B',
+      transparent: true,
+      opacity: 0.55,
+    });
+    const t = 0.0025;
+    if (part.miter45.left) {
+      const m = new THREE.Mesh(new THREE.BoxGeometry(t, h, d + 0.001), miterMat);
+      m.position.set(-w / 2, 0, 0);
+      m.userData.disposeMaterial = true;
+      group.add(m);
+    }
+    if (part.miter45.right) {
+      const m = new THREE.Mesh(new THREE.BoxGeometry(t, h, d + 0.001), miterMat);
+      m.position.set(w / 2, 0, 0);
+      m.userData.disposeMaterial = true;
+      group.add(m);
+    }
+    if (part.miter45.top) {
+      const m = new THREE.Mesh(new THREE.BoxGeometry(w, t, d + 0.001), miterMat);
+      m.position.set(0, h / 2, 0);
+      m.userData.disposeMaterial = true;
+      group.add(m);
+    }
+    if (part.miter45.bottom) {
+      const m = new THREE.Mesh(new THREE.BoxGeometry(w, t, d + 0.001), miterMat);
+      m.position.set(0, -h / 2, 0);
+      m.userData.disposeMaterial = true;
+      group.add(m);
+    }
+  }
+
+  return group;
+}
+
+/**
+ * Builds rich, multi-mesh 3D models for wardrobe interiors and built-in kitchen appliances
+ * (closet rod with hangers, pull-out wire cargo basket, induction hob, sink with faucet, built-in oven).
+ */
+export function buildApplianceGroup(part: FurniturePart): THREE.Group | null {
+  if (part.kind !== 'appliance' || !part.applianceModel) return null;
+
+  const group = new THREE.Group();
+  const w = Math.max(0.04, part.width * MM_TO_M);
+  const h = Math.max(0.02, part.height * MM_TO_M);
+  const d = Math.max(0.02, part.depth * MM_TO_M);
+
+  const chromeMat = new THREE.MeshStandardMaterial({
+    color: '#D8DEE6',
+    metalness: 0.92,
+    roughness: 0.16,
+  });
+  const darkMetalMat = new THREE.MeshStandardMaterial({
+    color: '#1E2228',
+    metalness: 0.65,
+    roughness: 0.35,
+  });
+  const glassBlackMat = new THREE.MeshPhysicalMaterial({
+    color: '#101216',
+    roughness: 0.08,
+    metalness: 0.12,
+    clearcoat: 1.0,
+    clearcoatRoughness: 0.04,
+  });
+
+  if (part.applianceModel === 'wardrobe_rod') {
+    // Oval polished chrome hanging bar
+    const bar = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.011, 0.011, Math.max(0.08, w - 0.012), 18),
+      chromeMat
+    );
+    bar.rotation.z = Math.PI / 2;
+    bar.scale.set(1, 1, 0.62);
+    bar.castShadow = true;
+    group.add(bar);
+
+    // Left & right mounting rosettes
+    const flangeGeo = new THREE.CylinderGeometry(0.02, 0.02, 0.008, 16);
+    flangeGeo.rotateZ(Math.PI / 2);
+    const fL = new THREE.Mesh(flangeGeo, chromeMat);
+    fL.position.x = -w / 2 + 0.004;
+    const fR = new THREE.Mesh(flangeGeo.clone(), chromeMat);
+    fR.position.x = w / 2 - 0.004;
+    group.add(fL, fR);
+
+    // 3 realistic wooden coat hangers suspended on the rod
+    const woodMat = new THREE.MeshStandardMaterial({
+      color: '#B88956',
+      roughness: 0.58,
+      metalness: 0.02,
+    });
+    const hangerCount = w > 0.55 ? 3 : 2;
+    for (let i = 0; i < hangerCount; i++) {
+      const frac = (i / (hangerCount - 1) - 0.5) * 0.52;
+      const hx = w * frac;
+      const hook = new THREE.Mesh(new THREE.TorusGeometry(0.016, 0.0025, 8, 16, Math.PI * 1.4), chromeMat);
+      hook.position.set(hx, 0.002, 0);
+      hook.rotation.y = Math.PI / 2;
+      const leftArm = new THREE.Mesh(new THREE.BoxGeometry(0.011, 0.014, 0.19), woodMat);
+      leftArm.position.set(hx, -0.055, -0.085);
+      leftArm.rotation.x = 0.28;
+      const rightArm = new THREE.Mesh(new THREE.BoxGeometry(0.011, 0.014, 0.19), woodMat);
+      rightArm.position.set(hx, -0.055, 0.085);
+      rightArm.rotation.x = -0.28;
+      const crossBar = new THREE.Mesh(new THREE.CylinderGeometry(0.004, 0.004, 0.32, 8), woodMat);
+      crossBar.rotation.x = Math.PI / 2;
+      crossBar.position.set(hx, -0.082, 0);
+      group.add(hook, leftArm, rightArm, crossBar);
+    }
+  } else if (part.applianceModel === 'induction_hob') {
+    // Sleek flush glass ceramic cooktop
+    const base = new THREE.Mesh(new THREE.BoxGeometry(w, h * 0.55, d), darkMetalMat);
+    base.position.y = -h * 0.2;
+    const topGlass = new THREE.Mesh(new THREE.BoxGeometry(w, h * 0.28, d), glassBlackMat);
+    topGlass.position.y = h * 0.22;
+    topGlass.receiveShadow = true;
+    group.add(base, topGlass);
+
+    // 4 etched induction zone rings
+    const ringMat = new THREE.MeshBasicMaterial({ color: '#94A3B8', side: THREE.DoubleSide });
+    const zones: Array<[number, number, number]> = [
+      [-w * 0.24, -d * 0.2, Math.min(w, d) * 0.19],
+      [w * 0.24, -d * 0.18, Math.min(w, d) * 0.16],
+      [-w * 0.24, d * 0.18, Math.min(w, d) * 0.15],
+      [w * 0.24, d * 0.18, Math.min(w, d) * 0.2],
+    ];
+    for (const [zx, zz, r] of zones) {
+      const ring = new THREE.Mesh(new THREE.RingGeometry(r - 0.003, r, 28), ringMat);
+      ring.rotation.x = -Math.PI / 2;
+      ring.position.set(zx, h * 0.37, zz);
+      group.add(ring);
+    }
+    // Red touch-slider control bar
+    const ctrl = new THREE.Mesh(
+      new THREE.PlaneGeometry(w * 0.34, 0.012),
+      new THREE.MeshBasicMaterial({ color: '#EF4444' })
+    );
+    ctrl.rotation.x = -Math.PI / 2;
+    ctrl.position.set(0, h * 0.37, d * 0.4);
+    group.add(ctrl);
+  } else if (part.applianceModel === 'kitchen_sink') {
+    const steelMat = new THREE.MeshStandardMaterial({
+      color: '#C7CDD4',
+      metalness: 0.85,
+      roughness: 0.26,
+    });
+    const innerMat = new THREE.MeshStandardMaterial({
+      color: '#9BA3AD',
+      metalness: 0.82,
+      roughness: 0.34,
+    });
+    // Outer rim deck sitting flush on countertop
+    const rimH = 0.012;
+    const rim = new THREE.Mesh(new THREE.BoxGeometry(w, rimH, d), steelMat);
+    rim.position.y = h / 2 - rimH / 2;
+    group.add(rim);
+
+    // Recessed basin walls & floor
+    const bw = w * 0.86;
+    const bd = d * 0.76;
+    const bh = Math.max(0.08, h - rimH);
+    const basin = new THREE.Mesh(new THREE.BoxGeometry(bw, bh, bd), innerMat);
+    basin.position.set(0, -rimH / 2, d * 0.04);
+    group.add(basin);
+
+    // Dark recessed interior top illusion + chrome strainer
+    const darkWell = new THREE.Mesh(
+      new THREE.PlaneGeometry(bw * 0.96, bd * 0.94),
+      new THREE.MeshStandardMaterial({ color: '#4B525C', metalness: 0.7, roughness: 0.4 })
+    );
+    darkWell.rotation.x = -Math.PI / 2;
+    darkWell.position.set(0, h / 2 + 0.001, d * 0.04);
+    const drain = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.036, 0.036, 0.004, 18),
+      chromeMat
+    );
+    drain.position.set(0, h / 2 + 0.002, d * 0.02);
+    group.add(darkWell, drain);
+
+    // Arched gooseneck chrome kitchen faucet
+    const tapBaseZ = -d * 0.4;
+    const tapPost = new THREE.Mesh(new THREE.CylinderGeometry(0.015, 0.02, 0.17, 14), chromeMat);
+    tapPost.position.set(0, h / 2 + 0.085, tapBaseZ);
+    const tapArch = new THREE.Mesh(
+      new THREE.TorusGeometry(0.085, 0.011, 10, 22, Math.PI),
+      chromeMat
+    );
+    tapArch.rotation.y = Math.PI / 2;
+    tapArch.position.set(0, h / 2 + 0.17, tapBaseZ + 0.085);
+    const tapSpout = new THREE.Mesh(new THREE.CylinderGeometry(0.011, 0.011, 0.045, 12), chromeMat);
+    tapSpout.position.set(0, h / 2 + 0.15, tapBaseZ + 0.17);
+    const lever = new THREE.Mesh(new THREE.CylinderGeometry(0.004, 0.005, 0.085, 8), chromeMat);
+    lever.rotation.z = -Math.PI / 2.4;
+    lever.position.set(0.048, h / 2 + 0.06, tapBaseZ);
+    group.add(tapPost, tapArch, tapSpout, lever);
+  } else if (part.applianceModel === 'builtin_oven') {
+    // Dark metal body
+    const body = new THREE.Mesh(new THREE.BoxGeometry(w * 0.96, h * 0.96, d * 0.92), darkMetalMat);
+    body.position.z = -d * 0.04;
+    // Gloss black glass front door
+    const front = new THREE.Mesh(new THREE.BoxGeometry(w, h, 0.024), glassBlackMat);
+    front.position.z = d / 2 - 0.012;
+    front.castShadow = true;
+    // Top stainless control bezel
+    const bezel = new THREE.Mesh(new THREE.BoxGeometry(w, h * 0.17, 0.026), chromeMat);
+    bezel.position.set(0, h * 0.415, d / 2 - 0.011);
+    // Digital clock display strip
+    const display = new THREE.Mesh(
+      new THREE.BoxGeometry(w * 0.24, h * 0.065, 0.006),
+      new THREE.MeshBasicMaterial({ color: '#0F172A' })
+    );
+    display.position.set(0, h * 0.415, d / 2 + 0.004);
+    const clockGlow = new THREE.Mesh(
+      new THREE.PlaneGeometry(w * 0.15, h * 0.024),
+      new THREE.MeshBasicMaterial({ color: '#38BDF8' })
+    );
+    clockGlow.position.set(0, h * 0.415, d / 2 + 0.008);
+    // 2 rotary control knobs
+    const knobGeo = new THREE.CylinderGeometry(0.02, 0.022, 0.02, 16);
+    knobGeo.rotateX(Math.PI / 2);
+    const knobL = new THREE.Mesh(knobGeo, chromeMat);
+    knobL.position.set(-w * 0.28, h * 0.415, d / 2 + 0.012);
+    const knobR = new THREE.Mesh(knobGeo.clone(), chromeMat);
+    knobR.position.set(w * 0.28, h * 0.415, d / 2 + 0.012);
+    // Tubular stainless oven handle
+    const handleBar = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.01, 0.01, w * 0.78, 12),
+      chromeMat
+    );
+    handleBar.rotation.z = Math.PI / 2;
+    handleBar.position.set(0, h * 0.25, d / 2 + 0.038);
+    const standGeo = new THREE.CylinderGeometry(0.007, 0.007, 0.034, 8);
+    standGeo.rotateX(Math.PI / 2);
+    const sL = new THREE.Mesh(standGeo, chromeMat);
+    sL.position.set(-w * 0.34, h * 0.25, d / 2 + 0.018);
+    const sR = new THREE.Mesh(standGeo.clone(), chromeMat);
+    sR.position.set(w * 0.34, h * 0.25, d / 2 + 0.018);
+    // Subtle inner viewing window frame
+    const win = new THREE.Mesh(
+      new THREE.PlaneGeometry(w * 0.74, h * 0.48),
+      new THREE.MeshStandardMaterial({ color: '#1F242B', roughness: 0.2, metalness: 0.4 })
+    );
+    win.position.set(0, -h * 0.08, d / 2 + 0.002);
+    group.add(body, front, bezel, display, clockGlow, knobL, knobR, handleBar, sL, sR, win);
+  } else if (part.applianceModel === 'wire_cargo') {
+    // Pull-out 2-tier chrome wire cargo basket
+    const postGeo = new THREE.CylinderGeometry(0.006, 0.006, h, 8);
+    const corners: [number, number][] = [
+      [-w / 2 + 0.01, -d / 2 + 0.01],
+      [w / 2 - 0.01, -d / 2 + 0.01],
+      [-w / 2 + 0.01, d / 2 - 0.01],
+      [w / 2 - 0.01, d / 2 - 0.01],
+    ];
+    for (const [cx, cz] of corners) {
+      const post = new THREE.Mesh(postGeo, chromeMat);
+      post.position.set(cx, 0, cz);
+      group.add(post);
+    }
+
+    const tiers = [-h * 0.36, h * 0.14];
+    for (const ty of tiers) {
+      // Perimeter rails (bottom + guard rail)
+      for (const railOffY of [0, 0.085]) {
+        const frontR = new THREE.Mesh(new THREE.CylinderGeometry(0.004, 0.004, w - 0.02, 8), chromeMat);
+        frontR.rotation.z = Math.PI / 2;
+        frontR.position.set(0, ty + railOffY, d / 2 - 0.01);
+        const backR = frontR.clone();
+        backR.position.z = -d / 2 + 0.01;
+        const leftR = new THREE.Mesh(new THREE.CylinderGeometry(0.004, 0.004, d - 0.02, 8), chromeMat);
+        leftR.rotation.x = Math.PI / 2;
+        leftR.position.set(-w / 2 + 0.01, ty + railOffY, 0);
+        const rightR = leftR.clone();
+        rightR.position.x = w / 2 - 0.01;
+        group.add(frontR, backR, leftR, rightR);
+      }
+      // Wire grid rods on bottom of basket
+      const wireCount = Math.max(4, Math.min(9, Math.round(w / 0.045)));
+      for (let i = 0; i < wireCount; i++) {
+        const wx = -w / 2 + 0.02 + ((w - 0.04) * i) / (wireCount - 1);
+        const wire = new THREE.Mesh(
+          new THREE.CylinderGeometry(0.0025, 0.0025, d - 0.02, 6),
+          chromeMat
+        );
+        wire.rotation.x = Math.PI / 2;
+        wire.position.set(wx, ty, 0);
+        group.add(wire);
+      }
+    }
+  }
+
+  return group;
+}
+
+/**
  * Shared geometries & materials for realistic 3D fasteners (screws, confirmats, M8 bolts, dowels).
  * Convention: Origin [0,0,0] is the board surface; +Y points outward along the surface normal;
  * shaft penetrates inward along -Y.
@@ -583,6 +1148,43 @@ export function buildFastenerGroup(
     );
     shaft.position.y = -0.025;
     group.add(shaft);
+  } else if (type === 'minifix_15') {
+    const zincMat = new THREE.MeshStandardMaterial({
+      color: activeColor('#AEB8C4'),
+      metalness: 0.9,
+      roughness: 0.22,
+      emissive: activeEmissive,
+    });
+    const darkMat = new THREE.MeshStandardMaterial({
+      color: '#2B303A',
+      metalness: 0.5,
+      roughness: 0.6,
+    });
+
+    // Threaded dowel bolt anchored in host board & extending 34mm into mating board
+    const pin = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.0032, 0.0032, 0.042, 12),
+      zincMat
+    );
+    pin.position.y = -0.021;
+    group.add(pin);
+
+    // Ø15 mm eccentric cam lock drum seated 34mm deep inside mating board
+    const camDrum = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.0075, 0.0075, 0.012, 18),
+      zincMat
+    );
+    camDrum.rotation.x = Math.PI / 2;
+    camDrum.position.y = -0.034;
+    group.add(camDrum);
+
+    // Subtle flush entry collar marking the Minifix axis on host face
+    const collar = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.0046, 0.0046, 0.0014, 14),
+      darkMat
+    );
+    collar.position.y = 0.0005;
+    group.add(collar);
   } else if (type === 'bolt_m8') {
     const mat = new THREE.MeshStandardMaterial({
       color: activeColor('#5D6570'),
@@ -772,7 +1374,7 @@ export function autoDetectJointFasteners(
 
   const screwOrder: ScrewType[] = [
     screwType,
-    ...(['wood_4x45', 'confirmat_7x50', 'dowel_8x35', 'bolt_m8'] as ScrewType[]).filter(
+    ...(['wood_4x45', 'confirmat_7x50', 'minifix_15', 'dowel_8x35', 'bolt_m8'] as ScrewType[]).filter(
       (t) => t !== screwType
     ),
   ];

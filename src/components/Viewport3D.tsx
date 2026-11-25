@@ -9,24 +9,32 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { TransformControls } from 'three/addons/controls/TransformControls.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+import { RectAreaLightUniformsLib } from 'three/addons/lights/RectAreaLightUniformsLib.js';
 import {
   CameraPreset,
   EditorTool,
   Fastener,
   FurniturePart,
+  MeasureSegment,
   ScrewType,
   StudioLighting,
 } from '../types/furniture';
 import { MaterialLibrary } from '../engine/materials';
 import {
+  buildApplianceGroup,
   buildDoorHandleGroup,
+  buildDoorHingesGroup,
   buildFastenerGroup,
   buildPartGeometry,
+  buildPartMachiningGroup,
   M_TO_MM,
   MM_TO_M,
 } from '../engine/geometry';
+import { classifyAssemblyStep } from '../engine/documentation';
 import {
   evaluateScrewPlacement,
+  getPartQuaternion,
+  getPartWorldBox,
   snapPartToNeighbors,
   type ClearanceGuide,
   type FastenerAudit,
@@ -56,7 +64,12 @@ interface Viewport3DProps {
   showDimensions: boolean;
   xrayMode: boolean;
   showFasteners: boolean;
+  ledUnderCabinet: boolean;
+  measurements: MeasureSegment[];
   explodedAmount: number;
+  openAmount: number;
+  assemblyStep: number;
+  materialsVersion: number;
   lighting: StudioLighting;
   customTextures: Partial<Record<import('../types/furniture').MaterialId, string>>;
   collidingPartIds: Set<string>;
@@ -75,6 +88,12 @@ interface Viewport3DProps {
     position: [number, number, number],
     rotation: [number, number, number]
   ) => void;
+  onResizePart: (
+    id: string,
+    dims: { width: number; height: number; depth: number },
+    position: [number, number, number]
+  ) => void;
+  onAddMeasurement: (seg: MeasureSegment) => void;
   onPlaceFastener: (
     partId: string,
     localPosition: [number, number, number],
@@ -167,6 +186,144 @@ function createClearanceSprite(label: string): THREE.Sprite {
   return sprite;
 }
 
+function createMeasureSprite(mainLabel: string, subLabel?: string): THREE.Sprite {
+  const canvas = document.createElement('canvas');
+  canvas.width = 340;
+  canvas.height = subLabel ? 96 : 72;
+  const ctx = canvas.getContext('2d')!;
+  ctx.fillStyle = 'rgba(9, 13, 24, 0.94)';
+  ctx.beginPath();
+  ctx.roundRect(6, 6, canvas.width - 12, canvas.height - 12, 14);
+  ctx.fill();
+  ctx.strokeStyle = '#38BDF8';
+  ctx.lineWidth = 3;
+  ctx.stroke();
+
+  ctx.fillStyle = '#F0F9FF';
+  ctx.font = 'bold 28px "JetBrains Mono", monospace';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(mainLabel, canvas.width / 2, subLabel ? 36 : 37);
+
+  if (subLabel) {
+    ctx.fillStyle = '#7DD3FC';
+    ctx.font = '600 18px "JetBrains Mono", monospace';
+    ctx.fillText(subLabel, canvas.width / 2, 68);
+  }
+
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  const mat = new THREE.SpriteMaterial({
+    map: tex,
+    depthTest: false,
+    transparent: true,
+  });
+  const sprite = new THREE.Sprite(mat);
+  sprite.scale.set(0.3, subLabel ? 0.085 : 0.064, 1);
+  sprite.renderOrder = 999;
+  sprite.userData.disposeMaterial = true;
+  sprite.userData.disposeTexture = tex;
+  return sprite;
+}
+
+function buildMeasureVisual(
+  startMm: [number, number, number],
+  endMm: [number, number, number],
+  colorHex = '#38BDF8'
+): THREE.Group {
+  const g = new THREE.Group();
+  const s = new THREE.Vector3(startMm[0] * MM_TO_M, startMm[1] * MM_TO_M, startMm[2] * MM_TO_M);
+  const e = new THREE.Vector3(endMm[0] * MM_TO_M, endMm[1] * MM_TO_M, endMm[2] * MM_TO_M);
+  const dx = Math.abs(Math.round(endMm[0] - startMm[0]));
+  const dy = Math.abs(Math.round(endMm[1] - startMm[1]));
+  const dz = Math.abs(Math.round(endMm[2] - startMm[2]));
+  const total = Math.round(Math.hypot(endMm[0] - startMm[0], endMm[1] - startMm[1], endMm[2] - startMm[2]));
+
+  const lineGeo = new THREE.BufferGeometry().setFromPoints([s, e]);
+  const lineMat = new THREE.LineBasicMaterial({ color: colorHex, depthTest: false });
+  const line = new THREE.Line(lineGeo, lineMat);
+  line.renderOrder = 998;
+  line.userData.disposeMaterial = true;
+  g.add(line);
+
+  const dotGeo = new THREE.SphereGeometry(0.0085, 12, 10);
+  const dotMat = new THREE.MeshBasicMaterial({ color: colorHex, depthTest: false });
+  const dot1 = new THREE.Mesh(dotGeo, dotMat);
+  dot1.position.copy(s);
+  dot1.renderOrder = 998;
+  dot1.userData.disposeMaterial = true;
+  const dot2 = new THREE.Mesh(dotGeo.clone(), dotMat.clone());
+  dot2.position.copy(e);
+  dot2.renderOrder = 998;
+  dot2.userData.disposeMaterial = true;
+  g.add(dot1, dot2);
+
+  if (total > 0) {
+    const mid = s.clone().add(e).multiplyScalar(0.5);
+    const sub =
+      (dx > 0 ? 1 : 0) + (dy > 0 ? 1 : 0) + (dz > 0 ? 1 : 0) > 1
+        ? `X:${dx} Y:${dy} Z:${dz}`
+        : undefined;
+    const sprite = createMeasureSprite(`${total} mm`, sub);
+    sprite.position.copy(mid);
+    g.add(sprite);
+  }
+  return g;
+}
+
+function snapWorldPointToPartMm(
+  hitWorldM: THREE.Vector3,
+  part: FurniturePart | undefined,
+  snapMm: number
+): [number, number, number] {
+  const rawX = hitWorldM.x * M_TO_MM;
+  const rawY = hitWorldM.y * M_TO_MM;
+  const rawZ = hitWorldM.z * M_TO_MM;
+
+  if (part) {
+    const box = getPartWorldBox(part);
+    const midX = (box.minX + box.maxX) / 2;
+    const midY = (box.minY + box.maxY) / 2;
+    const midZ = (box.minZ + box.maxZ) / 2;
+    const candidates: [number, number, number][] = [
+      // 8 corners
+      [box.minX, box.minY, box.minZ],
+      [box.maxX, box.minY, box.minZ],
+      [box.minX, box.maxY, box.minZ],
+      [box.maxX, box.maxY, box.minZ],
+      [box.minX, box.minY, box.maxZ],
+      [box.maxX, box.minY, box.maxZ],
+      [box.minX, box.maxY, box.maxZ],
+      [box.maxX, box.maxY, box.maxZ],
+      // 6 face centers
+      [midX, midY, box.minZ],
+      [midX, midY, box.maxZ],
+      [box.minX, midY, midZ],
+      [box.maxX, midY, midZ],
+      [midX, box.minY, midZ],
+      [midX, box.maxY, midZ],
+    ];
+    let best: [number, number, number] | null = null;
+    let bestDist = 26;
+    for (const c of candidates) {
+      const d = Math.hypot(c[0] - rawX, c[1] - rawY, c[2] - rawZ);
+      if (d < bestDist) {
+        bestDist = d;
+        best = c;
+      }
+    }
+    if (best) {
+      return [Math.round(best[0]), Math.round(best[1]), Math.round(best[2])];
+    }
+  }
+  const step = snapMm > 0 ? Math.min(5, snapMm) : 1;
+  return [
+    Math.round(rawX / step) * step,
+    Math.max(0, Math.round(rawY / step) * step),
+    Math.round(rawZ / step) * step,
+  ];
+}
+
 function disposeObjectTree(obj: THREE.Object3D) {
   obj.traverse((child) => {
     if (child instanceof THREE.Mesh || child instanceof THREE.LineSegments || child instanceof THREE.Line) {
@@ -202,6 +359,8 @@ const LIGHTING_CONFIGS: Record<
     rimColor: string;
     rimIntensity: number;
     exposure: number;
+    softboxIntensity: number;
+    envIntensity: number;
   }
 > = {
   daylight: {
@@ -214,6 +373,8 @@ const LIGHTING_CONFIGS: Record<
     rimColor: '#DDEAFF',
     rimIntensity: 0.75,
     exposure: 1.08,
+    softboxIntensity: 0,
+    envIntensity: 1.0,
   },
   studio: {
     bg: '#F4F5F7',
@@ -225,6 +386,8 @@ const LIGHTING_CONFIGS: Record<
     rimColor: '#F0F6FF',
     rimIntensity: 0.9,
     exposure: 1.12,
+    softboxIntensity: 0.65,
+    envIntensity: 1.15,
   },
   warm: {
     bg: '#E7E2DA',
@@ -236,6 +399,21 @@ const LIGHTING_CONFIGS: Record<
     rimColor: '#C8D8F0',
     rimIntensity: 0.65,
     exposure: 1.04,
+    softboxIntensity: 0.4,
+    envIntensity: 0.95,
+  },
+  photoreal: {
+    bg: '#ECEEF2',
+    keyColor: '#FFFBF2',
+    keyIntensity: 2.65,
+    hemiSky: '#F3F7FF',
+    hemiGround: '#D2CCC4',
+    hemiIntensity: 1.12,
+    rimColor: '#DCEAFF',
+    rimIntensity: 1.1,
+    exposure: 1.16,
+    softboxIntensity: 2.25,
+    envIntensity: 1.4,
   },
 };
 
@@ -247,6 +425,11 @@ export const Viewport3D = forwardRef<Viewport3DHandle, Viewport3DProps>(
       x: number;
       y: number;
       feedback: ScrewHoverFeedback;
+    } | null>(null);
+    const [resizeHud, setResizeHud] = useState<{
+      x: number;
+      y: number;
+      label: string;
     } | null>(null);
 
     // Keep latest props in a ref so Three.js event listeners never go stale
@@ -264,19 +447,34 @@ export const Viewport3D = forwardRef<Viewport3DHandle, Viewport3DProps>(
       partsRoot: THREE.Group;
       guidesRoot: THREE.Group;
       jointZonesRoot: THREE.Group;
+      ledRoot: THREE.Group;
+      resizeHandlesRoot: THREE.Group;
+      measureRoot: THREE.Group;
+      measureLiveRoot: THREE.Group;
       partNodes: Map<string, THREE.Group>;
       partBasePos: Map<string, THREE.Vector3>;
+      partBaseQuat: Map<string, THREE.Quaternion>;
       partExplodeDir: Map<string, THREE.Vector3>;
+      partOpenMeta: Map<
+        string,
+        | { kind: 'door'; localPivot: THREE.Vector3; maxAngleRad: number }
+        | { kind: 'drawer'; slideDistM: number }
+      >;
       screwPreview: THREE.Group;
       screwPreviewRingMat: THREE.MeshBasicMaterial;
       screwPreviewPinMat: THREE.MeshBasicMaterial;
       keyLight: THREE.DirectionalLight;
       hemiLight: THREE.HemisphereLight;
       rimLight: THREE.DirectionalLight;
+      softboxLights: THREE.RectAreaLight[];
       contactShadow: THREE.Mesh;
+      isSoftwareGl: boolean;
+      clearPendingMeasure: () => void;
       requestRender: () => void;
       startCameraTransition: (pos: THREE.Vector3, target: THREE.Vector3) => void;
       setExplodedTarget: (v: number) => void;
+      setOpenTarget: (v: number) => void;
+      applyPartAnimations: () => void;
       isDraggingGizmo: boolean;
     } | null>(null);
 
@@ -366,16 +564,20 @@ export const Viewport3D = forwardRef<Viewport3DHandle, Viewport3DProps>(
       captureSnapshot() {
         const rt = runtimeRef.current;
         if (!rt) return null;
-        // Hide gizmo, guides, joint zones & screw preview cleanly for studio photo export
+        // Hide gizmo, guides, joint zones, resize handles & previews cleanly for studio photo export
         const helper = (rt.transform as unknown as { getHelper?: () => THREE.Object3D }).getHelper?.();
         const prevHelperVis = helper ? helper.visible : true;
         const prevPreviewVis = rt.screwPreview.visible;
         const prevGuidesVis = rt.guidesRoot.visible;
         const prevJointsVis = rt.jointZonesRoot.visible;
+        const prevResizeVis = rt.resizeHandlesRoot.visible;
+        const prevMeasureLiveVis = rt.measureLiveRoot.visible;
         if (helper) helper.visible = false;
         rt.screwPreview.visible = false;
         rt.guidesRoot.visible = false;
         rt.jointZonesRoot.visible = false;
+        rt.resizeHandlesRoot.visible = false;
+        rt.measureLiveRoot.visible = false;
 
         rt.renderer.render(rt.scene, rt.camera);
         const dataUrl = rt.renderer.domElement.toDataURL('image/png');
@@ -384,6 +586,8 @@ export const Viewport3D = forwardRef<Viewport3DHandle, Viewport3DProps>(
         rt.screwPreview.visible = prevPreviewVis;
         rt.guidesRoot.visible = prevGuidesVis;
         rt.jointZonesRoot.visible = prevJointsVis;
+        rt.resizeHandlesRoot.visible = prevResizeVis;
+        rt.measureLiveRoot.visible = prevMeasureLiveVis;
         rt.requestRender();
         return dataUrl;
       },
@@ -493,6 +697,33 @@ export const Viewport3D = forwardRef<Viewport3DHandle, Viewport3DProps>(
       rimLight.position.set(-3.5, 2.8, -3.2);
       scene.add(rimLight);
 
+      // Studio Overhead RectAreaLight Softboxes (GPU-guarded: strictly skipped on software WebGL!)
+      const softboxLights: THREE.RectAreaLight[] = [];
+      if (!isSoftwareGl) {
+        RectAreaLightUniformsLib.init();
+        const overheadSoftbox = new THREE.RectAreaLight(
+          '#FFFFFF',
+          initialLight.softboxIntensity,
+          2.6,
+          1.4
+        );
+        overheadSoftbox.position.set(0.4, 3.1, 1.2);
+        overheadSoftbox.lookAt(0, 0.7, 0);
+        scene.add(overheadSoftbox);
+
+        const sideSoftbox = new THREE.RectAreaLight(
+          '#FFF5E6',
+          initialLight.softboxIntensity * 0.65,
+          1.6,
+          2.2
+        );
+        sideSoftbox.position.set(-2.6, 1.5, 1.8);
+        sideSoftbox.lookAt(0, 0.8, 0);
+        scene.add(sideSoftbox);
+
+        softboxLights.push(overheadSoftbox, sideSoftbox);
+      }
+
       // Floor + Shadow Catcher + Subtle Metric Grid (100mm minor / 500mm major)
       const floorGeo = new THREE.PlaneGeometry(36, 36);
       const floorMat = new THREE.ShadowMaterial({ opacity: 0.18 });
@@ -543,6 +774,18 @@ export const Viewport3D = forwardRef<Viewport3DHandle, Viewport3DProps>(
 
       const jointZonesRoot = new THREE.Group();
       scene.add(jointZonesRoot);
+
+      const ledRoot = new THREE.Group();
+      scene.add(ledRoot);
+
+      const resizeHandlesRoot = new THREE.Group();
+      scene.add(resizeHandlesRoot);
+
+      const measureRoot = new THREE.Group();
+      scene.add(measureRoot);
+
+      const measureLiveRoot = new THREE.Group();
+      scene.add(measureLiveRoot);
 
       // Screw placement hover preview marker (dynamically tinted Green=OK / Red=Invalid)
       const screwPreview = new THREE.Group();
@@ -597,6 +840,14 @@ export const Viewport3D = forwardRef<Viewport3DHandle, Viewport3DProps>(
 
       let explodedCurrent = propsRef.current.explodedAmount;
       let explodedTarget = propsRef.current.explodedAmount;
+      let openCurrent = propsRef.current.openAmount;
+      let openTarget = propsRef.current.openAmount;
+      const partBaseQuat = new Map<string, THREE.Quaternion>();
+      const partOpenMeta = new Map<
+        string,
+        | { kind: 'door'; localPivot: THREE.Vector3; maxAngleRad: number }
+        | { kind: 'drawer'; slideDistM: number }
+      >();
 
       function afterDraw(cb: () => void) {
         const gl = renderer.getContext() as WebGL2RenderingContext;
@@ -622,16 +873,38 @@ export const Viewport3D = forwardRef<Viewport3DHandle, Viewport3DProps>(
         }
       }
 
-      function applyExplodedOffsets(amount: number) {
+      function applyPartAnimations() {
+        const expAmt = explodedCurrent;
+        const opnAmt = openCurrent;
         partNodes.forEach((node, id) => {
           const base = partBasePos.get(id);
+          const baseQ = partBaseQuat.get(id);
           const dir = partExplodeDir.get(id);
-          if (!base || !dir) return;
+          if (!base || !baseQ || !dir) return;
           // Do not override actively dragged gizmo object
           if (runtimeRef.current?.isDraggingGizmo && transform.object === node) {
             return;
           }
-          node.position.copy(base).addScaledVector(dir, amount * 0.28);
+          _vec3A.copy(base).addScaledVector(dir, expAmt * 0.28);
+          const meta = partOpenMeta.get(id);
+          if (meta && opnAmt > 0.0005) {
+            if (meta.kind === 'door') {
+              const angle = meta.maxAngleRad * opnAmt;
+              const worldAxis = _vec3B.copy(_upVec).applyQuaternion(baseQ).normalize();
+              _quatA.setFromAxisAngle(worldAxis, angle);
+              const worldPivot = _vec3C.copy(meta.localPivot).applyQuaternion(baseQ).add(_vec3A);
+              node.position.copy(_vec3A).sub(worldPivot).applyQuaternion(_quatA).add(worldPivot);
+              node.quaternion.copy(_quatA).multiply(baseQ);
+              return;
+            } else {
+              const slideAxis = _vec3B.set(0, 0, 1).applyQuaternion(baseQ).normalize();
+              node.position.copy(_vec3A).addScaledVector(slideAxis, meta.slideDistM * opnAmt);
+              node.quaternion.copy(baseQ);
+              return;
+            }
+          }
+          node.position.copy(_vec3A);
+          node.quaternion.copy(baseQ);
         });
       }
 
@@ -673,15 +946,28 @@ export const Viewport3D = forwardRef<Viewport3DHandle, Viewport3DProps>(
             }
           }
 
-          // Smooth exploded-view damping
+          // Smooth exploded-view & open-doors/drawers damping
+          let animChanged = false;
           if (Math.abs(explodedCurrent - explodedTarget) > 0.001) {
             explodedCurrent = isSoftwareGl
               ? explodedTarget
               : THREE.MathUtils.damp(explodedCurrent, explodedTarget, 10, dt);
-            applyExplodedOffsets(explodedCurrent);
+            animChanged = true;
             if (Math.abs(explodedCurrent - explodedTarget) > 0.001) {
               needsMoreFrames = true;
             }
+          }
+          if (Math.abs(openCurrent - openTarget) > 0.001) {
+            openCurrent = isSoftwareGl
+              ? openTarget
+              : THREE.MathUtils.damp(openCurrent, openTarget, 9, dt);
+            animChanged = true;
+            if (Math.abs(openCurrent - openTarget) > 0.001) {
+              needsMoreFrames = true;
+            }
+          }
+          if (animChanged) {
+            applyPartAnimations();
           }
 
           const orbitMoved = orbit.update();
@@ -722,8 +1008,25 @@ export const Viewport3D = forwardRef<Viewport3DHandle, Viewport3DProps>(
         explodedTarget = v;
         if (isSoftwareGl) {
           explodedCurrent = v;
-          applyExplodedOffsets(v);
+          applyPartAnimations();
         }
+        requestRender();
+      };
+
+      const setOpenTarget = (v: number) => {
+        openTarget = v;
+        if (isSoftwareGl) {
+          openCurrent = v;
+          applyPartAnimations();
+        }
+        requestRender();
+      };
+
+      let pendingMeasureStartMm: [number, number, number] | null = null;
+      const clearPendingMeasure = () => {
+        pendingMeasureStartMm = null;
+        disposeObjectTree(measureLiveRoot);
+        measureLiveRoot.clear();
         requestRender();
       };
 
@@ -737,19 +1040,30 @@ export const Viewport3D = forwardRef<Viewport3DHandle, Viewport3DProps>(
         partsRoot,
         guidesRoot,
         jointZonesRoot,
+        ledRoot,
+        resizeHandlesRoot,
+        measureRoot,
+        measureLiveRoot,
         partNodes,
         partBasePos,
+        partBaseQuat,
         partExplodeDir,
+        partOpenMeta,
         screwPreview,
         screwPreviewRingMat: ringMat,
         screwPreviewPinMat: pinMat,
         keyLight,
         hemiLight,
         rimLight,
+        softboxLights,
         contactShadow,
+        isSoftwareGl,
+        clearPendingMeasure,
         requestRender,
         startCameraTransition,
         setExplodedTarget,
+        setOpenTarget,
+        applyPartAnimations,
         isDraggingGizmo: false,
       };
 
@@ -867,6 +1181,27 @@ export const Viewport3D = forwardRef<Viewport3DHandle, Viewport3DProps>(
       let downButton = 0;
       let lastMoveRaycast = 0;
 
+      // Interactive 3D Face Resize Drag State (tool === 'resize')
+      let resizeDragState: {
+        partId: string;
+        node: THREE.Group;
+        handleMesh: THREE.Mesh;
+        axis: 'x' | 'y' | 'z';
+        sign: 1 | -1;
+        origWidth: number;
+        origHeight: number;
+        origDepth: number;
+        origPosMm: [number, number, number];
+        worldAxisDir: THREE.Vector3;
+        dragPlane: THREE.Plane;
+        startHitPoint: THREE.Vector3;
+        handleStartPos: THREE.Vector3;
+        liveDims: { width: number; height: number; depth: number };
+        livePosMm: [number, number, number];
+        moved: boolean;
+      } | null = null;
+      const _floorPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+
       // Direct mouse drag state for moving selected boards without hunting thin gizmo arrows
       let directDragCandidate: {
         partId: string;
@@ -935,9 +1270,77 @@ export const Viewport3D = forwardRef<Viewport3DHandle, Viewport3DProps>(
           gestureWasMultiTouch = true;
           screwPreview.visible = false;
           directDragCandidate = null;
+          resizeDragState = null;
+          setResizeHud(null);
           return;
         }
         gestureWasMultiTouch = false;
+
+        // 3D Face Resize Handle Drag (works on desktop & touch)
+        if (
+          propsRef.current.tool === 'resize' &&
+          propsRef.current.explodedAmount < 0.01 &&
+          resizeHandlesRoot.children.length > 0
+        ) {
+          updateNdc(e.clientX, e.clientY);
+          raycaster.setFromCamera(_pointerNdc, camera);
+          const handleHits = raycaster.intersectObjects(resizeHandlesRoot.children, true);
+          if (handleHits.length > 0) {
+            let hitObj: THREE.Object3D | null = handleHits[0].object;
+            while (hitObj && !hitObj.userData.resizeHandle) hitObj = hitObj.parent;
+            const meta = hitObj?.userData.resizeHandle as
+              | { partId: string; axis: 'x' | 'y' | 'z'; sign: 1 | -1 }
+              | undefined;
+            if (meta && hitObj instanceof THREE.Mesh) {
+              const part = propsRef.current.parts.find((p) => p.id === meta.partId);
+              const node = partNodes.get(meta.partId);
+              if (part && node) {
+                const quat = getPartQuaternion(part);
+                const localAxis = new THREE.Vector3(
+                  meta.axis === 'x' ? meta.sign : 0,
+                  meta.axis === 'y' ? meta.sign : 0,
+                  meta.axis === 'z' ? meta.sign : 0
+                );
+                const worldAxisDir = localAxis.applyQuaternion(quat).normalize();
+                // Build a drag plane containing worldAxisDir and facing the camera
+                const camDir = new THREE.Vector3();
+                camera.getWorldDirection(camDir);
+                const planeTan = new THREE.Vector3().crossVectors(worldAxisDir, camDir);
+                if (planeTan.lengthSq() < 0.001) {
+                  planeTan.set(0, 1, 0).cross(worldAxisDir);
+                }
+                const planeNormal = new THREE.Vector3()
+                  .crossVectors(planeTan, worldAxisDir)
+                  .normalize();
+                const startHitPoint = handleHits[0].point.clone();
+                const dragPlane = new THREE.Plane().setFromNormalAndCoplanarPoint(
+                  planeNormal,
+                  startHitPoint
+                );
+                resizeDragState = {
+                  partId: part.id,
+                  node,
+                  handleMesh: hitObj,
+                  axis: meta.axis,
+                  sign: meta.sign,
+                  origWidth: part.width,
+                  origHeight: part.height,
+                  origDepth: part.depth,
+                  origPosMm: [...part.position],
+                  worldAxisDir,
+                  dragPlane,
+                  startHitPoint,
+                  handleStartPos: hitObj.position.clone(),
+                  liveDims: { width: part.width, height: part.height, depth: part.depth },
+                  livePosMm: [...part.position],
+                  moved: false,
+                };
+                orbit.enabled = false;
+                return;
+              }
+            }
+          }
+        }
 
         // Desktop Direct Mouse Drag on already-selected board (or any board in Move tool)
         if (
@@ -947,7 +1350,6 @@ export const Viewport3D = forwardRef<Viewport3DHandle, Viewport3DProps>(
           (propsRef.current.tool === 'select' || propsRef.current.tool === 'move') &&
           !e.shiftKey
         ) {
-          // Wait one micro-check: TransformControls sets dragging on its own pointerdown
           const tcAxis = (transform as unknown as { axis?: string | null }).axis;
           if (!tcAxis) {
             updateNdc(e.clientX, e.clientY);
@@ -1000,6 +1402,19 @@ export const Viewport3D = forwardRef<Viewport3DHandle, Viewport3DProps>(
 
       const onPointerCancel = (e: PointerEvent) => {
         activePointers.delete(e.pointerId);
+        if (resizeDragState) {
+          resizeDragState.node.scale.set(1, 1, 1);
+          resizeDragState.node.position.set(
+            resizeDragState.origPosMm[0] * MM_TO_M,
+            resizeDragState.origPosMm[1] * MM_TO_M,
+            resizeDragState.origPosMm[2] * MM_TO_M
+          );
+          resizeDragState.handleMesh.position.copy(resizeDragState.handleStartPos);
+          resizeDragState = null;
+          setResizeHud(null);
+          orbit.enabled = true;
+          requestRender();
+        }
         if (directDragCandidate) {
           directDragCandidate.node.position.copy(directDragCandidate.startWorldPos);
           directDragCandidate = null;
@@ -1012,6 +1427,74 @@ export const Viewport3D = forwardRef<Viewport3DHandle, Viewport3DProps>(
       };
 
       const onPointerMove = (e: PointerEvent) => {
+        // Active 3D Face Resize Drag (works on both mouse & touch)
+        if (resizeDragState) {
+          updateNdc(e.clientX, e.clientY);
+          raycaster.setFromCamera(_pointerNdc, camera);
+          if (raycaster.ray.intersectPlane(resizeDragState.dragPlane, _dragHit)) {
+            const dispM = _dragHit.clone().sub(resizeDragState.startHitPoint);
+            const rawDeltaMm = dispM.dot(resizeDragState.worldAxisDir) * M_TO_MM;
+            const origDim =
+              resizeDragState.axis === 'x'
+                ? resizeDragState.origWidth
+                : resizeDragState.axis === 'y'
+                  ? resizeDragState.origHeight
+                  : resizeDragState.origDepth;
+            const snap = propsRef.current.snapMm;
+            const rawTarget = Math.max(12, origDim + rawDeltaMm);
+            const snappedDim =
+              snap > 0 ? Math.max(12, Math.round(rawTarget / snap) * snap) : Math.round(rawTarget);
+            const appliedDeltaMm = snappedDim - origDim;
+
+            const nextDims = {
+              width: resizeDragState.axis === 'x' ? snappedDim : resizeDragState.origWidth,
+              height: resizeDragState.axis === 'y' ? snappedDim : resizeDragState.origHeight,
+              depth: resizeDragState.axis === 'z' ? snappedDim : resizeDragState.origDepth,
+            };
+            const shiftMm = resizeDragState.worldAxisDir
+              .clone()
+              .multiplyScalar(appliedDeltaMm * 0.5);
+            const nextPosMm: [number, number, number] = [
+              Math.round((resizeDragState.origPosMm[0] + shiftMm.x) * 10) / 10,
+              Math.max(10, Math.round((resizeDragState.origPosMm[1] + shiftMm.y) * 10) / 10),
+              Math.round((resizeDragState.origPosMm[2] + shiftMm.z) * 10) / 10,
+            ];
+
+            resizeDragState.liveDims = nextDims;
+            resizeDragState.livePosMm = nextPosMm;
+            resizeDragState.moved = appliedDeltaMm !== 0;
+
+            resizeDragState.node.scale.set(
+              nextDims.width / resizeDragState.origWidth,
+              nextDims.height / resizeDragState.origHeight,
+              nextDims.depth / resizeDragState.origDepth
+            );
+            resizeDragState.node.position.set(
+              nextPosMm[0] * MM_TO_M,
+              nextPosMm[1] * MM_TO_M,
+              nextPosMm[2] * MM_TO_M
+            );
+            resizeDragState.handleMesh.position
+              .copy(resizeDragState.handleStartPos)
+              .addScaledVector(resizeDragState.worldAxisDir, appliedDeltaMm * MM_TO_M);
+
+            const rect = renderer.domElement.getBoundingClientRect();
+            const axisLabel =
+              resizeDragState.axis === 'x'
+                ? 'Szer.'
+                : resizeDragState.axis === 'y'
+                  ? 'Wys.'
+                  : 'Gł.';
+            setResizeHud({
+              x: e.clientX - rect.left,
+              y: e.clientY - rect.top,
+              label: `${axisLabel} ${snappedDim} mm (${appliedDeltaMm >= 0 ? '+' : ''}${appliedDeltaMm})`,
+            });
+            requestRender();
+          }
+          return;
+        }
+
         if (e.pointerType === 'touch') return;
 
         // Handle active Direct Mouse Drag
@@ -1031,12 +1514,10 @@ export const Viewport3D = forwardRef<Viewport3DHandle, Viewport3DProps>(
             let rawZ = directDragCandidate.node.position.z * M_TO_MM;
 
             if (e.shiftKey) {
-              // Vertical Y drag when holding Shift
               if (raycaster.ray.intersectPlane(directDragCandidate.planeY, _dragHit)) {
                 rawY = (_dragHit.y + directDragCandidate.offsetY) * M_TO_MM;
               }
             } else {
-              // Horizontal XZ drag on board plane
               if (raycaster.ray.intersectPlane(directDragCandidate.planeXZ, _dragHit)) {
                 rawX = (_dragHit.x + directDragCandidate.offsetXZ.x) * M_TO_MM;
                 rawZ = (_dragHit.z + directDragCandidate.offsetXZ.z) * M_TO_MM;
@@ -1057,7 +1538,6 @@ export const Viewport3D = forwardRef<Viewport3DHandle, Viewport3DProps>(
                 snapped[1] * MM_TO_M,
                 snapped[2] * MM_TO_M
               );
-              // Preview co-moving multi-selected / grouped boards smoothly during direct drag
               if (!directDragCandidate.cloneOnDrop) {
                 const selectedSet = new Set(propsRef.current.selectedPartIds);
                 for (const other of propsRef.current.parts) {
@@ -1079,6 +1559,48 @@ export const Viewport3D = forwardRef<Viewport3DHandle, Viewport3DProps>(
             requestRender();
             return;
           }
+        }
+
+        // Live 3D Tape Measure preview cursor & rubber-band segment
+        if (propsRef.current.tool === 'measure') {
+          const now = performance.now();
+          if (now - lastMoveRaycast < 30) return;
+          lastMoveRaycast = now;
+
+          updateNdc(e.clientX, e.clientY);
+          raycaster.setFromCamera(_pointerNdc, camera);
+          const meshes: THREE.Object3D[] = [];
+          partNodes.forEach((g) => {
+            const m = g.getObjectByName('main_mesh');
+            if (m) meshes.push(m);
+          });
+          const hits = raycaster.intersectObjects(meshes, false);
+          let ptMm: [number, number, number] | null = null;
+          if (hits.length > 0) {
+            const { partId } = resolveHitIds(hits[0].object);
+            const hitPart = propsRef.current.parts.find((p) => p.id === partId);
+            ptMm = snapWorldPointToPartMm(hits[0].point, hitPart, propsRef.current.snapMm);
+          } else if (raycaster.ray.intersectPlane(_floorPlane, _dragHit)) {
+            ptMm = snapWorldPointToPartMm(_dragHit, undefined, propsRef.current.snapMm);
+          }
+
+          disposeObjectTree(measureLiveRoot);
+          measureLiveRoot.clear();
+          if (ptMm) {
+            if (pendingMeasureStartMm) {
+              measureLiveRoot.add(buildMeasureVisual(pendingMeasureStartMm, ptMm, '#22D3EE'));
+            } else {
+              const dotGeo = new THREE.SphereGeometry(0.009, 12, 10);
+              const dotMat = new THREE.MeshBasicMaterial({ color: '#22D3EE', depthTest: false });
+              const dot = new THREE.Mesh(dotGeo, dotMat);
+              dot.position.set(ptMm[0] * MM_TO_M, ptMm[1] * MM_TO_M, ptMm[2] * MM_TO_M);
+              dot.renderOrder = 999;
+              dot.userData.disposeMaterial = true;
+              measureLiveRoot.add(dot);
+            }
+          }
+          requestRender();
+          return;
         }
 
         if (propsRef.current.tool !== 'screw') {
@@ -1164,6 +1686,27 @@ export const Viewport3D = forwardRef<Viewport3DHandle, Viewport3DProps>(
           gestureWasMultiTouch = false;
         }
 
+        // Complete Interactive 3D Face Resize Drag
+        if (resizeDragState) {
+          const drag = resizeDragState;
+          resizeDragState = null;
+          orbit.enabled = true;
+          setResizeHud(null);
+          drag.node.scale.set(1, 1, 1);
+          if (drag.moved) {
+            propsRef.current.onResizePart(drag.partId, drag.liveDims, drag.livePosMm);
+          } else {
+            drag.node.position.set(
+              drag.origPosMm[0] * MM_TO_M,
+              drag.origPosMm[1] * MM_TO_M,
+              drag.origPosMm[2] * MM_TO_M
+            );
+            drag.handleMesh.position.copy(drag.handleStartPos);
+          }
+          requestRender();
+          return;
+        }
+
         // Complete Direct Mouse Drag if active
         if (directDragCandidate) {
           const drag = directDragCandidate;
@@ -1181,7 +1724,6 @@ export const Viewport3D = forwardRef<Viewport3DHandle, Viewport3DProps>(
               Math.round(THREE.MathUtils.radToDeg(drag.node.rotation.z)),
             ];
             if (drag.cloneOnDrop) {
-              // Restore original node before adding the cloned board
               drag.node.position.copy(drag.startWorldPos);
               propsRef.current.onCloneTransformPart(drag.partId, finalPos, finalRot);
             } else {
@@ -1245,8 +1787,55 @@ export const Viewport3D = forwardRef<Viewport3DHandle, Viewport3DProps>(
         const dist = Math.hypot(e.clientX - downX, e.clientY - downY);
         const elapsed = performance.now() - downTime;
         const maxTapDist = e.pointerType === 'touch' ? 14 : 7;
-        // Distinguish intentional click/tap from orbit drag
         if (dist > maxTapDist || elapsed > 500) return;
+
+        // 3D Point-to-Point Tape Measure click handling
+        if (propsRef.current.tool === 'measure') {
+          updateNdc(e.clientX, e.clientY);
+          raycaster.setFromCamera(_pointerNdc, camera);
+          const meshes: THREE.Object3D[] = [];
+          partNodes.forEach((g) => {
+            const m = g.getObjectByName('main_mesh');
+            if (m) meshes.push(m);
+          });
+          const hits = raycaster.intersectObjects(meshes, false);
+          let ptMm: [number, number, number] | null = null;
+          if (hits.length > 0) {
+            const { partId } = resolveHitIds(hits[0].object);
+            const hitPart = propsRef.current.parts.find((p) => p.id === partId);
+            ptMm = snapWorldPointToPartMm(hits[0].point, hitPart, propsRef.current.snapMm);
+          } else if (raycaster.ray.intersectPlane(_floorPlane, _dragHit)) {
+            ptMm = snapWorldPointToPartMm(_dragHit, undefined, propsRef.current.snapMm);
+          }
+
+          if (ptMm) {
+            if (!pendingMeasureStartMm) {
+              pendingMeasureStartMm = ptMm;
+              disposeObjectTree(measureLiveRoot);
+              measureLiveRoot.clear();
+              const dotGeo = new THREE.SphereGeometry(0.01, 12, 10);
+              const dotMat = new THREE.MeshBasicMaterial({ color: '#22D3EE', depthTest: false });
+              const dot = new THREE.Mesh(dotGeo, dotMat);
+              dot.position.set(ptMm[0] * MM_TO_M, ptMm[1] * MM_TO_M, ptMm[2] * MM_TO_M);
+              dot.renderOrder = 999;
+              dot.userData.disposeMaterial = true;
+              measureLiveRoot.add(dot);
+              requestRender();
+            } else {
+              const seg: MeasureSegment = {
+                id: `m_${Date.now()}_${Math.random().toString(36).slice(2, 5)}`,
+                startMm: pendingMeasureStartMm,
+                endMm: ptMm,
+              };
+              pendingMeasureStartMm = null;
+              disposeObjectTree(measureLiveRoot);
+              measureLiveRoot.clear();
+              propsRef.current.onAddMeasurement(seg);
+              requestRender();
+            }
+          }
+          return;
+        }
 
         updateNdc(e.clientX, e.clientY);
         raycaster.setFromCamera(_pointerNdc, camera);
@@ -1447,6 +2036,10 @@ export const Viewport3D = forwardRef<Viewport3DHandle, Viewport3DProps>(
         disposeObjectTree(partsRoot);
         disposeObjectTree(guidesRoot);
         disposeObjectTree(jointZonesRoot);
+        disposeObjectTree(ledRoot);
+        disposeObjectTree(resizeHandlesRoot);
+        disposeObjectTree(measureRoot);
+        disposeObjectTree(measureLiveRoot);
         materials.dispose();
         floorGeo.dispose();
         floorMat.dispose();
@@ -1466,13 +2059,14 @@ export const Viewport3D = forwardRef<Viewport3DHandle, Viewport3DProps>(
       };
     }, []);
 
-    // Sync lighting preset
+    // Sync lighting preset (including Studio HQ RectAreaLight softboxes & PMREM intensity)
     useEffect(() => {
       const rt = runtimeRef.current;
       if (!rt) return;
       const cfg = LIGHTING_CONFIGS[props.lighting];
       rt.scene.background = new THREE.Color(cfg.bg);
       rt.scene.fog = new THREE.Fog(cfg.bg, 7.5, 22);
+      rt.scene.environmentIntensity = cfg.envIntensity;
       rt.keyLight.color.set(cfg.keyColor);
       rt.keyLight.intensity = cfg.keyIntensity;
       rt.hemiLight.color.set(cfg.hemiSky);
@@ -1481,13 +2075,40 @@ export const Viewport3D = forwardRef<Viewport3DHandle, Viewport3DProps>(
       rt.rimLight.color.set(cfg.rimColor);
       rt.rimLight.intensity = cfg.rimIntensity;
       rt.renderer.toneMappingExposure = cfg.exposure;
+      rt.softboxLights.forEach((sb, idx) => {
+        sb.intensity = idx === 0 ? cfg.softboxIntensity : cfg.softboxIntensity * 0.65;
+      });
       rt.requestRender();
     }, [props.lighting]);
 
-    // Sync exploded view target
+    // Sync saved 3D Tape Measure segments
+    useEffect(() => {
+      const rt = runtimeRef.current;
+      if (!rt) return;
+      disposeObjectTree(rt.measureRoot);
+      rt.measureRoot.clear();
+      for (const seg of props.measurements) {
+        rt.measureRoot.add(buildMeasureVisual(seg.startMm, seg.endMm, '#0EA5E9'));
+      }
+      if (props.tool !== 'measure') {
+        rt.clearPendingMeasure();
+      }
+      rt.requestRender();
+    }, [props.measurements, props.tool]);
+
+    // Sync exploded view & animated open-doors/drawers targets
     useEffect(() => {
       runtimeRef.current?.setExplodedTarget(props.explodedAmount);
     }, [props.explodedAmount]);
+
+    useEffect(() => {
+      runtimeRef.current?.setOpenTarget(props.openAmount);
+    }, [props.openAmount]);
+
+    // Invalidate custom material cache when warehouse catalog changes
+    useEffect(() => {
+      runtimeRef.current?.materials.invalidateCustomMaterials();
+    }, [props.materialsVersion]);
 
     // Rebuild 3D parts & fasteners whenever scene model or custom textures change
     useEffect(() => {
@@ -1502,7 +2123,9 @@ export const Viewport3D = forwardRef<Viewport3DHandle, Viewport3DProps>(
       rt.partsRoot.clear();
       rt.partNodes.clear();
       rt.partBasePos.clear();
+      rt.partBaseQuat.clear();
       rt.partExplodeDir.clear();
+      rt.partOpenMeta.clear();
 
       // Compute centroid for natural radial exploded-view separation
       const centroid = new THREE.Vector3();
@@ -1526,6 +2149,11 @@ export const Viewport3D = forwardRef<Viewport3DHandle, Viewport3DProps>(
       }
 
       for (const part of props.parts) {
+        const partStep = classifyAssemblyStep(part);
+        if (props.assemblyStep > 0 && partStep > props.assemblyStep) {
+          continue;
+        }
+
         const group = new THREE.Group();
         group.userData.partId = part.id;
 
@@ -1534,6 +2162,7 @@ export const Viewport3D = forwardRef<Viewport3DHandle, Viewport3DProps>(
           part.position[1] * MM_TO_M,
           part.position[2] * MM_TO_M
         );
+        const baseQuat = getPartQuaternion(part);
         const dir = basePos.clone().sub(centroid);
         if (dir.lengthSq() < 0.0001) {
           dir.set(0, 0.2, 0);
@@ -1542,49 +2171,143 @@ export const Viewport3D = forwardRef<Viewport3DHandle, Viewport3DProps>(
         }
 
         rt.partBasePos.set(part.id, basePos);
+        rt.partBaseQuat.set(part.id, baseQuat);
         rt.partExplodeDir.set(part.id, dir);
 
-        group.position.copy(basePos).addScaledVector(dir, props.explodedAmount * 0.28);
-        group.rotation.set(
-          THREE.MathUtils.degToRad(part.rotation[0]),
-          THREE.MathUtils.degToRad(part.rotation[1]),
-          THREE.MathUtils.degToRad(part.rotation[2]),
-          'XYZ'
-        );
+        // Register animated kinematics for hinged doors and sliding drawers / cargo baskets
+        const isDrawerLike =
+          part.hardwareTag === 'drawer_front' ||
+          part.hardwareTag === 'drawer_box' ||
+          (part.drawerSlideType && part.drawerSlideType !== 'none') ||
+          part.applianceModel === 'wire_cargo' ||
+          /szuflad|cargo/i.test(part.name);
 
-        const geo = buildPartGeometry(part);
-        const mat = rt.materials.getMaterial(part.materialId, props.xrayMode);
-        const mesh = new THREE.Mesh(geo, mat);
-        mesh.name = 'main_mesh';
-        mesh.userData.partId = part.id;
-        mesh.userData.raycastKind = 'part_mesh';
-        mesh.castShadow = !props.xrayMode && part.materialId !== 'glass_clear';
-        mesh.receiveShadow = true;
-        group.add(mesh);
-
-        // Cabinet door metallic handle
-        const handleGroup = buildDoorHandleGroup(part);
-        if (handleGroup) {
-          handleGroup.traverse((c) => {
-            if (c instanceof THREE.Mesh) {
-              c.userData.disposeMaterial = true;
-              c.userData.partId = part.id;
-            }
+        if (isDrawerLike) {
+          rt.partOpenMeta.set(part.id, {
+            kind: 'drawer',
+            slideDistM: 0.34,
           });
-          group.add(handleGroup);
+        } else if (part.kind === 'door') {
+          const hingeSide =
+            part.hingeSide === 'left' || part.hingeSide === 'right'
+              ? part.hingeSide
+              : part.handleSide === 'left'
+                ? 'right'
+                : 'left';
+          const pivotX = (hingeSide === 'left' ? -part.width * 0.5 : part.width * 0.5) * MM_TO_M;
+          const pivotZ = -part.depth * 0.5 * MM_TO_M;
+          rt.partOpenMeta.set(part.id, {
+            kind: 'door',
+            localPivot: new THREE.Vector3(pivotX, 0, pivotZ),
+            maxAngleRad: hingeSide === 'left' ? -THREE.MathUtils.degToRad(102) : THREE.MathUtils.degToRad(102),
+          });
         }
 
-        // Crisp architectural outline for colliding, selected (incl. multi-select), or X-Ray parts
+        group.position.copy(basePos);
+        group.quaternion.copy(baseQuat);
+
+        let geo: THREE.BufferGeometry;
+        if (part.kind === 'appliance') {
+          geo = new THREE.BoxGeometry(
+            Math.max(10, part.width) * MM_TO_M,
+            Math.max(10, part.height) * MM_TO_M,
+            Math.max(10, part.depth) * MM_TO_M
+          );
+          const hitMat = new THREE.MeshBasicMaterial({
+            transparent: true,
+            opacity: 0,
+            depthWrite: false,
+          });
+          const hitMesh = new THREE.Mesh(geo, hitMat);
+          hitMesh.name = 'main_mesh';
+          hitMesh.userData.partId = part.id;
+          hitMesh.userData.raycastKind = 'part_mesh';
+          hitMesh.userData.disposeMaterial = true;
+          group.add(hitMesh);
+
+          const appGroup = buildApplianceGroup(part);
+          if (appGroup) {
+            appGroup.traverse((c) => {
+              if (c instanceof THREE.Mesh) {
+                c.userData.disposeMaterial = true;
+                c.userData.partId = part.id;
+                c.userData.raycastKind = 'part_mesh';
+                c.castShadow = !props.xrayMode;
+                c.receiveShadow = true;
+              }
+            });
+            group.add(appGroup);
+          }
+        } else {
+          geo = buildPartGeometry(part);
+          const mat = rt.materials.getMaterial(
+            part.materialId,
+            props.xrayMode,
+            part.surfaceFinish ?? 'matte'
+          );
+          const mesh = new THREE.Mesh(geo, mat);
+          mesh.name = 'main_mesh';
+          mesh.userData.partId = part.id;
+          mesh.userData.raycastKind = 'part_mesh';
+          mesh.castShadow = !props.xrayMode && part.materialId !== 'glass_clear';
+          mesh.receiveShadow = true;
+          group.add(mesh);
+
+          // Cabinet door metallic handle
+          const handleGroup = buildDoorHandleGroup(part);
+          if (handleGroup) {
+            handleGroup.traverse((c) => {
+              if (c instanceof THREE.Mesh) {
+                c.userData.disposeMaterial = true;
+                c.userData.partId = part.id;
+              }
+            });
+            group.add(handleGroup);
+          }
+
+          // Ø35 mm Cup Hinges on cabinet doors
+          const hingesGroup = buildDoorHingesGroup(part);
+          if (hingesGroup) {
+            hingesGroup.traverse((c) => {
+              if (c instanceof THREE.Mesh) {
+                c.userData.disposeMaterial = true;
+                c.userData.partId = part.id;
+              }
+            });
+            group.add(hingesGroup);
+          }
+
+          // Board Machining visual indicators (Dado groove + 45° miters)
+          const machiningGroup = buildPartMachiningGroup(part);
+          if (machiningGroup) {
+            machiningGroup.traverse((c) => {
+              if (c instanceof THREE.Mesh) {
+                c.userData.disposeMaterial = true;
+                c.userData.partId = part.id;
+              }
+            });
+            group.add(machiningGroup);
+          }
+        }
+
+        // Crisp architectural outline for colliding, selected, active assembly step, or X-Ray parts
         const isSelected =
           part.id === props.selectedPartId ||
           props.selectedPartIds.includes(part.id);
         const isColliding = props.collidingPartIds.has(part.id);
-        if (isSelected || isColliding || props.xrayMode) {
+        const isActiveAssemblyStep = props.assemblyStep > 0 && partStep === props.assemblyStep;
+        if (isSelected || isColliding || isActiveAssemblyStep || props.xrayMode) {
           const edgesGeo = new THREE.EdgesGeometry(geo, 22);
           const edgesMat = new THREE.LineBasicMaterial({
-            color: isColliding ? '#EF4444' : isSelected ? '#F59E0B' : '#4B5563',
-            transparent: !isSelected && !isColliding,
-            opacity: isSelected || isColliding ? 1 : 0.35,
+            color: isColliding
+              ? '#EF4444'
+              : isSelected
+                ? '#F59E0B'
+                : isActiveAssemblyStep
+                  ? '#10B981'
+                  : '#4B5563',
+            transparent: !isSelected && !isColliding && !isActiveAssemblyStep,
+            opacity: isSelected || isColliding || isActiveAssemblyStep ? 1 : 0.35,
           });
           const edges = new THREE.LineSegments(edgesGeo, edgesMat);
           edges.userData.disposeMaterial = true;
@@ -1629,6 +2352,9 @@ export const Viewport3D = forwardRef<Viewport3DHandle, Viewport3DProps>(
         rt.partsRoot.add(group);
         rt.partNodes.set(part.id, group);
       }
+
+      // Apply current exploded & open-door/drawer transforms immediately after rebuild
+      rt.applyPartAnimations();
 
       // Rebuild 3D Clearance Dimension Guides ("Prześwity w świetle")
       disposeObjectTree(rt.guidesRoot);
@@ -1742,6 +2468,100 @@ export const Viewport3D = forwardRef<Viewport3DHandle, Viewport3DProps>(
         rt.contactShadow.visible = false;
       }
 
+      // Rebuild Under-Cabinet Warm 3000K LED Strip Lighting when enabled
+      disposeObjectTree(rt.ledRoot);
+      rt.ledRoot.clear();
+      if (props.ledUnderCabinet && props.explodedAmount < 0.01) {
+        const ledCandidates = props.parts
+          .map((p) => ({ part: p, box: getPartWorldBox(p) }))
+          .filter(
+            ({ part, box }) =>
+              part.kind !== 'door' &&
+              part.kind !== 'profile' &&
+              box.minY >= 460 &&
+              part.height <= 60 &&
+              part.width >= 260 &&
+              part.depth >= 150
+          )
+          .sort((a, b) => b.part.width - a.part.width);
+
+        let pointLightBudget = rt.isSoftwareGl ? 0 : 2;
+        for (const { part, box } of ledCandidates) {
+          const stripLenM = Math.max(0.18, (part.width - 40) * MM_TO_M);
+          const stripGeo = new THREE.BoxGeometry(stripLenM, 0.005, 0.014);
+          const stripMat = new THREE.MeshStandardMaterial({
+            color: '#FFF1D0',
+            emissive: '#FFCC66',
+            emissiveIntensity: 2.3,
+            roughness: 0.25,
+          });
+          const stripMesh = new THREE.Mesh(stripGeo, stripMat);
+          const centerX = ((box.minX + box.maxX) / 2) * MM_TO_M;
+          const underY = (box.minY - 3) * MM_TO_M;
+          const stripZ = (box.minZ + (box.maxZ - box.minZ) * 0.35) * MM_TO_M;
+          stripMesh.position.set(centerX, underY, stripZ);
+          stripMesh.userData.disposeMaterial = true;
+          rt.ledRoot.add(stripMesh);
+
+          if (pointLightBudget > 0) {
+            const pLight = new THREE.PointLight('#FFD796', 1.45, 2.2, 1.8);
+            pLight.position.set(centerX, underY - 0.035, stripZ + 0.04);
+            rt.ledRoot.add(pLight);
+            pointLightBudget--;
+          }
+        }
+      }
+
+      // Rebuild Interactive 3D Face Resize Handles (when tool === 'resize' on selected part)
+      disposeObjectTree(rt.resizeHandlesRoot);
+      rt.resizeHandlesRoot.clear();
+      if (
+        props.tool === 'resize' &&
+        props.selectedPartId &&
+        props.explodedAmount < 0.01
+      ) {
+        const part = props.parts.find((p) => p.id === props.selectedPartId);
+        if (part) {
+          const quat = getPartQuaternion(part);
+          const centerM = new THREE.Vector3(
+            part.position[0] * MM_TO_M,
+            part.position[1] * MM_TO_M,
+            part.position[2] * MM_TO_M
+          );
+          const faces: Array<{
+            axis: 'x' | 'y' | 'z';
+            sign: 1 | -1;
+            offsetM: THREE.Vector3;
+            color: string;
+          }> = [
+            { axis: 'x', sign: 1, offsetM: new THREE.Vector3((part.width / 2 + 24) * MM_TO_M, 0, 0), color: '#EF4444' },
+            { axis: 'x', sign: -1, offsetM: new THREE.Vector3(-(part.width / 2 + 24) * MM_TO_M, 0, 0), color: '#EF4444' },
+            { axis: 'y', sign: 1, offsetM: new THREE.Vector3(0, (part.height / 2 + 24) * MM_TO_M, 0), color: '#10B981' },
+            { axis: 'y', sign: -1, offsetM: new THREE.Vector3(0, -(part.height / 2 + 24) * MM_TO_M, 0), color: '#10B981' },
+            { axis: 'z', sign: 1, offsetM: new THREE.Vector3(0, 0, (part.depth / 2 + 24) * MM_TO_M), color: '#3B82F6' },
+            { axis: 'z', sign: -1, offsetM: new THREE.Vector3(0, 0, -(part.depth / 2 + 24) * MM_TO_M), color: '#3B82F6' },
+          ];
+          for (const f of faces) {
+            const worldPos = f.offsetM.clone().applyQuaternion(quat).add(centerM);
+            const hGeo = new THREE.SphereGeometry(0.019, 14, 12);
+            const hMat = new THREE.MeshBasicMaterial({
+              color: f.color,
+              depthTest: false,
+            });
+            const handle = new THREE.Mesh(hGeo, hMat);
+            handle.position.copy(worldPos);
+            handle.renderOrder = 999;
+            handle.userData.disposeMaterial = true;
+            handle.userData.resizeHandle = {
+              partId: part.id,
+              axis: f.axis,
+              sign: f.sign,
+            };
+            rt.resizeHandlesRoot.add(handle);
+          }
+        }
+      }
+
       // Attach TransformControls gizmo if Move or Rotate tool is active on a selected part
       if (
         props.selectedPartId &&
@@ -1779,7 +2599,10 @@ export const Viewport3D = forwardRef<Viewport3DHandle, Viewport3DProps>(
       props.showDimensions,
       props.xrayMode,
       props.showFasteners,
+      props.ledUnderCabinet,
       props.explodedAmount,
+      props.assemblyStep,
+      props.materialsVersion,
       props.customTextures,
       props.collidingPartIds,
       props.fastenerAuditMap,
@@ -1790,6 +2613,18 @@ export const Viewport3D = forwardRef<Viewport3DHandle, Viewport3DProps>(
     return (
       <div className="relative w-full h-full overflow-hidden">
         <div ref={mountRef} className="w-full h-full canvas-touch-lock" />
+        {/* Live 3D Face Resize HUD near cursor */}
+        {resizeHud && (
+          <div
+            style={{
+              left: Math.min(Math.max(12, resizeHud.x + 16), window.innerWidth - 220),
+              top: Math.max(12, resizeHud.y - 36),
+            }}
+            className="pointer-events-none absolute z-20 rounded-lg border border-amber-500/70 bg-[#141518]/95 px-2.5 py-1 text-xs font-semibold font-mono-num text-amber-300 shadow-lg whitespace-nowrap"
+          >
+            {resizeHud.label}
+          </div>
+        )}
         {/* Live Green/Red Screw Target HUD near cursor */}
         {props.tool === 'screw' && screwHoverHud && (
           <div

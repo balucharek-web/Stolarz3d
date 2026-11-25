@@ -12,7 +12,7 @@ import {
 import {
   FurniturePart,
   FurnitureProject,
-  MATERIAL_MAP,
+  getMaterialMeta,
   PART_KIND_LABELS,
 } from '../types/furniture';
 import { FURNITURE_TEMPLATES } from '../data/templates';
@@ -286,7 +286,7 @@ export const PartsTemplatesDrawer: React.FC<PartsTemplatesDrawerProps> = ({
             parts.map((part) => {
               const selected = part.id === selectedPartId;
               const colliding = collidingPartIds.has(part.id);
-              const mat = MATERIAL_MAP[part.materialId];
+              const mat = getMaterialMeta(part.materialId);
               const fCount = fastenerCountsByPart[part.id] ?? 0;
               return (
                 <div

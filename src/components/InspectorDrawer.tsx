@@ -17,6 +17,7 @@ import {
   X,
 } from 'lucide-react';
 import {
+  DrawerSlideType,
   EdgeBandingThickness,
   Fastener,
   FurniturePart,
@@ -24,8 +25,10 @@ import {
   MATERIAL_CATALOG,
   MaterialId,
   PART_KIND_LABELS,
+  PartCutout,
   PartKind,
   SCREW_MAP,
+  SurfaceFinish,
 } from '../types/furniture';
 import { getMaterialSwatchDataUrl } from '../engine/materials';
 import { computePolygonAreaM2, getPartWorldBoundsMm } from '../engine/geometry';
@@ -39,12 +42,15 @@ interface InspectorDrawerProps {
   open: boolean;
   part: FurniturePart | null;
   partFasteners: Fastener[];
+  groupBounds: { width: number; height: number; depth: number; count: number } | null;
+  materialsVersion: number;
   customTextures: Partial<Record<MaterialId, string>>;
   isColliding: boolean;
   clearances: ClearanceGuide[];
   fastenerAuditMap: Map<string, FastenerAudit>;
   onClose: () => void;
   onUpdatePart: (id: string, patch: Partial<FurniturePart>) => void;
+  onSmartResizeGroup: (groupId: string, width: number, height: number, depth: number) => void;
   onDuplicatePart: (id: string) => void;
   onDeletePart: (id: string) => void;
   onDeleteFastener: (id: string) => void;
@@ -122,12 +128,15 @@ export const InspectorDrawer: React.FC<InspectorDrawerProps> = ({
   open,
   part,
   partFasteners,
+  groupBounds,
+  materialsVersion,
   customTextures,
   isColliding,
   clearances,
   fastenerAuditMap,
   onClose,
   onUpdatePart,
+  onSmartResizeGroup,
   onDuplicatePart,
   onDeletePart,
   onDeleteFastener,
@@ -140,14 +149,32 @@ export const InspectorDrawer: React.FC<InspectorDrawerProps> = ({
   const textureFileRef = useRef<HTMLInputElement | null>(null);
   const [shelfCopies, setShelfCopies] = useState(3);
   const [shelfSpanMm, setShelfSpanMm] = useState(1100);
+  const [newCutShape, setNewCutShape] = useState<'rect' | 'circle'>('rect');
+  const [newCutW, setNewCutW] = useState(560);
+  const [newCutH, setNewCutH] = useState(490);
+  const [newCutDia, setNewCutDia] = useState(60);
+  const [newCutX, setNewCutX] = useState(0);
+  const [newCutY, setNewCutY] = useState(0);
+  const [grpW, setGrpW] = useState<number | null>(null);
+  const [grpH, setGrpH] = useState<number | null>(null);
+  const [grpD, setGrpD] = useState<number | null>(null);
+  const [lastGroupId, setLastGroupId] = useState<string | undefined>(undefined);
+
+  if (part?.groupId !== lastGroupId) {
+    setLastGroupId(part?.groupId);
+    setGrpW(null);
+    setGrpH(null);
+    setGrpD(null);
+  }
 
   const swatches = useMemo(() => {
+    void materialsVersion;
     const map: Partial<Record<MaterialId, string>> = {};
     for (const m of MATERIAL_CATALOG) {
       map[m.id] = getMaterialSwatchDataUrl(m.id, customTextures);
     }
     return map;
-  }, [customTextures]);
+  }, [customTextures, materialsVersion]);
 
   const sawAngles = useMemo(
     () => (part ? computeSawCutAngles(part) : []),
@@ -471,10 +498,10 @@ export const InspectorDrawer: React.FC<InspectorDrawerProps> = ({
           </div>
         )}
 
-        {/* Door Handle Selection */}
+        {/* Door Handle, Hinges & Drawer Slides */}
         {part.kind === 'door' && (
-          <div className="space-y-2 border-t border-zinc-800/80 pt-3.5">
-            <h3 className="text-xs font-semibold text-zinc-200">Położenie uchwytu</h3>
+          <div className="space-y-2.5 border-t border-zinc-800/80 pt-3.5">
+            <h3 className="text-xs font-semibold text-zinc-200">Front: uchwyt, zawiasy i prowadnice</h3>
             <div className="grid grid-cols-4 gap-1 rounded-lg bg-zinc-900 p-1 border border-zinc-800">
               {(
                 [
@@ -497,6 +524,44 @@ export const InspectorDrawer: React.FC<InspectorDrawerProps> = ({
                   {opt.label}
                 </button>
               ))}
+            </div>
+
+            <div className="grid grid-cols-2 gap-2">
+              <label className="block">
+                <span className="text-[11px] text-zinc-400">Zawiasy puszkowe Ø35</span>
+                <select
+                  value={part.hingeSide ?? 'none'}
+                  onChange={(e) => {
+                    const hs = e.target.value as HandleSide;
+                    onUpdatePart(part.id, {
+                      hingeSide: hs,
+                      hingeCount: hs === 'none' ? undefined : part.hingeCount ?? 2,
+                    });
+                  }}
+                  className="mt-1 w-full rounded-lg border border-zinc-800 bg-zinc-900 px-2 py-1.5 text-xs text-white focus:border-amber-500 focus:outline-none"
+                >
+                  <option value="none">Brak (szuflada/stały)</option>
+                  <option value="left">Lewa krawędź</option>
+                  <option value="right">Prawa krawędź</option>
+                  <option value="top">Góra (klapa)</option>
+                </select>
+              </label>
+              <label className="block">
+                <span className="text-[11px] text-zinc-400">Prowadnice szuflady</span>
+                <select
+                  value={part.drawerSlideType ?? 'none'}
+                  onChange={(e) =>
+                    onUpdatePart(part.id, {
+                      drawerSlideType: e.target.value as DrawerSlideType,
+                    })
+                  }
+                  className="mt-1 w-full rounded-lg border border-zinc-800 bg-zinc-900 px-2 py-1.5 text-xs text-white focus:border-amber-500 focus:outline-none"
+                >
+                  <option value="none">Brak</option>
+                  <option value="ball_26mm">Kulkowe (−26 mm)</option>
+                  <option value="undermount_blum">Dolny montaż Blum/GTV</option>
+                </select>
+              </label>
             </div>
           </div>
         )}
@@ -542,6 +607,33 @@ export const InspectorDrawer: React.FC<InspectorDrawerProps> = ({
             })}
           </div>
 
+          {/* Surface Finish (Mat / Satyna / Wysoki Połysk Lakier) */}
+          <div className="space-y-1.5 pt-1">
+            <span className="text-[11px] text-zinc-400">Wykończenie lakiernicze (PBR)</span>
+            <div className="grid grid-cols-3 gap-1 rounded-lg bg-zinc-900 p-1 border border-zinc-800">
+              {(
+                [
+                  { id: 'matte', label: 'Mat' },
+                  { id: 'satin', label: 'Satyna' },
+                  { id: 'gloss', label: 'Połysk' },
+                ] as { id: SurfaceFinish; label: string }[]
+              ).map((fin) => (
+                <button
+                  key={fin.id}
+                  type="button"
+                  onClick={() => onUpdatePart(part.id, { surfaceFinish: fin.id })}
+                  className={`rounded-md py-1.5 text-[11px] font-medium transition-colors cursor-pointer ${
+                    (part.surfaceFinish ?? 'matte') === fin.id
+                      ? 'bg-amber-500 text-zinc-950 font-semibold'
+                      : 'text-zinc-400 hover:text-white'
+                  }`}
+                >
+                  {fin.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
           {/* Upload custom texture photo from phone or PC */}
           <div className="flex items-center gap-1.5 pt-1">
             <button
@@ -570,6 +662,238 @@ export const InspectorDrawer: React.FC<InspectorDrawerProps> = ({
               onChange={handleTextureUpload}
               className="hidden"
             />
+          </div>
+        </div>
+
+        {/* Board Machining: Rounded Corners, Dado Groove, 45° Miter & Internal Cutouts */}
+        <div className="space-y-3 border-t border-zinc-800/80 pt-3.5">
+          <h3 className="text-xs font-semibold text-zinc-200">
+            Obróbki płyty (wycięcia, nut, zaokrąglenia)
+          </h3>
+
+          {/* Corner Fillet Radius & Dado Groove */}
+          <div className="grid grid-cols-2 gap-2">
+            <NumberStepper
+              label="Zaokrąglenie R"
+              value={part.cornerRadiusMm ?? 0}
+              step={5}
+              min={0}
+              max={200}
+              onChange={(r) =>
+                onUpdatePart(part.id, { cornerRadiusMm: r > 0 ? r : undefined })
+              }
+            />
+            <div className="flex flex-col justify-between">
+              <span className="text-[11px] text-zinc-400">Nut pod plecy HDF</span>
+              <button
+                type="button"
+                onClick={() =>
+                  onUpdatePart(part.id, {
+                    dadoGroove: part.dadoGroove?.enabled
+                      ? undefined
+                      : { enabled: true, edge: 'back', insetMm: 16, widthMm: 4, depthMm: 8 },
+                  })
+                }
+                className={`h-9 rounded-lg border text-xs font-medium transition-colors cursor-pointer ${
+                  part.dadoGroove?.enabled
+                    ? 'border-amber-500 bg-amber-500/15 text-amber-300 font-semibold'
+                    : 'border-zinc-800 bg-zinc-900 text-zinc-400 hover:text-white'
+                }`}
+              >
+                {part.dadoGroove?.enabled ? 'Nut 4×8 mm (Wł.)' : 'Brak nutu'}
+              </button>
+            </div>
+          </div>
+
+          {/* 45-degree Miter Edges (Gerung) */}
+          <div className="space-y-1.5">
+            <span className="text-[11px] text-zinc-400">Zacinanie krawędzi 45° (gerung)</span>
+            <div className="grid grid-cols-4 gap-1">
+              {(
+                [
+                  { k: 'left' as const, label: 'Lewa' },
+                  { k: 'right' as const, label: 'Prawa' },
+                  { k: 'top' as const, label: 'Góra' },
+                  { k: 'bottom' as const, label: 'Dół' },
+                ] as const
+              ).map(({ k, label }) => {
+                const on = Boolean(part.miter45?.[k]);
+                return (
+                  <button
+                    key={k}
+                    type="button"
+                    onClick={() =>
+                      onUpdatePart(part.id, {
+                        miter45: { ...part.miter45, [k]: !on },
+                      })
+                    }
+                    className={`rounded-md border py-1 text-[10px] font-medium cursor-pointer ${
+                      on
+                        ? 'border-amber-500 bg-amber-500/15 text-amber-300 font-semibold'
+                        : 'border-zinc-800 bg-zinc-900 text-zinc-400 hover:text-white'
+                    }`}
+                  >
+                    {label} 45°
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Internal Cutouts (Sink, Hob, Cable Grommet, Pipes) */}
+          <div className="space-y-2 rounded-xl border border-zinc-800 bg-zinc-900/50 p-2.5">
+            <div className="flex items-center justify-between text-[11px]">
+              <span className="font-medium text-zinc-200">
+                Wycięcia wewnętrzne ({part.cutouts?.length ?? 0})
+              </span>
+              <div className="flex gap-1">
+                <button
+                  type="button"
+                  onClick={() => setNewCutShape('rect')}
+                  className={`rounded px-1.5 py-0.5 text-[10px] cursor-pointer ${
+                    newCutShape === 'rect'
+                      ? 'bg-amber-500 text-zinc-950 font-semibold'
+                      : 'bg-zinc-800 text-zinc-400'
+                  }`}
+                >
+                  Prostokąt
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setNewCutShape('circle')}
+                  className={`rounded px-1.5 py-0.5 text-[10px] cursor-pointer ${
+                    newCutShape === 'circle'
+                      ? 'bg-amber-500 text-zinc-950 font-semibold'
+                      : 'bg-zinc-800 text-zinc-400'
+                  }`}
+                >
+                  Otwór Ø
+                </button>
+              </div>
+            </div>
+
+            {newCutShape === 'rect' ? (
+              <div className="grid grid-cols-4 gap-1.5">
+                <label>
+                  <span className="text-[10px] text-zinc-500">Szer.</span>
+                  <input
+                    type="number"
+                    value={newCutW}
+                    onChange={(e) => setNewCutW(Number(e.target.value) || 100)}
+                    className="w-full rounded border border-zinc-800 bg-zinc-950 px-1.5 py-1 text-[11px] font-mono-num text-white"
+                  />
+                </label>
+                <label>
+                  <span className="text-[10px] text-zinc-500">Gł./Wys.</span>
+                  <input
+                    type="number"
+                    value={newCutH}
+                    onChange={(e) => setNewCutH(Number(e.target.value) || 100)}
+                    className="w-full rounded border border-zinc-800 bg-zinc-950 px-1.5 py-1 text-[11px] font-mono-num text-white"
+                  />
+                </label>
+                <label>
+                  <span className="text-[10px] text-zinc-500">Przes. X</span>
+                  <input
+                    type="number"
+                    value={newCutX}
+                    onChange={(e) => setNewCutX(Number(e.target.value) || 0)}
+                    className="w-full rounded border border-zinc-800 bg-zinc-950 px-1.5 py-1 text-[11px] font-mono-num text-white"
+                  />
+                </label>
+                <label>
+                  <span className="text-[10px] text-zinc-500">Przes. Y</span>
+                  <input
+                    type="number"
+                    value={newCutY}
+                    onChange={(e) => setNewCutY(Number(e.target.value) || 0)}
+                    className="w-full rounded border border-zinc-800 bg-zinc-950 px-1.5 py-1 text-[11px] font-mono-num text-white"
+                  />
+                </label>
+              </div>
+            ) : (
+              <div className="grid grid-cols-3 gap-1.5">
+                <label>
+                  <span className="text-[10px] text-zinc-500">Średnica Ø</span>
+                  <input
+                    type="number"
+                    value={newCutDia}
+                    onChange={(e) => setNewCutDia(Number(e.target.value) || 60)}
+                    className="w-full rounded border border-zinc-800 bg-zinc-950 px-1.5 py-1 text-[11px] font-mono-num text-white"
+                  />
+                </label>
+                <label>
+                  <span className="text-[10px] text-zinc-500">Przes. X</span>
+                  <input
+                    type="number"
+                    value={newCutX}
+                    onChange={(e) => setNewCutX(Number(e.target.value) || 0)}
+                    className="w-full rounded border border-zinc-800 bg-zinc-950 px-1.5 py-1 text-[11px] font-mono-num text-white"
+                  />
+                </label>
+                <label>
+                  <span className="text-[10px] text-zinc-500">Przes. Y</span>
+                  <input
+                    type="number"
+                    value={newCutY}
+                    onChange={(e) => setNewCutY(Number(e.target.value) || 0)}
+                    className="w-full rounded border border-zinc-800 bg-zinc-950 px-1.5 py-1 text-[11px] font-mono-num text-white"
+                  />
+                </label>
+              </div>
+            )}
+
+            <button
+              type="button"
+              onClick={() => {
+                const nextCut: PartCutout = {
+                  id: `cut_${Date.now()}_${Math.random().toString(36).slice(2, 5)}`,
+                  shape: newCutShape,
+                  xMm: newCutX,
+                  yMm: newCutY,
+                  widthMm: newCutShape === 'circle' ? newCutDia : Math.max(20, newCutW),
+                  heightMm: newCutShape === 'circle' ? newCutDia : Math.max(20, newCutH),
+                  diameterMm: newCutShape === 'circle' ? Math.max(12, newCutDia) : undefined,
+                  label: newCutShape === 'circle' ? `Otwór Ø${newCutDia}` : `Wycięcie ${newCutW}×${newCutH}`,
+                };
+                onUpdatePart(part.id, {
+                  cutouts: [...(part.cutouts ?? []), nextCut],
+                });
+              }}
+              className="w-full rounded-lg border border-amber-500/40 bg-amber-500/15 py-1.5 text-[11px] font-medium text-amber-300 hover:bg-amber-500/25 cursor-pointer"
+            >
+              + Wytnij otwór w płycie 3D
+            </button>
+
+            {part.cutouts && part.cutouts.length > 0 && (
+              <div className="space-y-1 pt-1">
+                {part.cutouts.map((c) => (
+                  <div
+                    key={c.id}
+                    className="flex items-center justify-between rounded-md bg-zinc-950 px-2 py-1 text-[11px]"
+                  >
+                    <span className="font-mono-num text-zinc-300 truncate">
+                      {c.shape === 'circle'
+                        ? `Ø${c.diameterMm ?? c.widthMm} mm`
+                        : `${c.widthMm}×${c.heightMm} mm`}{' '}
+                      ({c.xMm}, {c.yMm})
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        onUpdatePart(part.id, {
+                          cutouts: part.cutouts?.filter((x) => x.id !== c.id),
+                        })
+                      }
+                      className="text-zinc-500 hover:text-red-400 p-0.5 cursor-pointer"
+                      aria-label="Usuń wycięcie"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         </div>
 
@@ -814,6 +1138,73 @@ export const InspectorDrawer: React.FC<InspectorDrawerProps> = ({
               }
               className="w-full rounded-lg border border-zinc-800 bg-zinc-900 px-2.5 py-1.5 text-xs text-white placeholder:text-zinc-600 focus:border-amber-500 focus:outline-none"
             />
+
+            {/* Commercial Smart Resize for the Entire Grouped Cabinet */}
+            {part.groupId && groupBounds && groupBounds.count >= 2 && (
+              <div className="mt-2 rounded-xl border border-amber-500/35 bg-amber-950/20 p-2.5 space-y-2">
+                <div className="flex items-center justify-between text-[11px]">
+                  <span className="font-semibold text-amber-300">
+                    Smart Resize grupy ({groupBounds.count} elem.)
+                  </span>
+                  <span className="text-[10px] text-zinc-400">Grubości płyt bez zmian</span>
+                </div>
+                <div className="grid grid-cols-3 gap-1.5">
+                  <label>
+                    <span className="text-[10px] text-zinc-400">Szer. S</span>
+                    <input
+                      type="number"
+                      min={150}
+                      max={4000}
+                      step={20}
+                      value={grpW ?? groupBounds.width}
+                      onChange={(e) => setGrpW(Number(e.target.value) || groupBounds.width)}
+                      className="mt-0.5 w-full rounded border border-zinc-700 bg-zinc-950 px-1.5 py-1 text-center text-xs font-mono-num text-white"
+                    />
+                  </label>
+                  <label>
+                    <span className="text-[10px] text-zinc-400">Wys. W</span>
+                    <input
+                      type="number"
+                      min={150}
+                      max={3000}
+                      step={20}
+                      value={grpH ?? groupBounds.height}
+                      onChange={(e) => setGrpH(Number(e.target.value) || groupBounds.height)}
+                      className="mt-0.5 w-full rounded border border-zinc-700 bg-zinc-950 px-1.5 py-1 text-center text-xs font-mono-num text-white"
+                    />
+                  </label>
+                  <label>
+                    <span className="text-[10px] text-zinc-400">Głęb. G</span>
+                    <input
+                      type="number"
+                      min={150}
+                      max={1500}
+                      step={10}
+                      value={grpD ?? groupBounds.depth}
+                      onChange={(e) => setGrpD(Number(e.target.value) || groupBounds.depth)}
+                      className="mt-0.5 w-full rounded border border-zinc-700 bg-zinc-950 px-1.5 py-1 text-center text-xs font-mono-num text-white"
+                    />
+                  </label>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    onSmartResizeGroup(
+                      part.groupId!,
+                      grpW ?? groupBounds.width,
+                      grpH ?? groupBounds.height,
+                      grpD ?? groupBounds.depth
+                    );
+                    setGrpW(null);
+                    setGrpH(null);
+                    setGrpD(null);
+                  }}
+                  className="w-full rounded-lg bg-amber-500 py-1.5 text-xs font-semibold text-zinc-950 hover:bg-amber-400 cursor-pointer"
+                >
+                  Przeskaluj cały korpus i wkręty
+                </button>
+              </div>
+            )}
           </div>
         </div>
 

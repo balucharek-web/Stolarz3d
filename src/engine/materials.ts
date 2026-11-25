@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { MaterialId } from '../types/furniture';
+import { getMaterialMeta, MaterialId, SurfaceFinish } from '../types/furniture';
 
 import texOakUrl from '../assets/images/tex_oak_craft_1795344820546.jpg';
 import texWalnutUrl from '../assets/images/tex_walnut_wood_1795344821285.jpg';
@@ -370,6 +370,12 @@ function generateMicroPebblePBR(
 /** UI Swatch URLs — supports custom uploaded photos as well as built-in studio scans */
 const swatchCache = new Map<MaterialId, string>();
 
+function hexToRgbTuple(hex: string): [number, number, number] {
+  const clean = hex.replace('#', '');
+  const n = parseInt(clean.length === 6 ? clean : 'B89B72', 16);
+  return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+}
+
 export function getMaterialSwatchDataUrl(
   id: MaterialId,
   customOverrides?: Partial<Record<MaterialId, string>>
@@ -380,7 +386,9 @@ export function getMaterialSwatchDataUrl(
   const photoUrl = DEFAULT_PHOTO_URLS[id];
   if (photoUrl) return photoUrl;
 
-  const cached = swatchCache.get(id);
+  const meta = getMaterialMeta(id);
+  const cacheKey = `${id}_${meta.swatchFallbackHex}`;
+  const cached = swatchCache.get(cacheKey);
   if (cached) return cached;
 
   let canvas: HTMLCanvasElement;
@@ -390,7 +398,7 @@ export function getMaterialSwatchDataUrl(
     canvas = generateMicroPebblePBR([48, 52, 58], 130, 6, 64).albedo;
   } else if (id === 'steel_black') {
     canvas = generateMicroPebblePBR([36, 39, 44], 96, 8, 64).albedo;
-  } else {
+  } else if (id === 'glass_clear') {
     const [c, ctx] = createCanvas(64);
     const g = ctx.createLinearGradient(0, 0, 64, 64);
     g.addColorStop(0, '#DFF0F2');
@@ -399,14 +407,16 @@ export function getMaterialSwatchDataUrl(
     ctx.fillStyle = g;
     ctx.fillRect(0, 0, 64, 64);
     canvas = c;
+  } else {
+    canvas = generateMicroPebblePBR(hexToRgbTuple(meta.swatchFallbackHex), 125, 9, 64).albedo;
   }
 
   const url = canvas.toDataURL('image/png');
-  swatchCache.set(id, url);
+  swatchCache.set(cacheKey, url);
   return url;
 }
 
-const FALLBACK_COLORS: Record<MaterialId, string> = {
+const FALLBACK_COLORS: Record<string, string> = {
   osb3: '#CEAA70',
   oak_craft: '#C19054',
   walnut: '#5A3B28',
@@ -421,6 +431,7 @@ const FALLBACK_COLORS: Record<MaterialId, string> = {
 
 export class MaterialLibrary {
   private standardMaterials = new Map<MaterialId, THREE.Material | THREE.Material[]>();
+  private finishMaterials = new Map<string, THREE.Material | THREE.Material[]>();
   private xrayMaterials = new Map<MaterialId, THREE.MeshStandardMaterial>();
   private customUrls: Partial<Record<MaterialId, string>> = {};
   private textures = new Set<THREE.Texture>();
@@ -483,6 +494,15 @@ export class MaterialLibrary {
           else old.dispose();
           this.standardMaterials.delete(id);
         }
+        (['satin', 'gloss'] as const).forEach((fin) => {
+          const fk = `${id}_${fin}`;
+          const oldFin = this.finishMaterials.get(fk);
+          if (oldFin) {
+            if (Array.isArray(oldFin)) oldFin.forEach((m) => m.dispose());
+            else oldFin.dispose();
+            this.finishMaterials.delete(fk);
+          }
+        });
         const oldX = this.xrayMaterials.get(id);
         if (oldX) {
           oldX.dispose();
@@ -493,6 +513,31 @@ export class MaterialLibrary {
     this.customUrls = { ...nextUrls };
     if (changed) {
       this.onTextureLoaded?.();
+    }
+  }
+
+  /** Invalidates cached GPU material entries (used when user edits custom warehouse board colors) */
+  invalidateCustomMaterials() {
+    for (const id of Array.from(this.standardMaterials.keys())) {
+      if (!(id in FALLBACK_COLORS)) {
+        this.buildGeneration.set(id, (this.buildGeneration.get(id) ?? 0) + 1);
+        this.disposeMaterialTextures(id);
+        const old = this.standardMaterials.get(id);
+        if (old) {
+          if (Array.isArray(old)) old.forEach((m) => m.dispose());
+          else old.dispose();
+          this.standardMaterials.delete(id);
+        }
+        (['satin', 'gloss'] as const).forEach((fin) => {
+          const fk = `${id}_${fin}`;
+          const oldFin = this.finishMaterials.get(fk);
+          if (oldFin) {
+            if (Array.isArray(oldFin)) oldFin.forEach((m) => m.dispose());
+            else oldFin.dispose();
+            this.finishMaterials.delete(fk);
+          }
+        });
+      }
     }
   }
 
@@ -565,7 +610,7 @@ export class MaterialLibrary {
   ): THREE.MeshPhysicalMaterial {
     const gen = this.buildGeneration.get(id) ?? 0;
     const mat = new THREE.MeshPhysicalMaterial({
-      color: new THREE.Color(FALLBACK_COLORS[id]),
+      color: new THREE.Color(FALLBACK_COLORS[id] ?? getMaterialMeta(id).swatchFallbackHex),
       roughness: 0.72,
       metalness: profile.metalness,
       clearcoat: profile.clearcoat,
@@ -623,6 +668,20 @@ export class MaterialLibrary {
         xMat.needsUpdate = true;
       }
 
+      // Propagate loaded photo maps to any cached satin/gloss finish variants
+      (['satin', 'gloss'] as const).forEach((fin) => {
+        const cached = this.finishMaterials.get(`${id}_${fin}`);
+        if (!cached) return;
+        const primary = (Array.isArray(cached) ? cached[0] : cached) as THREE.MeshPhysicalMaterial;
+        primary.color.set('#FFFFFF');
+        primary.map = albedoTex;
+        primary.normalMap = normalTex;
+        primary.normalScale = new THREE.Vector2(profile.normalScale * (fin === 'gloss' ? 0.35 : 0.7), profile.normalScale * (fin === 'gloss' ? 0.35 : 0.7));
+        primary.roughnessMap = fin === 'gloss' ? null : roughTex;
+        primary.roughness = fin === 'gloss' ? 0.14 : 0.55;
+        primary.needsUpdate = true;
+      });
+
       this.onTextureLoaded?.();
     };
     img.src = url;
@@ -630,7 +689,11 @@ export class MaterialLibrary {
     return mat;
   }
 
-  getMaterial(id: MaterialId, xray: boolean): THREE.Material | THREE.Material[] {
+  getMaterial(
+    id: MaterialId,
+    xray: boolean,
+    finish: SurfaceFinish = 'matte'
+  ): THREE.Material | THREE.Material[] {
     if (xray) {
       if (!this.xrayMaterials.has(id)) {
         const base = this.getMaterial(id, false);
@@ -648,6 +711,39 @@ export class MaterialLibrary {
         this.xrayMaterials.set(id, xMat);
       }
       return this.xrayMaterials.get(id)!;
+    }
+
+    if (finish !== 'matte' && id !== 'glass_clear') {
+      const fKey = `${id}_${finish}`;
+      if (!this.finishMaterials.has(fKey)) {
+        const base = this.getMaterial(id, false, 'matte');
+        const applyFinish = (m: THREE.Material, isEdge = false): THREE.Material => {
+          const clone = m.clone();
+          if (clone instanceof THREE.MeshPhysicalMaterial && !isEdge) {
+            if (finish === 'gloss') {
+              clone.clearcoat = 1.0;
+              clone.clearcoatRoughness = 0.04;
+              clone.roughness = 0.14;
+              clone.roughnessMap = null;
+              clone.envMapIntensity = 1.6;
+              clone.reflectivity = 1.0;
+              if (clone.normalScale) clone.normalScale = clone.normalScale.clone().multiplyScalar(0.35);
+            } else if (finish === 'satin') {
+              clone.clearcoat = 0.52;
+              clone.clearcoatRoughness = 0.22;
+              clone.roughness = Math.min(clone.roughness, 0.52);
+              clone.envMapIntensity = 1.2;
+            }
+            clone.needsUpdate = true;
+          }
+          return clone;
+        };
+        const variant = Array.isArray(base)
+          ? base.map((sub, i) => applyFinish(sub, i > 0))
+          : applyFinish(base, false);
+        this.finishMaterials.set(fKey, variant);
+      }
+      return this.finishMaterials.get(fKey)!;
     }
 
     if (this.standardMaterials.has(id)) {
@@ -723,7 +819,7 @@ export class MaterialLibrary {
           envMapIntensity: 1.2,
         }
       );
-    } else {
+    } else if (id === 'glass_clear') {
       result = new THREE.MeshPhysicalMaterial({
         color: new THREE.Color('#D4ECEE'),
         roughness: 0.05,
@@ -737,6 +833,23 @@ export class MaterialLibrary {
         clearcoatRoughness: 0.05,
         depthWrite: false,
       });
+    } else {
+      // Custom user warehouse board — realistic textured micro-grain PBR tinted by swatchFallbackHex
+      const meta = getMaterialMeta(id);
+      const rgb = hexToRgbTuple(meta.swatchFallbackHex);
+      result = this.buildProceduralPbrMat(
+        id,
+        generateMicroPebblePBR(rgb, 128, 8, 256),
+        {
+          normalStrength: 1.05,
+          normalScale: 0.4,
+          roughness: 0.88,
+          metalness: meta.category === 'Stal i szkło' ? 0.65 : 0.02,
+          clearcoat: 0.14,
+          clearcoatRoughness: 0.4,
+          envMapIntensity: 0.92,
+        }
+      );
     }
 
     this.standardMaterials.set(id, result);
@@ -749,9 +862,14 @@ export class MaterialLibrary {
       if (Array.isArray(m)) m.forEach((sub) => sub.dispose());
       else m.dispose();
     });
+    this.finishMaterials.forEach((m) => {
+      if (Array.isArray(m)) m.forEach((sub) => sub.dispose());
+      else m.dispose();
+    });
     this.xrayMaterials.forEach((m) => m.dispose());
     this.textures.forEach((t) => t.dispose());
     this.standardMaterials.clear();
+    this.finishMaterials.clear();
     this.xrayMaterials.clear();
     this.textures.clear();
     this.texturesByMaterial.clear();

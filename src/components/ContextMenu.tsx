@@ -4,12 +4,14 @@ import {
   Copy,
   FlipHorizontal2,
   Focus,
+  Group,
   PenTool,
   Plus,
   RotateCw,
   SlidersHorizontal,
   Sparkles,
   Trash2,
+  Ungroup,
 } from 'lucide-react';
 
 export type ContextMenuTarget =
@@ -20,6 +22,7 @@ export type ContextMenuTarget =
 interface ContextMenuProps {
   menu: ContextMenuTarget | null;
   selectedCount: number;
+  selectedCanUngroup: boolean;
   onClose: () => void;
   onOpenInspector: (partId: string) => void;
   onEditShape2D: (partId: string) => void;
@@ -28,6 +31,8 @@ interface ContextMenuProps {
   onRotate90Y: (partId: string) => void;
   onDropToFloor: (partId: string) => void;
   onAutoFastenPart: (partId: string) => void;
+  onGroupSelected: () => void;
+  onUngroupSelected: () => void;
   onDeletePart: (partId: string) => void;
   onDeleteFastener: (fastenerId: string) => void;
   onAddPart: () => void;
@@ -39,6 +44,7 @@ interface ContextMenuProps {
 export const ContextMenu: React.FC<ContextMenuProps> = ({
   menu,
   selectedCount,
+  selectedCanUngroup,
   onClose,
   onOpenInspector,
   onEditShape2D,
@@ -47,6 +53,8 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
   onRotate90Y,
   onDropToFloor,
   onAutoFastenPart,
+  onGroupSelected,
+  onUngroupSelected,
   onDeletePart,
   onDeleteFastener,
   onAddPart,
@@ -193,6 +201,36 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
               Wkręć łączniki w styki płyty
             </span>
           </button>
+          {selectedCount >= 2 && (
+            <button
+              type="button"
+              className={itemCls}
+              onClick={() => {
+                onGroupSelected();
+                onClose();
+              }}
+            >
+              <span className="flex items-center gap-2 text-sky-300">
+                <Group className="h-3.5 w-3.5 text-sky-400" />
+                Połącz zaznaczone w grupę ({selectedCount})
+              </span>
+            </button>
+          )}
+          {selectedCanUngroup && (
+            <button
+              type="button"
+              className={itemCls}
+              onClick={() => {
+                onUngroupSelected();
+                onClose();
+              }}
+            >
+              <span className="flex items-center gap-2 text-zinc-200">
+                <Ungroup className="h-3.5 w-3.5 text-zinc-400" />
+                Rozgrupuj moduł
+              </span>
+            </button>
+          )}
           <div className="my-1 h-px bg-zinc-800" />
           <button
             type="button"

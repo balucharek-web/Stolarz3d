@@ -1,15 +1,29 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { AlertTriangle, PenTool, Plus } from 'lucide-react';
 import {
+  AlertTriangle,
+  ChevronLeft,
+  ChevronRight,
+  LayoutPanelTop,
+  PenTool,
+  Plus,
+  X,
+} from 'lucide-react';
+import {
+  AlignMode,
+  ASSEMBLY_STEPS,
   CameraPreset,
   EditorTool,
   Fastener,
   FurniturePart,
   FurnitureProject,
   MaterialId,
+  MaterialsCatalogConfig,
+  MeasureSegment,
+  QuoteSettings,
   SCREW_MAP,
   ScrewType,
   StudioLighting,
+  syncCatalogMaterials,
 } from './types/furniture';
 import { FURNITURE_TEMPLATES } from './data/templates';
 import {
@@ -17,28 +31,42 @@ import {
   getProjectDimensionsMm,
 } from './engine/geometry';
 import {
+  alignSelectedParts,
   analyzeFasteners,
   bindFastenerToJoint,
   computeJointZones,
   computePartClearances,
   createEvenShelfArray,
   detectPartCollisions,
+  distributeSelectedParts,
   getPartWorldBox,
+  groupSelectedParts,
   mirrorPartX,
   syncFastenersWithParts,
+  ungroupSelectedParts,
 } from './engine/carpentry';
 import {
+  getGroupBoundingSizeMm,
+  smartResizeGroup,
+} from './engine/parametric';
+import {
   compressTextureDataUrl,
+  loadMaterialsConfig,
   loadProjectStore,
+  loadQuoteSettings,
   loadSavedCustomTextures,
   persistCustomTexture,
+  saveMaterialsConfig,
   saveProjectStore,
+  saveQuoteSettings,
   type ProjectStoreState,
 } from './engine/storage';
 import { Viewport3D, Viewport3DHandle } from './components/Viewport3D';
 import { BottomDock } from './components/BottomDock';
 import { InspectorDrawer } from './components/InspectorDrawer';
 import { AddPartDrawer } from './components/AddPartDrawer';
+import { CabinetBuilderModal } from './components/CabinetBuilderModal';
+import { MaterialsManagerModal } from './components/MaterialsManagerModal';
 import {
   PartsTemplatesDrawer,
   type LeftDrawerMode,
@@ -49,7 +77,7 @@ import { ContextMenu, type ContextMenuTarget } from './components/ContextMenu';
 import { ViewCube } from './components/ViewCube';
 
 const SNAP_STEPS = [10, 5, 25, 0];
-const LIGHTING_ORDER: StudioLighting[] = ['daylight', 'studio', 'warm'];
+const LIGHTING_ORDER: StudioLighting[] = ['daylight', 'studio', 'warm', 'photoreal'];
 
 function createDefaultProject(): FurnitureProject {
   return structuredClone(FURNITURE_TEMPLATES[0].project);
@@ -76,13 +104,26 @@ export default function App() {
   const [showDimensions, setShowDimensions] = useState<boolean>(true);
   const [xrayMode, setXrayMode] = useState<boolean>(false);
   const [showFasteners, setShowFasteners] = useState<boolean>(true);
+  const [ledUnderCabinet, setLedUnderCabinet] = useState<boolean>(false);
+  const [measurements, setMeasurements] = useState<MeasureSegment[]>([]);
+  const [quoteSettings, setQuoteSettings] = useState<QuoteSettings>(() => loadQuoteSettings());
+  const [materialsConfig, setMaterialsConfig] = useState<MaterialsCatalogConfig>(() => {
+    const cfg = loadMaterialsConfig();
+    syncCatalogMaterials(cfg);
+    return cfg;
+  });
+  const [materialsVersion, setMaterialsVersion] = useState<number>(0);
   const [explodedAmount, setExplodedAmount] = useState<number>(0);
+  const [openAmount, setOpenAmount] = useState<number>(0);
+  const [assemblyStep, setAssemblyStep] = useState<number>(0);
   const [lighting, setLighting] = useState<StudioLighting>('daylight');
   const [customTextures, setCustomTextures] = useState<Partial<Record<MaterialId, string>>>({});
 
   const [dockCollapsed, setDockCollapsed] = useState<boolean>(false);
   const [inspectorOpen, setInspectorOpen] = useState<boolean>(false);
   const [addPartOpen, setAddPartOpen] = useState<boolean>(false);
+  const [cabinetBuilderOpen, setCabinetBuilderOpen] = useState<boolean>(false);
+  const [materialsModalOpen, setMaterialsModalOpen] = useState<boolean>(false);
   const [sketchOpen, setSketchOpen] = useState<boolean>(false);
   const [sketchEditingPart, setSketchEditingPart] = useState<FurniturePart | null>(null);
   const [leftDrawerMode, setLeftDrawerMode] = useState<LeftDrawerMode>(null);
@@ -119,10 +160,14 @@ export default function App() {
     };
   }, []);
 
-  // Auto-save multi-project store locally for GitHub Pages zero-backend persistence
+  // Auto-save multi-project store & commercial quote settings locally
   useEffect(() => {
     saveProjectStore(projectStore);
   }, [projectStore]);
+
+  useEffect(() => {
+    saveQuoteSettings(quoteSettings);
+  }, [quoteSettings]);
 
   const setActiveProjectDirect = useCallback((nextProject: FurnitureProject) => {
     setProjectStore((store) => ({
@@ -406,6 +451,96 @@ export default function App() {
       });
     },
     [commitProject]
+  );
+
+  const handleResizePart = useCallback(
+    (
+      id: string,
+      dims: { width: number; height: number; depth: number },
+      position: [number, number, number]
+    ) => {
+      commitProject((prev) => {
+        const nextParts = prev.parts.map((p) =>
+          p.id === id
+            ? {
+                ...p,
+                width: dims.width,
+                height: dims.height,
+                depth: dims.depth,
+                position,
+              }
+            : p
+        );
+        const synced = syncFastenersWithParts(
+          prev.parts,
+          nextParts,
+          prev.fasteners,
+          new Set([id])
+        );
+        return {
+          ...prev,
+          parts: nextParts,
+          fasteners: synced.fasteners,
+        };
+      });
+    },
+    [commitProject]
+  );
+
+  const handleInsertCabinet = useCallback(
+    (newParts: FurniturePart[], newFasteners: Fastener[], groupName: string) => {
+      commitProject((prev) => ({
+        ...prev,
+        parts: [...prev.parts, ...newParts],
+        fasteners: [...prev.fasteners, ...newFasteners],
+      }));
+      const ids = newParts.map((p) => p.id);
+      setSelectedPartIds(ids);
+      setSelectedPartId(ids[0] ?? null);
+      setSelectedFastenerId(null);
+      setExplodedAmount(0);
+      setShowFasteners(true);
+      setTimeout(() => viewportRef.current?.focusAll(), 45);
+      showToast(`Wstawiono moduł: ${groupName} (${newParts.length} płyt, ${newFasteners.length} łączników)`);
+    },
+    [commitProject, showToast]
+  );
+
+  const handleSmartResizeGroup = useCallback(
+    (groupId: string, widthMm: number, heightMm: number, depthMm: number) => {
+      commitProject((prev) => {
+        const resized = smartResizeGroup(
+          prev.parts,
+          prev.fasteners,
+          groupId,
+          widthMm,
+          heightMm,
+          depthMm
+        );
+        return {
+          ...prev,
+          parts: resized.parts,
+          fasteners: resized.fasteners,
+        };
+      });
+      showToast(`Przeskalowano szafkę na ${widthMm} × ${heightMm} × ${depthMm} mm`);
+    },
+    [commitProject, showToast]
+  );
+
+  const handleAddMeasurement = useCallback(
+    (seg: MeasureSegment) => {
+      setMeasurements((prev) => [...prev, seg]);
+      const d = Math.round(
+        Math.hypot(
+          seg.endMm[0] - seg.startMm[0],
+          seg.endMm[1] - seg.startMm[1],
+          seg.endMm[2] - seg.startMm[2]
+        )
+      );
+      showToast(`Pomiar 3D: ${d} mm`);
+    },
+    [showToast]
   );
 
   const handleAddPart = useCallback(
@@ -711,7 +846,61 @@ export default function App() {
     showToast('Zapisano wizualizację 3D (PNG)');
   }, [project.name, showToast]);
 
-  const anyModalOpen = sketchOpen || cutListOpen || addPartOpen;
+  const handleChangeMaterialsConfig = useCallback(
+    (next: MaterialsCatalogConfig) => {
+      syncCatalogMaterials(next);
+      saveMaterialsConfig(next);
+      setMaterialsConfig(next);
+      setMaterialsVersion((v) => v + 1);
+      showToast('Zapisano katalog płyt i cennik z hurtowni');
+    },
+    [showToast]
+  );
+
+  const handleAlignSelected = useCallback(
+    (mode: AlignMode) => {
+      if (selectedPartIds.length < 2) return;
+      commitProject((prev) => {
+        const res = alignSelectedParts(prev.parts, prev.fasteners, selectedPartIds, mode);
+        return { ...prev, parts: res.parts, fasteners: res.fasteners };
+      });
+      showToast('Wyrównano zaznaczone elementy');
+    },
+    [commitProject, selectedPartIds, showToast]
+  );
+
+  const handleDistributeSelected = useCallback(
+    (axis: 'x' | 'y' | 'z') => {
+      if (selectedPartIds.length < 3) return;
+      commitProject((prev) => {
+        const res = distributeSelectedParts(prev.parts, prev.fasteners, selectedPartIds, axis);
+        return { ...prev, parts: res.parts, fasteners: res.fasteners };
+      });
+      showToast(`Rozmieszczono równomiernie w osi ${axis.toUpperCase()}`);
+    },
+    [commitProject, selectedPartIds, showToast]
+  );
+
+  const handleGroupSelected = useCallback(() => {
+    if (selectedPartIds.length < 2) return;
+    commitProject((prev) => ({
+      ...prev,
+      parts: groupSelectedParts(prev.parts, selectedPartIds).parts,
+    }));
+    showToast(`Połączono ${selectedPartIds.length} elementy w jedną grupę`);
+  }, [commitProject, selectedPartIds, showToast]);
+
+  const handleUngroupSelected = useCallback(() => {
+    if (selectedPartIds.length === 0) return;
+    commitProject((prev) => ({
+      ...prev,
+      parts: ungroupSelectedParts(prev.parts, selectedPartIds),
+    }));
+    showToast('Rozgrupowano wybrane elementy');
+  }, [commitProject, selectedPartIds, showToast]);
+
+  const anyModalOpen =
+    sketchOpen || cutListOpen || addPartOpen || cabinetBuilderOpen || materialsModalOpen;
 
   // Isolated Keyboard shortcuts for fast desktop CAD workflow
   useEffect(() => {
@@ -727,6 +916,14 @@ export default function App() {
       }
 
       if (e.key === 'Escape') {
+        if (materialsModalOpen) {
+          setMaterialsModalOpen(false);
+          return;
+        }
+        if (cabinetBuilderOpen) {
+          setCabinetBuilderOpen(false);
+          return;
+        }
         if (sketchOpen) {
           setSketchOpen(false);
           setSketchEditingPart(null);
@@ -742,6 +939,10 @@ export default function App() {
         }
         if (contextMenu) {
           setContextMenu(null);
+          return;
+        }
+        if (assemblyStep > 0) {
+          setAssemblyStep(0);
           return;
         }
         setSelectedPartId(null);
@@ -806,8 +1007,20 @@ export default function App() {
         case 'r':
           setTool('rotate');
           break;
+        case 's':
+          setTool('resize');
+          break;
         case 'w':
           setTool('screw');
+          break;
+        case 't':
+          setTool('measure');
+          break;
+        case 'l':
+          setLedUnderCabinet((v) => !v);
+          break;
+        case 'o':
+          setOpenAmount((v) => (v > 0.1 ? 0 : 1));
           break;
         case 'm':
           setMagneticSnap((m) => !m);
@@ -840,10 +1053,13 @@ export default function App() {
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [
     anyModalOpen,
+    materialsModalOpen,
+    cabinetBuilderOpen,
     sketchOpen,
     cutListOpen,
     addPartOpen,
     contextMenu,
+    assemblyStep,
     handleUndo,
     handleRedo,
     handleDuplicatePart,
@@ -914,6 +1130,23 @@ export default function App() {
     [project.parts, activeScrewType]
   );
 
+  const selectedGroupBounds = useMemo(() => {
+    if (!selectedPart?.groupId) return null;
+    return getGroupBoundingSizeMm(project.parts, selectedPart.groupId);
+  }, [selectedPart, project.parts]);
+
+  const selectedCanUngroup = useMemo(
+    () =>
+      selectedPartIds.length > 0 &&
+      project.parts.some((p) => selectedPartIds.includes(p.id) && Boolean(p.groupId)),
+    [project.parts, selectedPartIds]
+  );
+
+  const activeAssemblyMeta =
+    assemblyStep > 0
+      ? ASSEMBLY_STEPS.find((s) => s.step === assemblyStep) ?? ASSEMBLY_STEPS[0]
+      : null;
+
   const snapMm = SNAP_STEPS[snapIdx];
 
   return (
@@ -962,10 +1195,17 @@ export default function App() {
           </button>
           <button
             type="button"
+            onClick={() => setMaterialsModalOpen(true)}
+            className="hover:text-white transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+          >
+            Materiały
+          </button>
+          <button
+            type="button"
             onClick={() => setCutListOpen(true)}
             className="hover:text-white transition-colors whitespace-nowrap shrink-0 cursor-pointer"
           >
-            Rozkrój i 2D
+            Rozkrój / Wycena
           </button>
           <button
             type="button"
@@ -980,6 +1220,15 @@ export default function App() {
         <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
           <button
             type="button"
+            onClick={() => setCabinetBuilderOpen(true)}
+            className="flex min-h-[34px] items-center gap-1.5 rounded-lg border border-emerald-500/50 bg-emerald-500/12 px-2.5 sm:px-3 text-xs font-medium text-emerald-300 hover:bg-emerald-500/20 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+            title="Kreator parametrycznej szafki, szuflad i frontów"
+          >
+            <LayoutPanelTop className="h-3.5 w-3.5 shrink-0" />
+            <span className="hidden sm:inline">Szafka</span>
+          </button>
+          <button
+            type="button"
             onClick={() => {
               setSketchEditingPart(null);
               setSketchOpen(true);
@@ -988,7 +1237,7 @@ export default function App() {
             title="Narysuj własny kształt płyty 2D"
           >
             <PenTool className="h-3.5 w-3.5 text-amber-400 shrink-0" />
-            <span>Rysuj 2D</span>
+            <span className="hidden sm:inline">Rysuj 2D</span>
           </button>
           <button
             type="button"
@@ -996,7 +1245,7 @@ export default function App() {
             className="flex min-h-[34px] items-center gap-1.5 rounded-lg bg-amber-500 px-2.5 sm:px-3.5 text-xs font-semibold text-zinc-950 hover:bg-amber-400 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
           >
             <Plus className="h-4 w-4 shrink-0" />
-            <span>Dodaj płytę</span>
+            <span>Dodaj</span>
           </button>
         </div>
       </header>
@@ -1042,6 +1291,68 @@ export default function App() {
         )}
       </div>
 
+      {/* Step-by-Step Workshop Assembly Guide Bar (visible only when active) */}
+      {activeAssemblyMeta && (
+        <div className="fixed top-14 left-1/2 z-30 -translate-x-1/2 max-w-[min(640px,calc(100vw-24px))] rounded-xl border border-emerald-500/50 bg-[#141518]/[0.96] px-3.5 py-2 text-zinc-100 shadow-2xl">
+          <div className="flex flex-wrap items-center justify-between gap-2.5">
+            <div className="flex items-center gap-1">
+              <button
+                type="button"
+                disabled={assemblyStep <= 1}
+                onClick={() => setAssemblyStep((s) => Math.max(1, s - 1))}
+                className="flex h-7 w-7 items-center justify-center rounded-md border border-zinc-700 bg-zinc-900 text-zinc-200 hover:bg-zinc-800 disabled:opacity-35 cursor-pointer"
+                aria-label="Poprzedni etap montażu"
+              >
+                <ChevronLeft className="h-4 w-4" />
+              </button>
+              {ASSEMBLY_STEPS.map((s) => (
+                <button
+                  key={s.step}
+                  type="button"
+                  onClick={() => setAssemblyStep(s.step)}
+                  className={`flex h-7 w-7 items-center justify-center rounded-md text-xs font-mono-num font-semibold cursor-pointer ${
+                    assemblyStep === s.step
+                      ? 'bg-emerald-500 text-zinc-950'
+                      : s.step < assemblyStep
+                        ? 'bg-emerald-500/20 text-emerald-300'
+                        : 'bg-zinc-900 text-zinc-400 hover:text-white'
+                  }`}
+                >
+                  {s.step}
+                </button>
+              ))}
+              <button
+                type="button"
+                disabled={assemblyStep >= ASSEMBLY_STEPS.length}
+                onClick={() => setAssemblyStep((s) => Math.min(ASSEMBLY_STEPS.length, s + 1))}
+                className="flex h-7 w-7 items-center justify-center rounded-md border border-zinc-700 bg-zinc-900 text-zinc-200 hover:bg-zinc-800 disabled:opacity-35 cursor-pointer"
+                aria-label="Następny etap montażu"
+              >
+                <ChevronRight className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="min-w-0 flex-1">
+              <div className="text-xs font-semibold text-emerald-300 truncate">
+                Krok {activeAssemblyMeta.step}/5: {activeAssemblyMeta.title}
+              </div>
+              <div className="text-[11px] text-zinc-400 truncate">
+                {activeAssemblyMeta.desc}
+              </div>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => setAssemblyStep(0)}
+              className="flex h-7 w-7 items-center justify-center rounded-md text-zinc-400 hover:bg-zinc-800 hover:text-white cursor-pointer shrink-0"
+              title="Zakończ podgląd montażu"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Subtle Toast Notification */}
       {toastMsg && (
         <div className="pointer-events-none fixed top-15 left-1/2 z-50 -translate-x-1/2 rounded-xl border border-zinc-700 bg-[#141518] px-4 py-2 text-xs font-medium text-zinc-100 shadow-xl whitespace-nowrap">
@@ -1072,7 +1383,12 @@ export default function App() {
           showDimensions={showDimensions}
           xrayMode={xrayMode}
           showFasteners={showFasteners}
+          ledUnderCabinet={ledUnderCabinet}
+          measurements={measurements}
           explodedAmount={explodedAmount}
+          openAmount={openAmount}
+          assemblyStep={assemblyStep}
+          materialsVersion={materialsVersion}
           lighting={lighting}
           customTextures={customTextures}
           collidingPartIds={collisionReport.collidingIds}
@@ -1083,9 +1399,11 @@ export default function App() {
           onSelectFastener={handleSelectFastener}
           onTransformPart={handleTransformPart}
           onCloneTransformPart={handleCloneTransformPart}
+          onResizePart={handleResizePart}
+          onAddMeasurement={handleAddMeasurement}
           onPlaceFastener={handlePlaceFastener}
           onRejectScrewPlacement={(reason) =>
-            showToast(`Wkręt zablokowany: ${reason} (wyłącz „Tylko styki”, aby wymusić)`)
+            showToast(`Wkręt zablokowany: ${reason} (wyłącz „Styki”, aby wymusić)`)
           }
           onContextMenu={setContextMenu}
         />
@@ -1095,6 +1413,7 @@ export default function App() {
       <ContextMenu
         menu={contextMenu}
         selectedCount={selectedPartIds.length}
+        selectedCanUngroup={selectedCanUngroup}
         onClose={() => setContextMenu(null)}
         onOpenInspector={(id) => {
           setSelectedPartId(id);
@@ -1113,6 +1432,8 @@ export default function App() {
         onRotate90Y={handleRotate90Y}
         onDropToFloor={handleDropToFloor}
         onAutoFastenPart={(id) => handleAutoFasteners(id)}
+        onGroupSelected={handleGroupSelected}
+        onUngroupSelected={handleUngroupSelected}
         onDeletePart={handleDeletePart}
         onDeleteFastener={handleDeleteFastener}
         onAddPart={() => setAddPartOpen(true)}
@@ -1149,8 +1470,19 @@ export default function App() {
         onToggleXray={() => setXrayMode((x) => !x)}
         showFasteners={showFasteners}
         onToggleShowFasteners={() => setShowFasteners((s) => !s)}
+        ledUnderCabinet={ledUnderCabinet}
+        onToggleLedUnderCabinet={() => setLedUnderCabinet((l) => !l)}
+        measurementsCount={measurements.length}
+        onClearMeasurements={() => {
+          setMeasurements([]);
+          showToast('Wyczyszczono pomiary 3D');
+        }}
         explodedAmount={explodedAmount}
         onChangeExploded={setExplodedAmount}
+        openAmount={openAmount}
+        onChangeOpenAmount={setOpenAmount}
+        assemblyStep={assemblyStep}
+        onToggleAssemblyMode={() => setAssemblyStep((s) => (s > 0 ? 0 : 1))}
         lighting={lighting}
         onCycleLighting={() => {
           setLighting((curr) => {
@@ -1168,9 +1500,14 @@ export default function App() {
         onRedo={handleRedo}
         selectedPartName={selectedPart?.name ?? null}
         selectedCount={selectedPartIds.length}
+        selectedCanUngroup={selectedCanUngroup}
         selectedFastenerLabel={
           selectedFastener ? SCREW_MAP[selectedFastener.type].name : null
         }
+        onAlignSelected={handleAlignSelected}
+        onDistributeSelected={handleDistributeSelected}
+        onGroupSelected={handleGroupSelected}
+        onUngroupSelected={handleUngroupSelected}
         onOpenInspector={() => setInspectorOpen(true)}
         onDeleteSelectedFastener={() => {
           if (selectedFastenerId) handleDeleteFastener(selectedFastenerId);
@@ -1214,10 +1551,13 @@ export default function App() {
         open={inspectorOpen && Boolean(selectedPart)}
         part={selectedPart}
         partFasteners={selectedPartFasteners}
+        materialsVersion={materialsVersion}
         customTextures={customTextures}
         isColliding={Boolean(selectedPart && collisionReport.collidingIds.has(selectedPart.id))}
         clearances={selectedClearances}
         fastenerAuditMap={fastenerAuditMap}
+        groupBounds={selectedGroupBounds}
+        onSmartResizeGroup={handleSmartResizeGroup}
         onClose={() => setInspectorOpen(false)}
         onUpdatePart={handleUpdatePart}
         onDuplicatePart={handleDuplicatePart}
@@ -1235,6 +1575,7 @@ export default function App() {
 
       <AddPartDrawer
         open={addPartOpen}
+        materialsVersion={materialsVersion}
         customTextures={customTextures}
         onClose={() => setAddPartOpen(false)}
         onAddPart={handleAddPart}
@@ -1242,6 +1583,24 @@ export default function App() {
           setSketchEditingPart(null);
           setSketchOpen(true);
         }}
+        onOpenCabinetBuilder={() => setCabinetBuilderOpen(true)}
+        onOpenMaterialsManager={() => setMaterialsModalOpen(true)}
+      />
+
+      <MaterialsManagerModal
+        open={materialsModalOpen}
+        config={materialsConfig}
+        materialsVersion={materialsVersion}
+        customTextures={customTextures}
+        onClose={() => setMaterialsModalOpen(false)}
+        onChangeConfig={handleChangeMaterialsConfig}
+        onSetCustomTexture={handleSetCustomTexture}
+      />
+
+      <CabinetBuilderModal
+        open={cabinetBuilderOpen}
+        onClose={() => setCabinetBuilderOpen(false)}
+        onInsertCabinet={handleInsertCabinet}
       />
 
       <ShapeSketchModal
@@ -1262,8 +1621,12 @@ export default function App() {
       <CutListModal
         open={cutListOpen}
         project={project}
+        materialsVersion={materialsVersion}
         fastenerAuditMap={fastenerAuditMap}
         collisionCount={collisionReport.pairs.length}
+        quoteSettings={quoteSettings}
+        onChangeQuoteSettings={setQuoteSettings}
+        onCaptureSnapshot={() => viewportRef.current?.captureSnapshot() ?? null}
         onClose={() => setCutListOpen(false)}
         onImportProject={(imported) => {
           const importedCopy: FurnitureProject = {

@@ -1,6 +1,10 @@
 import {
+  DEFAULT_QUOTE_SETTINGS,
   MATERIAL_MAP,
   SCREW_MAP,
+  type ApplianceModel,
+  type DadoGrooveConfig,
+  type DrawerSlideType,
   type EdgeBandingConfig,
   type EdgeBandingThickness,
   type Fastener,
@@ -8,12 +12,20 @@ import {
   type FurnitureProject,
   type HandleSide,
   type MaterialId,
+  type MaterialMeta,
+  type MaterialsCatalogConfig,
+  type MiterEdgesConfig,
+  type PartCutout,
   type PartKind,
+  type QuoteSettings,
   type ScrewType,
+  type SurfaceFinish,
 } from '../types/furniture';
 
 const LEGACY_STORAGE_KEY = 'stolarz3d_project_v1';
 const PROJECTS_STORAGE_KEY = 'stolarz3d_projects_v2';
+const QUOTE_SETTINGS_KEY = 'stolarz3d_quote_settings_v1';
+const MATERIALS_CATALOG_KEY = 'stolarz3d_materials_catalog_v1';
 
 const IDB_NAME = 'stolarz3d_assets_db';
 const IDB_VERSION = 1;
@@ -31,6 +43,15 @@ const VALID_KINDS = new Set<PartKind>([
   'door',
   'countertop',
   'custom',
+  'appliance',
+]);
+
+const VALID_APPLIANCES = new Set<ApplianceModel>([
+  'wardrobe_rod',
+  'induction_hob',
+  'kitchen_sink',
+  'builtin_oven',
+  'wire_cargo',
 ]);
 
 const VALID_HANDLES = new Set<HandleSide>(['left', 'right', 'top', 'none']);
@@ -85,6 +106,58 @@ function sanitizePolygon(raw: unknown): [number, number][] | undefined {
   return pts.length >= 3 ? pts : undefined;
 }
 
+const VALID_FINISHES = new Set<SurfaceFinish>(['matte', 'satin', 'gloss']);
+const VALID_SLIDES = new Set<DrawerSlideType>(['none', 'ball_26mm', 'undermount_blum']);
+const VALID_HW_TAGS = new Set(['leg', 'drawer_front', 'drawer_box', 'door_overlay', 'door_inset']);
+
+function sanitizeCutouts(raw: unknown): PartCutout[] | undefined {
+  if (!Array.isArray(raw) || raw.length === 0) return undefined;
+  const out: PartCutout[] = [];
+  for (let i = 0; i < raw.length; i++) {
+    const item = raw[i];
+    if (!item || typeof item !== 'object') continue;
+    const c = item as Record<string, unknown>;
+    const shape = c.shape === 'circle' ? 'circle' : 'rect';
+    out.push({
+      id: typeof c.id === 'string' && c.id.trim() ? c.id.trim() : `cut_${i}`,
+      shape,
+      xMm: toFiniteNumber(c.xMm, 0, -5000, 5000),
+      yMm: toFiniteNumber(c.yMm, 0, -5000, 5000),
+      widthMm: toFiniteNumber(c.widthMm, 120, 10, 4000),
+      heightMm: toFiniteNumber(c.heightMm, 120, 10, 4000),
+      diameterMm: shape === 'circle' ? toFiniteNumber(c.diameterMm, 60, 10, 2000) : undefined,
+      label: typeof c.label === 'string' ? c.label.slice(0, 40) : undefined,
+    });
+  }
+  return out.length > 0 ? out : undefined;
+}
+
+function sanitizeDadoGroove(raw: unknown): DadoGrooveConfig | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const g = raw as Record<string, unknown>;
+  if (!g.enabled) return undefined;
+  const edge = g.edge === 'bottom' || g.edge === 'top' ? g.edge : 'back';
+  return {
+    enabled: true,
+    edge,
+    insetMm: toFiniteNumber(g.insetMm, 16, 4, 80),
+    widthMm: toFiniteNumber(g.widthMm, 4, 2, 20),
+    depthMm: toFiniteNumber(g.depthMm, 8, 2, 16),
+  };
+}
+
+function sanitizeMiter45(raw: unknown): MiterEdgesConfig | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const m = raw as Record<string, unknown>;
+  const res: MiterEdgesConfig = {
+    left: Boolean(m.left),
+    right: Boolean(m.right),
+    top: Boolean(m.top),
+    bottom: Boolean(m.bottom),
+  };
+  return res.left || res.right || res.top || res.bottom ? res : undefined;
+}
+
 export function sanitizeImportedProject(
   raw: unknown
 ): { project: FurnitureProject | null; error?: string } {
@@ -122,7 +195,8 @@ export function sanitizeImportedProject(
       : 'panel';
 
     const rawMat = typeof p.materialId === 'string' ? (p.materialId as MaterialId) : 'osb3';
-    const materialId: MaterialId = rawMat in MATERIAL_MAP ? rawMat : 'osb3';
+    const materialId: MaterialId =
+      rawMat in MATERIAL_MAP || rawMat.startsWith('custom_mat_') ? rawMat : 'osb3';
 
     const width = toFiniteNumber(p.width, 600, 4, 10000);
     const height = toFiniteNumber(p.height, 400, 4, 10000);
@@ -157,6 +231,43 @@ export function sanitizeImportedProject(
         typeof p.groupId === 'string' && p.groupId.trim()
           ? p.groupId.trim().slice(0, 40)
           : undefined,
+      surfaceFinish:
+        typeof p.surfaceFinish === 'string' && VALID_FINISHES.has(p.surfaceFinish as SurfaceFinish)
+          ? (p.surfaceFinish as SurfaceFinish)
+          : undefined,
+      cornerRadiusMm:
+        p.cornerRadiusMm !== undefined
+          ? toFiniteNumber(p.cornerRadiusMm, 0, 0, 250) || undefined
+          : undefined,
+      cutouts: sanitizeCutouts(p.cutouts),
+      dadoGroove: sanitizeDadoGroove(p.dadoGroove),
+      miter45: sanitizeMiter45(p.miter45),
+      hingeSide:
+        typeof p.hingeSide === 'string' && VALID_HANDLES.has(p.hingeSide as HandleSide)
+          ? (p.hingeSide as HandleSide)
+          : undefined,
+      hingeCount:
+        p.hingeCount !== undefined
+          ? Math.round(toFiniteNumber(p.hingeCount, 0, 0, 6)) || undefined
+          : undefined,
+      drawerSlideType:
+        typeof p.drawerSlideType === 'string' &&
+        VALID_SLIDES.has(p.drawerSlideType as DrawerSlideType)
+          ? (p.drawerSlideType as DrawerSlideType)
+          : undefined,
+      hardwareTag:
+        typeof p.hardwareTag === 'string' && VALID_HW_TAGS.has(p.hardwareTag)
+          ? (p.hardwareTag as FurniturePart['hardwareTag'])
+          : undefined,
+      applianceModel:
+        typeof p.applianceModel === 'string' &&
+        VALID_APPLIANCES.has(p.applianceModel as ApplianceModel)
+          ? (p.applianceModel as ApplianceModel)
+          : undefined,
+      appliancePricePln:
+        p.appliancePricePln !== undefined
+          ? toFiniteNumber(p.appliancePricePln, 0, 0, 100000)
+          : undefined,
     };
 
     sanitizedParts.push(part);
@@ -185,12 +296,28 @@ export function sanitizeImportedProject(
       const normalizedNormal: [number, number, number] =
         nLen > 1e-4 ? [localNormal[0] / nLen, localNormal[1] / nLen, localNormal[2] / nLen] : [0, 0, 1];
 
+      const targetPartId =
+        typeof f.targetPartId === 'string' && seenPartIds.has(f.targetPartId)
+          ? f.targetPartId
+          : undefined;
+      const jointAxis =
+        f.jointAxis === 'x' || f.jointAxis === 'y' || f.jointAxis === 'z'
+          ? f.jointAxis
+          : undefined;
+      const jointParamU =
+        typeof f.jointParamU === 'number' && Number.isFinite(f.jointParamU)
+          ? Math.max(0, Math.min(1, f.jointParamU))
+          : undefined;
+
       sanitizedFasteners.push({
         id,
         partId,
         type,
         localPosition,
         localNormal: normalizedNormal,
+        targetPartId,
+        jointAxis,
+        jointParamU,
       });
     }
   }
@@ -271,6 +398,29 @@ export function saveProjectStore(store: ProjectStoreState): boolean {
   }
 }
 
+export function loadQuoteSettings(): QuoteSettings {
+  try {
+    const raw = localStorage.getItem(QUOTE_SETTINGS_KEY);
+    if (!raw) return { ...DEFAULT_QUOTE_SETTINGS };
+    const parsed = JSON.parse(raw) as Partial<QuoteSettings>;
+    return {
+      ...DEFAULT_QUOTE_SETTINGS,
+      ...parsed,
+      vatPercent: parsed.vatPercent === 8 ? 8 : 23,
+    };
+  } catch {
+    return { ...DEFAULT_QUOTE_SETTINGS };
+  }
+}
+
+export function saveQuoteSettings(settings: QuoteSettings): void {
+  try {
+    localStorage.setItem(QUOTE_SETTINGS_KEY, JSON.stringify(settings));
+  } catch {
+    // ignore storage quota errors
+  }
+}
+
 /* ==================== IndexedDB for Custom Textures ==================== */
 
 function openTexturesDb(): Promise<IDBDatabase | null> {
@@ -305,7 +455,7 @@ export async function loadSavedCustomTextures(): Promise<Partial<Record<Material
         const cursor = req.result;
         if (cursor) {
           const key = String(cursor.key) as MaterialId;
-          if (key in MATERIAL_MAP && typeof cursor.value === 'string') {
+          if ((key in MATERIAL_MAP || key.startsWith('custom_mat_')) && typeof cursor.value === 'string') {
             result[key] = cursor.value;
           }
           cursor.continue();
@@ -395,3 +545,56 @@ export function compressTextureDataUrl(
     img.src = rawDataUrl;
   });
 }
+
+/** Loads persisted user warehouse materials & built-in price/sheet overrides */
+export function loadMaterialsConfig(): MaterialsCatalogConfig {
+  try {
+    const raw = localStorage.getItem(MATERIALS_CATALOG_KEY);
+    if (!raw) return { customMaterials: [], builtInOverrides: {} };
+    const parsed = JSON.parse(raw) as Partial<MaterialsCatalogConfig>;
+    const customMaterials: MaterialMeta[] = Array.isArray(parsed.customMaterials)
+      ? parsed.customMaterials
+          .filter(
+            (m): m is MaterialMeta =>
+              Boolean(m && typeof m.id === 'string' && typeof m.name === 'string')
+          )
+          .map((m) => ({
+            id: m.id,
+            name: String(m.name).slice(0, 60),
+            shortName: String(m.shortName || m.name).slice(0, 22),
+            category:
+              m.category === 'Płyty konstrukcyjne' ||
+              m.category === 'Blaty' ||
+              m.category === 'Stal i szkło'
+                ? m.category
+                : 'Płyty meblowe',
+            defaultThicknessMm: toFiniteNumber(m.defaultThicknessMm, 18, 3, 60),
+            sheetWidthMm: toFiniteNumber(m.sheetWidthMm, 2800, 500, 6000),
+            sheetHeightMm: toFiniteNumber(m.sheetHeightMm, 2070, 500, 4000),
+            pricePerM2Pln: toFiniteNumber(m.pricePerM2Pln, 85, 1, 5000),
+            swatchFallbackHex:
+              typeof m.swatchFallbackHex === 'string' && /^#[0-9A-Fa-f]{6}$/.test(m.swatchFallbackHex)
+                ? m.swatchFallbackHex
+                : '#B89B72',
+            isCustom: true,
+            grainDirectional: Boolean(m.grainDirectional),
+          }))
+      : [];
+    const builtInOverrides =
+      parsed.builtInOverrides && typeof parsed.builtInOverrides === 'object'
+        ? parsed.builtInOverrides
+        : {};
+    return { customMaterials, builtInOverrides };
+  } catch {
+    return { customMaterials: [], builtInOverrides: {} };
+  }
+}
+
+export function saveMaterialsConfig(config: MaterialsCatalogConfig): void {
+  try {
+    localStorage.setItem(MATERIALS_CATALOG_KEY, JSON.stringify(config));
+  } catch {
+    // Ignore quota errors
+  }
+}
+

@@ -820,7 +820,7 @@ export function computeJointZones(
 
   const screwOrder: Fastener['type'][] = [
     preferredScrewType,
-    ...(['wood_4x45', 'confirmat_7x50', 'dowel_8x35', 'bolt_m8'] as Fastener['type'][]).filter(
+    ...(['wood_4x45', 'confirmat_7x50', 'minifix_15', 'dowel_8x35', 'bolt_m8'] as Fastener['type'][]).filter(
       (t) => t !== preferredScrewType
     ),
   ];
@@ -1070,7 +1070,7 @@ export function evaluateScrewPlacement(
 
   // If the clicked/snapped spot hits a board but chosen screw is slightly too short/long, check if a catalog screw fits
   if (autoFitLength && audit && audit.status !== 'ok') {
-    const fallbacks = (['wood_4x45', 'confirmat_7x50', 'dowel_8x35', 'bolt_m8'] as Fastener['type'][]).filter(
+    const fallbacks = (['wood_4x45', 'confirmat_7x50', 'minifix_15', 'dowel_8x35', 'bolt_m8'] as Fastener['type'][]).filter(
       (t) => t !== screwType
     );
     for (const fb of fallbacks) {
@@ -1671,3 +1671,145 @@ export function createEvenShelfArray(
 
   return { newParts, clearanceMm };
 }
+
+/**
+ * Aligns 2+ selected boards to a common Left/Right/CenterX/Bottom/Top/Front/Back edge
+ * while preserving exact geometry and resyncing relational fasteners.
+ */
+export function alignSelectedParts(
+  parts: FurniturePart[],
+  fasteners: Fastener[],
+  selectedIds: string[],
+  mode: import('../types/furniture').AlignMode
+): { parts: FurniturePart[]; fasteners: Fastener[] } {
+  const idSet = new Set(selectedIds);
+  const targets = parts.filter((p) => idSet.has(p.id));
+  if (targets.length < 2) return { parts, fasteners };
+
+  const boxes = new Map<string, WorldBox>();
+  let minX = Infinity,
+    maxX = -Infinity,
+    minY = Infinity,
+    maxY = -Infinity,
+    minZ = Infinity,
+    maxZ = -Infinity;
+
+  for (const p of targets) {
+    const b = getPartWorldBox(p);
+    boxes.set(p.id, b);
+    minX = Math.min(minX, b.minX);
+    maxX = Math.max(maxX, b.maxX);
+    minY = Math.min(minY, b.minY);
+    maxY = Math.max(maxY, b.maxY);
+    minZ = Math.min(minZ, b.minZ);
+    maxZ = Math.max(maxZ, b.maxZ);
+  }
+  const midX = (minX + maxX) / 2;
+
+  const nextParts = parts.map((p) => {
+    if (!idSet.has(p.id)) return p;
+    const b = boxes.get(p.id)!;
+    let dx = 0,
+      dy = 0,
+      dz = 0;
+    if (mode === 'left') dx = minX - b.minX;
+    else if (mode === 'right') dx = maxX - b.maxX;
+    else if (mode === 'centerX') dx = midX - (b.minX + b.maxX) / 2;
+    else if (mode === 'bottom') dy = minY - b.minY;
+    else if (mode === 'top') dy = maxY - b.maxY;
+    else if (mode === 'front') dz = maxZ - b.maxZ;
+    else if (mode === 'back') dz = minZ - b.minZ;
+
+    if (Math.abs(dx) < 0.1 && Math.abs(dy) < 0.1 && Math.abs(dz) < 0.1) return p;
+    return {
+      ...p,
+      position: [
+        Math.round((p.position[0] + dx) * 10) / 10,
+        Math.max(10, Math.round((p.position[1] + dy) * 10) / 10),
+        Math.round((p.position[2] + dz) * 10) / 10,
+      ] as [number, number, number],
+    };
+  });
+
+  const synced = syncFastenersWithParts(parts, nextParts, fasteners, idSet);
+  return { parts: nextParts, fasteners: synced.fasteners };
+}
+
+/**
+ * Evenly distributes 3+ selected boards along X, Y, or Z with identical clear gaps between them.
+ */
+export function distributeSelectedParts(
+  parts: FurniturePart[],
+  fasteners: Fastener[],
+  selectedIds: string[],
+  axis: 'x' | 'y' | 'z'
+): { parts: FurniturePart[]; fasteners: Fastener[] } {
+  const idSet = new Set(selectedIds);
+  const items = parts
+    .filter((p) => idSet.has(p.id))
+    .map((p) => {
+      const b = getPartWorldBox(p);
+      const min = axis === 'x' ? b.minX : axis === 'y' ? b.minY : b.minZ;
+      const max = axis === 'x' ? b.maxX : axis === 'y' ? b.maxY : b.maxZ;
+      return { part: p, min, max, size: max - min, center: (min + max) / 2 };
+    })
+    .sort((a, b) => a.center - b.center);
+
+  if (items.length < 3) return { parts, fasteners };
+
+  const first = items[0];
+  const last = items[items.length - 1];
+  const totalSpan = last.max - first.min;
+  const totalOccupied = items.reduce((s, it) => s + it.size, 0);
+  const gap = (totalSpan - totalOccupied) / (items.length - 1);
+
+  const deltaById = new Map<string, number>();
+  let cursor = first.min;
+  for (const it of items) {
+    const targetCenter = cursor + it.size / 2;
+    deltaById.set(it.part.id, targetCenter - it.center);
+    cursor += it.size + gap;
+  }
+
+  const nextParts = parts.map((p) => {
+    const d = deltaById.get(p.id);
+    if (d === undefined || Math.abs(d) < 0.1) return p;
+    const pos: [number, number, number] = [...p.position];
+    const idx = axis === 'x' ? 0 : axis === 'y' ? 1 : 2;
+    pos[idx] = Math.round((pos[idx] + d) * 10) / 10;
+    if (idx === 1) pos[1] = Math.max(10, pos[1]);
+    return { ...p, position: pos };
+  });
+
+  const synced = syncFastenersWithParts(parts, nextParts, fasteners, idSet);
+  return { parts: nextParts, fasteners: synced.fasteners };
+}
+
+export function groupSelectedParts(
+  parts: FurniturePart[],
+  selectedIds: string[]
+): { parts: FurniturePart[]; groupId: string } {
+  const idSet = new Set(selectedIds);
+  const groupId = `grp_${Date.now().toString(36)}`;
+  return {
+    groupId,
+    parts: parts.map((p) => (idSet.has(p.id) ? { ...p, groupId } : p)),
+  };
+}
+
+export function ungroupSelectedParts(
+  parts: FurniturePart[],
+  selectedIds: string[]
+): FurniturePart[] {
+  const idSet = new Set(selectedIds);
+  const targetGroups = new Set<string>();
+  for (const p of parts) {
+    if (idSet.has(p.id) && p.groupId) targetGroups.add(p.groupId);
+  }
+  return parts.map((p) =>
+    idSet.has(p.id) || (p.groupId && targetGroups.has(p.groupId))
+      ? { ...p, groupId: undefined }
+      : p
+  );
+}
+

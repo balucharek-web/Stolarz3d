@@ -1,5 +1,5 @@
 import {
-  MATERIAL_MAP,
+  getMaterialMeta,
   type FurniturePart,
   type MaterialId,
 } from '../types/furniture';
@@ -73,7 +73,8 @@ export interface MaterialNestingResult {
 const DIRECTIONAL_GRAIN_MATERIALS = new Set<MaterialId>(['oak_craft', 'walnut']);
 
 export function isMaterialGrainDirectional(materialId: MaterialId): boolean {
-  return DIRECTIONAL_GRAIN_MATERIALS.has(materialId);
+  if (DIRECTIONAL_GRAIN_MATERIALS.has(materialId)) return true;
+  return Boolean(getMaterialMeta(materialId).grainDirectional);
 }
 
 /**
@@ -320,8 +321,8 @@ export function nestMaterialSheets(
   const byMaterial = new Map<MaterialId, CarpentryCutSpec[]>();
 
   for (const part of parts) {
-    // Steel linear profiles are excluded from flat sheet nesting
-    if (part.kind === 'profile') continue;
+    // Steel linear profiles and 3D appliances/accessories are excluded from flat sheet nesting
+    if (part.kind === 'profile' || part.kind === 'appliance') continue;
     const spec = getCarpentryCutSpec(part);
     const list = byMaterial.get(part.materialId) ?? [];
     list.push(spec);
@@ -331,7 +332,7 @@ export function nestMaterialSheets(
   const results: MaterialNestingResult[] = [];
 
   for (const [materialId, specs] of byMaterial.entries()) {
-    const meta = MATERIAL_MAP[materialId];
+    const meta = getMaterialMeta(materialId);
     const sheetW = meta.sheetWidthMm;
     const sheetH = meta.sheetHeightMm;
     const grainLocked = isMaterialGrainDirectional(materialId);
