@@ -22,7 +22,7 @@ export type HandleSide = 'left' | 'right' | 'top' | 'none';
 
 export type EditorTool = 'select' | 'move' | 'rotate' | 'screw';
 
-export type CameraPreset = 'iso' | 'front' | 'side' | 'top';
+export type CameraPreset = 'iso' | 'front' | 'back' | 'left' | 'right' | 'side' | 'top';
 
 export type StudioLighting = 'daylight' | 'studio' | 'warm';
 
@@ -102,6 +102,12 @@ export interface Fastener {
   localPosition: [number, number, number];
   /** Outward surface normal in parent part's local space */
   localNormal: [number, number, number];
+  /** Optional mating board ID this fastener connects into (enables live joint sync!) */
+  targetPartId?: string;
+  /** Contact axis along which the joint sits */
+  jointAxis?: 'x' | 'y' | 'z';
+  /** Normalized 0..1 parametric offset along the contact patch's long span */
+  jointParamU?: number;
 }
 
 export interface FurnitureProject {

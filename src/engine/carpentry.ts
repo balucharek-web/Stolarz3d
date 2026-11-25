@@ -70,6 +70,38 @@ export function getPartQuaternion(part: FurniturePart): THREE.Quaternion {
 }
 
 /**
+ * Centers and scales a custom 2D polygon to match part.width × part.height (mm),
+ * identical to buildPartGeometry in geometry.ts so physics & 3D mesh never drift.
+ */
+export function getNormalizedCustomPolygon(
+  part: FurniturePart
+): [number, number][] | null {
+  if (part.kind !== 'custom' || !part.customPolygon || part.customPolygon.length < 3) {
+    return null;
+  }
+  let minX = Infinity;
+  let maxX = -Infinity;
+  let minY = Infinity;
+  let maxY = -Infinity;
+  for (const [px, py] of part.customPolygon) {
+    if (px < minX) minX = px;
+    if (px > maxX) maxX = px;
+    if (py < minY) minY = py;
+    if (py > maxY) maxY = py;
+  }
+  const rawW = Math.max(10, maxX - minX);
+  const rawH = Math.max(10, maxY - minY);
+  const cx = (minX + maxX) / 2;
+  const cy = (minY + maxY) / 2;
+  const scaleX = Math.max(6, part.width) / rawW;
+  const scaleY = Math.max(6, part.height) / rawH;
+  return part.customPolygon.map(([px, py]) => [
+    (px - cx) * scaleX,
+    (py - cy) * scaleY,
+  ]);
+}
+
+/**
  * Exact world-space AABB for any part (rectangular, sloped, or custom 2D polygon).
  */
 export function getPartWorldBox(
@@ -102,8 +134,9 @@ export function getPartWorldBox(
     if (wz > maxZ) maxZ = wz;
   };
 
-  if (part.kind === 'custom' && part.customPolygon && part.customPolygon.length >= 3) {
-    for (const [px, py] of part.customPolygon) {
+  const normalizedPoly = getNormalizedCustomPolygon(part);
+  if (normalizedPoly) {
+    for (const [px, py] of normalizedPoly) {
       includeLocal(px, py, -hz);
       includeLocal(px, py, hz);
     }
@@ -202,8 +235,9 @@ export function isWorldPointInsidePart(
   const hz = part.depth / 2 + toleranceMm;
   if (Math.abs(local.z) > hz) return false;
 
-  if (part.kind === 'custom' && part.customPolygon && part.customPolygon.length >= 3) {
-    return isPointInPolygon2D(local.x, local.y, part.customPolygon, toleranceMm);
+  const normalizedPoly = getNormalizedCustomPolygon(part);
+  if (normalizedPoly) {
+    return isPointInPolygon2D(local.x, local.y, normalizedPoly, toleranceMm);
   }
 
   const hw = part.width / 2;
@@ -422,6 +456,126 @@ export function detectPartCollisions(
 }
 
 /**
+ * Audits a single fastener against all parts in the scene.
+ * Shared single source of truth used by both analyzeFasteners and autoDetectJointFasteners.
+ */
+export function auditSingleFastener(
+  f: Fastener,
+  parts: FurniturePart[],
+  partMap: Map<string, FurniturePart>,
+  boxMap: Map<string, WorldBox>
+): FastenerAudit | null {
+  const host = partMap.get(f.partId);
+  if (!host) return null;
+
+  const meta = SCREW_MAP[f.type];
+  const lengthMm = meta.lengthMm;
+  const hostQuat = getPartQuaternion(host);
+  const hostPos = new THREE.Vector3(...host.position);
+
+  const headWorld = new THREE.Vector3(...f.localPosition)
+    .applyQuaternion(hostQuat)
+    .add(hostPos);
+
+  const outwardNormal = new THREE.Vector3(...f.localNormal)
+    .applyQuaternion(hostQuat)
+    .normalize();
+
+  const inwardDir = outwardNormal.clone().negate();
+
+  // Candidate neighbors whose AABB is near the screw ray
+  const tipWorld = headWorld.clone().addScaledVector(inwardDir, lengthMm);
+  const rayMinX = Math.min(headWorld.x, tipWorld.x) - 5;
+  const rayMaxX = Math.max(headWorld.x, tipWorld.x) + 5;
+  const rayMinY = Math.min(headWorld.y, tipWorld.y) - 5;
+  const rayMaxY = Math.max(headWorld.y, tipWorld.y) + 5;
+  const rayMinZ = Math.min(headWorld.z, tipWorld.z) - 5;
+  const rayMaxZ = Math.max(headWorld.z, tipWorld.z) + 5;
+
+  const candidateNeighbors = parts.filter((p) => {
+    if (p.id === host.id) return false;
+    const b = boxMap.get(p.id)!;
+    return (
+      b.maxX >= rayMinX &&
+      b.minX <= rayMaxX &&
+      b.maxY >= rayMinY &&
+      b.minY <= rayMaxY &&
+      b.maxZ >= rayMinZ &&
+      b.minZ <= rayMaxZ
+    );
+  });
+
+  const stepMm = 2;
+  const neighborHits = new Map<string, number>();
+  let tipInsideAny = false;
+  const probe = new THREE.Vector3();
+
+  for (let t = 2; t <= lengthMm; t += stepMm) {
+    probe.copy(headWorld).addScaledVector(inwardDir, t);
+    const inHost = isWorldPointInsidePart(probe, host, 0.8);
+    let inNeighbor = false;
+
+    for (const nb of candidateNeighbors) {
+      if (isWorldPointInsidePart(probe, nb, 0.8)) {
+        inNeighbor = true;
+        neighborHits.set(nb.id, (neighborHits.get(nb.id) ?? 0) + stepMm);
+      }
+    }
+
+    if (t >= lengthMm - stepMm) {
+      tipInsideAny = inHost || inNeighbor;
+    }
+  }
+
+  // Exact tip check at lengthMm - 0.5mm
+  probe.copy(headWorld).addScaledVector(inwardDir, Math.max(2, lengthMm - 0.5));
+  const tipInHost = isWorldPointInsidePart(probe, host, 0.8);
+  let tipInNeighbor = false;
+  for (const nb of candidateNeighbors) {
+    if (isWorldPointInsidePart(probe, nb, 0.8)) {
+      tipInNeighbor = true;
+      break;
+    }
+  }
+  tipInsideAny = tipInsideAny && (tipInHost || tipInNeighbor);
+
+  let bestTarget: FurniturePart | undefined;
+  let bestEmbedMm = 0;
+  for (const [nbId, mm] of neighborHits.entries()) {
+    if (mm > bestEmbedMm) {
+      bestEmbedMm = mm;
+      bestTarget = partMap.get(nbId);
+    }
+  }
+
+  if (!bestTarget || bestEmbedMm < 6) {
+    return {
+      fastenerId: f.id,
+      status: 'air',
+      reason: tipInsideAny
+        ? 'Wkręt siedzi tylko w jednej płycie (nie łapie sąsiedniego elementu).'
+        : 'Wkręt w powietrzu — nie łapie sąsiedniej płyty i wystaje z tyłu!',
+    };
+  }
+  if (!tipInsideAny) {
+    return {
+      fastenerId: f.id,
+      status: 'through',
+      targetPartName: bestTarget.name,
+      embedDepthMm: bestEmbedMm,
+      reason: `Przelot! ${meta.shortName} przechodzi na wylot przez „${bestTarget.name}”.`,
+    };
+  }
+  return {
+    fastenerId: f.id,
+    status: 'ok',
+    targetPartName: bestTarget.name,
+    embedDepthMm: bestEmbedMm,
+    reason: `OK — wkręcony w „${bestTarget.name}” na ok. ${bestEmbedMm} mm.`,
+  };
+}
+
+/**
  * Physical fastener audit: checks whether each screw/confirmat/bolt/dowel
  * actually bites into a neighboring board and doesn't poke out the other side.
  */
@@ -439,117 +593,745 @@ export function analyzeFasteners(
   }
 
   for (const f of fasteners) {
-    const host = partMap.get(f.partId);
-    if (!host) continue;
-
-    const meta = SCREW_MAP[f.type];
-    const lengthMm = meta.lengthMm;
-    const hostQuat = getPartQuaternion(host);
-    const hostPos = new THREE.Vector3(...host.position);
-
-    const headWorld = new THREE.Vector3(...f.localPosition)
-      .applyQuaternion(hostQuat)
-      .add(hostPos);
-
-    const outwardNormal = new THREE.Vector3(...f.localNormal)
-      .applyQuaternion(hostQuat)
-      .normalize();
-
-    const inwardDir = outwardNormal.clone().negate();
-
-    // Candidate neighbors whose AABB is near the screw ray
-    const tipWorld = headWorld.clone().addScaledVector(inwardDir, lengthMm);
-    const rayMinX = Math.min(headWorld.x, tipWorld.x) - 5;
-    const rayMaxX = Math.max(headWorld.x, tipWorld.x) + 5;
-    const rayMinY = Math.min(headWorld.y, tipWorld.y) - 5;
-    const rayMaxY = Math.max(headWorld.y, tipWorld.y) + 5;
-    const rayMinZ = Math.min(headWorld.z, tipWorld.z) - 5;
-    const rayMaxZ = Math.max(headWorld.z, tipWorld.z) + 5;
-
-    const candidateNeighbors = parts.filter((p) => {
-      if (p.id === host.id) return false;
-      const b = boxMap.get(p.id)!;
-      return (
-        b.maxX >= rayMinX &&
-        b.minX <= rayMaxX &&
-        b.maxY >= rayMinY &&
-        b.minY <= rayMaxY &&
-        b.maxZ >= rayMinZ &&
-        b.minZ <= rayMaxZ
-      );
-    });
-
-    const stepMm = 2;
-    const neighborHits = new Map<string, number>();
-    let tipInsideAny = false;
-    const probe = new THREE.Vector3();
-
-    for (let t = 2; t <= lengthMm; t += stepMm) {
-      probe.copy(headWorld).addScaledVector(inwardDir, t);
-      const inHost = isWorldPointInsidePart(probe, host, 0.8);
-      let inNeighbor = false;
-
-      for (const nb of candidateNeighbors) {
-        if (isWorldPointInsidePart(probe, nb, 0.8)) {
-          inNeighbor = true;
-          neighborHits.set(nb.id, (neighborHits.get(nb.id) ?? 0) + stepMm);
-        }
-      }
-
-      if (t >= lengthMm - stepMm) {
-        tipInsideAny = inHost || inNeighbor;
-      }
-    }
-
-    // Exact tip check at lengthMm - 0.5mm
-    probe.copy(headWorld).addScaledVector(inwardDir, Math.max(2, lengthMm - 0.5));
-    const tipInHost = isWorldPointInsidePart(probe, host, 0.8);
-    let tipInNeighbor = false;
-    for (const nb of candidateNeighbors) {
-      if (isWorldPointInsidePart(probe, nb, 0.8)) {
-        tipInNeighbor = true;
-        break;
-      }
-    }
-    tipInsideAny = tipInsideAny && (tipInHost || tipInNeighbor);
-
-    let bestTarget: FurniturePart | undefined;
-    let bestEmbedMm = 0;
-    for (const [nbId, mm] of neighborHits.entries()) {
-      if (mm > bestEmbedMm) {
-        bestEmbedMm = mm;
-        bestTarget = partMap.get(nbId);
-      }
-    }
-
-    if (!bestTarget || bestEmbedMm < 6) {
-      result.set(f.id, {
-        fastenerId: f.id,
-        status: 'air',
-        reason: tipInsideAny
-          ? 'Wkręt siedzi tylko w jednej płycie (nie łapie sąsiedniego elementu).'
-          : 'Wkręt w powietrzu — nie łapie sąsiedniej płyty i wystaje z tyłu!',
-      });
-    } else if (!tipInsideAny) {
-      result.set(f.id, {
-        fastenerId: f.id,
-        status: 'through',
-        targetPartName: bestTarget.name,
-        embedDepthMm: bestEmbedMm,
-        reason: `Przelot! ${meta.shortName} przechodzi na wylot przez „${bestTarget.name}”.`,
-      });
-    } else {
-      result.set(f.id, {
-        fastenerId: f.id,
-        status: 'ok',
-        targetPartName: bestTarget.name,
-        embedDepthMm: bestEmbedMm,
-        reason: `OK — wkręcony w „${bestTarget.name}” na ok. ${bestEmbedMm} mm.`,
-      });
+    const audit = auditSingleFastener(f, parts, partMap, boxMap);
+    if (audit) {
+      result.set(f.id, audit);
     }
   }
 
   return result;
+}
+
+/**
+ * Cleans bevel chamfer normals on manual screw clicks and gently snaps a clicked
+ * screw onto a touching board behind the face (within 28 mm) so carpentry screws
+ * hit the centerline of hidden 18 mm shelves reliably.
+ */
+export function snapManualFastenerToJoint(
+  partId: string,
+  rawLocalPos: [number, number, number],
+  rawLocalNorm: [number, number, number],
+  screwType: Fastener['type'],
+  parts: FurniturePart[],
+  snapRadiusMm = 28
+): { localPosition: [number, number, number]; localNormal: [number, number, number] } {
+  const partMap = new Map<string, FurniturePart>();
+  const boxMap = new Map<string, WorldBox>();
+  for (const p of parts) {
+    partMap.set(p.id, p);
+    boxMap.set(p.id, getPartWorldBox(p));
+  }
+
+  const host = partMap.get(partId);
+  if (!host) {
+    return { localPosition: rawLocalPos, localNormal: rawLocalNorm };
+  }
+
+  // 1. Clean 45° bevel chamfer normals on orthogonal board faces
+  let norm: [number, number, number] = [...rawLocalNorm];
+  let pos: [number, number, number] = [...rawLocalPos];
+  const ax = Math.abs(norm[0]);
+  const ay = Math.abs(norm[1]);
+  const az = Math.abs(norm[2]);
+
+  if (host.kind === 'panel' || host.kind === 'profile' || host.kind === 'door' || host.kind === 'countertop') {
+    if (ax >= ay && ax >= az) {
+      const s = norm[0] >= 0 ? 1 : -1;
+      norm = [s, 0, 0];
+      pos[0] = Number(((s * host.width) / 2).toFixed(1));
+    } else if (ay >= ax && ay >= az) {
+      const s = norm[1] >= 0 ? 1 : -1;
+      norm = [0, s, 0];
+      pos[1] = Number(((s * host.height) / 2).toFixed(1));
+    } else {
+      const s = norm[2] >= 0 ? 1 : -1;
+      norm = [0, 0, s];
+      pos[2] = Number(((s * host.depth) / 2).toFixed(1));
+    }
+  } else if (az > 0.65) {
+    // Broad front/back face of sloped or custom board
+    const s = norm[2] >= 0 ? 1 : -1;
+    norm = [0, 0, s];
+    pos[2] = Number(((s * host.depth) / 2).toFixed(1));
+  }
+
+  const testCandidate = (candPos: [number, number, number]): FastenerAudit | null =>
+    auditSingleFastener(
+      { id: '__probe__', partId, type: screwType, localPosition: candPos, localNormal: norm },
+      parts,
+      partMap,
+      boxMap
+    );
+
+  // 2. Search for a touching neighbor behind the clicked point within snapRadiusMm
+  // and always snap onto the thin mating board's exact centerline (e.g. 9 mm in 18 mm board)
+  const hostQuat = getPartQuaternion(host);
+  const invHostQuat = hostQuat.clone().invert();
+  const hostPos = new THREE.Vector3(...host.position);
+  const headWorld = new THREE.Vector3(...pos).applyQuaternion(hostQuat).add(hostPos);
+  const inwardWorld = new THREE.Vector3(...norm).applyQuaternion(hostQuat).normalize().negate();
+
+  // Probe point just past the back side of the host along inwardWorld
+  const screwLen = SCREW_MAP[screwType].lengthMm;
+  let bestSnapPos: [number, number, number] | null = null;
+  let bestDistSq = snapRadiusMm * snapRadiusMm;
+
+  for (const nb of parts) {
+    if (nb.id === host.id || nb.kind === 'door' || nb.materialId === 'glass_clear') continue;
+    const nbox = boxMap.get(nb.id)!;
+
+    // Check if neighbor lies along the inward ray (within screw length + small tolerance)
+    const sampleDepth = Math.min(screwLen - 6, Math.max(18, screwLen * 0.65));
+    const probeW = headWorld.clone().addScaledVector(inwardWorld, sampleDepth);
+
+    // Closest point on neighbor AABB to probeW
+    const clampedX = Math.max(nbox.minX, Math.min(nbox.maxX, probeW.x));
+    const clampedY = Math.max(nbox.minY, Math.min(nbox.maxY, probeW.y));
+    const clampedZ = Math.max(nbox.minZ, Math.min(nbox.maxZ, probeW.z));
+
+    const dx = clampedX - probeW.x;
+    const dy = clampedY - probeW.y;
+    const dz = clampedZ - probeW.z;
+    const distSq = dx * dx + dy * dy + dz * dz;
+    if (distSq > bestDistSq) continue;
+
+    // Pull laterally toward the center of the thin dimension of the neighbor
+    const targetW = new THREE.Vector3(
+      nbox.maxX - nbox.minX <= 50 ? (nbox.minX + nbox.maxX) / 2 : clampedX,
+      nbox.maxY - nbox.minY <= 50 ? (nbox.minY + nbox.maxY) / 2 : clampedY,
+      nbox.maxZ - nbox.minZ <= 50 ? (nbox.minZ + nbox.maxZ) / 2 : clampedZ
+    );
+
+    // Project lateral offset back onto the host's clicked face plane
+    const offsetW = targetW.clone().sub(headWorld);
+    const alongNormal = offsetW.dot(inwardWorld);
+    offsetW.addScaledVector(inwardWorld, -alongNormal);
+    if (offsetW.lengthSq() > bestDistSq) continue;
+
+    const snappedHeadW = headWorld.clone().add(offsetW);
+    if (!isWorldPointInsidePart(snappedHeadW, host, 1.5)) continue;
+
+    const relLocal = snappedHeadW.clone().sub(hostPos).applyQuaternion(invHostQuat);
+    const candPos: [number, number, number] = [
+      Number(relLocal.x.toFixed(1)),
+      Number(relLocal.y.toFixed(1)),
+      Number(relLocal.z.toFixed(1)),
+    ];
+    // Preserve exact face depth coordinate
+    if (Math.abs(norm[0]) > 0.9) candPos[0] = pos[0];
+    if (Math.abs(norm[1]) > 0.9) candPos[1] = pos[1];
+    if (Math.abs(norm[2]) > 0.9) candPos[2] = pos[2];
+
+    const check = testCandidate(candPos);
+    if (check?.status === 'ok') {
+      bestDistSq = offsetW.lengthSq();
+      bestSnapPos = candPos;
+    }
+  }
+
+  return {
+    localPosition: bestSnapPos ?? pos,
+    localNormal: norm,
+  };
+}
+
+export interface JointZone {
+  id: string;
+  hostPartId: string;
+  targetPartId: string;
+  targetPartName: string;
+  axis: 'x' | 'y' | 'z';
+  /** Outer host face coordinate along contact axis (mm) */
+  faceCoordMm: number;
+  /** Outward unit normal in world space */
+  normalWorld: [number, number, number];
+  /** Center of the mounting strip on the outer host face (world mm) */
+  worldCenter: [number, number, number];
+  /** Size of the mounting strip [sx, sy, sz] in world mm (thin along contact axis) */
+  worldSize: [number, number, number];
+  /** Long axis index (0=X, 1=Y, 2=Z) and bounds along the contact patch */
+  longAxisIdx: 0 | 1 | 2;
+  shortAxisIdx: 0 | 1 | 2;
+  longMin: number;
+  longMax: number;
+  shortMid: number;
+  /** Best screw type that fits this joint's thickness */
+  recommendedScrew: Fastener['type'];
+}
+
+export interface ScrewHoverFeedback {
+  partId: string;
+  localPosition: [number, number, number];
+  localNormal: [number, number, number];
+  worldPosition: [number, number, number];
+  worldNormal: [number, number, number];
+  status: FastenerAuditStatus;
+  reason: string;
+  targetPartId?: string;
+  targetPartName?: string;
+  embedDepthMm?: number;
+  recommendedType: Fastener['type'];
+  snappedToJoint: boolean;
+}
+
+function worldToPartLocalPrecise(
+  part: FurniturePart,
+  worldMm: THREE.Vector3
+): [number, number, number] {
+  const invQuat = getPartQuaternion(part).invert();
+  const rel = worldMm
+    .clone()
+    .sub(new THREE.Vector3(...part.position))
+    .applyQuaternion(invQuat);
+  return [
+    Number(rel.x.toFixed(1)),
+    Number(rel.y.toFixed(1)),
+    Number(rel.z.toFixed(1)),
+  ];
+}
+
+function worldNormalToPartLocalPrecise(
+  part: FurniturePart,
+  normalWorld: THREE.Vector3
+): [number, number, number] {
+  const invQuat = getPartQuaternion(part).invert();
+  const n = normalWorld.clone().applyQuaternion(invQuat).normalize();
+  return [Number(n.x.toFixed(3)), Number(n.y.toFixed(3)), Number(n.z.toFixed(3))];
+}
+
+/**
+ * Computes all physically valid structural contact patches ("strefy styku")
+ * across X, Y, and Z faces so the UI can highlight legal screw mounting strips
+ * and synchronize screws automatically when boards move or resize.
+ */
+export function computeJointZones(
+  parts: FurniturePart[],
+  preferredScrewType: Fastener['type'] = 'wood_4x45'
+): JointZone[] {
+  const zones: JointZone[] = [];
+  const tol = 5;
+
+  const partMap = new Map<string, FurniturePart>();
+  const boxMap = new Map<string, WorldBox>();
+  for (const p of parts) {
+    partMap.set(p.id, p);
+    boxMap.set(p.id, getPartWorldBox(p));
+  }
+
+  const screwOrder: Fastener['type'][] = [
+    preferredScrewType,
+    ...(['wood_4x45', 'confirmat_7x50', 'dowel_8x35', 'bolt_m8'] as Fastener['type'][]).filter(
+      (t) => t !== preferredScrewType
+    ),
+  ];
+
+  const evaluateAxis = (
+    a: FurniturePart,
+    b: FurniturePart,
+    ba: WorldBox,
+    bb: WorldBox,
+    axis: 'x' | 'y' | 'z',
+    oMin: [number, number, number],
+    oMax: [number, number, number]
+  ) => {
+    const idx = axis === 'x' ? 0 : axis === 'y' ? 1 : 2;
+    const uIdx = (idx === 0 ? 1 : 0) as 0 | 1 | 2;
+    const vIdx = (idx === 2 ? 1 : 2) as 0 | 1 | 2;
+
+    const uSpan = oMax[uIdx] - oMin[uIdx];
+    const vSpan = oMax[vIdx] - oMin[vIdx];
+    if (uSpan < 10 || vSpan < 10) return;
+    if (Math.max(uSpan, vSpan) < 22) return;
+
+    const thickA =
+      axis === 'x' ? ba.maxX - ba.minX : axis === 'y' ? ba.maxY - ba.minY : ba.maxZ - ba.minZ;
+    const thickB =
+      axis === 'x' ? bb.maxX - bb.minX : axis === 'y' ? bb.maxY - bb.minY : bb.maxZ - bb.minZ;
+
+    const candidates: Array<{
+      host: FurniturePart;
+      other: FurniturePart;
+      bHost: WorldBox;
+      bOther: WorldBox;
+      thick: number;
+    }> = [];
+    if (thickA <= 48) candidates.push({ host: a, other: b, bHost: ba, bOther: bb, thick: thickA });
+    if (thickB <= 48) candidates.push({ host: b, other: a, bHost: bb, bOther: ba, thick: thickB });
+    if (candidates.length === 0) return;
+
+    candidates.sort((c1, c2) => c1.thick - c2.thick);
+
+    const longAxisIdx = uSpan >= vSpan ? uIdx : vIdx;
+    const shortAxisIdx = uSpan >= vSpan ? vIdx : uIdx;
+    const longMin = oMin[longAxisIdx];
+    const longMax = oMax[longAxisIdx];
+    const shortSpan = oMax[shortAxisIdx] - oMin[shortAxisIdx];
+    const shortMid = (oMin[shortAxisIdx] + oMax[shortAxisIdx]) / 2;
+
+    for (const cand of candidates) {
+      const { host, other, bHost, bOther } = cand;
+      const hostCenter =
+        axis === 'x'
+          ? (bHost.minX + bHost.maxX) / 2
+          : axis === 'y'
+            ? (bHost.minY + bHost.maxY) / 2
+            : (bHost.minZ + bHost.maxZ) / 2;
+      const otherCenter =
+        axis === 'x'
+          ? (bOther.minX + bOther.maxX) / 2
+          : axis === 'y'
+            ? (bOther.minY + bOther.maxY) / 2
+            : (bOther.minZ + bOther.maxZ) / 2;
+
+      const hostBeforeOther = hostCenter < otherCenter;
+      const faceCoord =
+        axis === 'x'
+          ? hostBeforeOther
+            ? bHost.minX
+            : bHost.maxX
+          : axis === 'y'
+            ? hostBeforeOther
+              ? bHost.minY
+              : bHost.maxY
+            : hostBeforeOther
+              ? bHost.minZ
+              : bHost.maxZ;
+
+      const normalTuple: [number, number, number] = [
+        axis === 'x' ? (hostBeforeOther ? -1 : 1) : 0,
+        axis === 'y' ? (hostBeforeOther ? -1 : 1) : 0,
+        axis === 'z' ? (hostBeforeOther ? -1 : 1) : 0,
+      ];
+      const normalVec = new THREE.Vector3(...normalTuple);
+
+      // Probe 3 points along the long span to confirm at least one valid screw fits
+      const testFractions = [0.5, 0.25, 0.75];
+      let matchedScrew: Fastener['type'] | null = null;
+
+      for (const frac of testFractions) {
+        if (matchedScrew) break;
+        const coords: [number, number, number] = [0, 0, 0];
+        coords[idx] = faceCoord;
+        coords[longAxisIdx] = longMin + (longMax - longMin) * frac;
+        coords[shortAxisIdx] = shortMid;
+        const headW = new THREE.Vector3(...coords);
+        if (!isWorldPointInsidePart(headW, host, 1.5)) continue;
+
+        const localPos = worldToPartLocalPrecise(host, headW);
+        const localNorm = worldNormalToPartLocalPrecise(host, normalVec);
+
+        for (const st of screwOrder) {
+          const audit = auditSingleFastener(
+            {
+              id: '__zone_probe__',
+              partId: host.id,
+              type: st,
+              localPosition: localPos,
+              localNormal: localNorm,
+            },
+            parts,
+            partMap,
+            boxMap
+          );
+          if (audit && audit.status === 'ok' && audit.targetPartName === other.name) {
+            matchedScrew = st;
+            break;
+          }
+        }
+      }
+
+      if (!matchedScrew) continue;
+
+      const center: [number, number, number] = [0, 0, 0];
+      center[idx] = faceCoord;
+      center[longAxisIdx] = (longMin + longMax) / 2;
+      center[shortAxisIdx] = shortMid;
+
+      const size: [number, number, number] = [1.5, 1.5, 1.5];
+      size[longAxisIdx] = Math.max(12, longMax - longMin);
+      size[shortAxisIdx] = Math.min(28, Math.max(10, shortSpan));
+
+      zones.push({
+        id: `jz_${host.id}_${other.id}_${axis}`,
+        hostPartId: host.id,
+        targetPartId: other.id,
+        targetPartName: other.name,
+        axis,
+        faceCoordMm: faceCoord,
+        normalWorld: normalTuple,
+        worldCenter: center,
+        worldSize: size,
+        longAxisIdx,
+        shortAxisIdx,
+        longMin,
+        longMax,
+        shortMid,
+        recommendedScrew: matchedScrew,
+      });
+      return;
+    }
+  };
+
+  for (let i = 0; i < parts.length; i++) {
+    const a = parts[i];
+    if (a.kind === 'door' || a.materialId === 'glass_clear') continue;
+    const aAligned =
+      Math.abs(a.rotation[0] % 90) < 1 &&
+      Math.abs(a.rotation[1] % 90) < 1 &&
+      Math.abs(a.rotation[2] % 90) < 1;
+    if (!aAligned) continue;
+    const ba = boxMap.get(a.id)!;
+
+    for (let j = i + 1; j < parts.length; j++) {
+      const b = parts[j];
+      if (b.kind === 'door' || b.materialId === 'glass_clear') continue;
+      const bAligned =
+        Math.abs(b.rotation[0] % 90) < 1 &&
+        Math.abs(b.rotation[1] % 90) < 1 &&
+        Math.abs(b.rotation[2] % 90) < 1;
+      if (!bAligned) continue;
+      const bb = boxMap.get(b.id)!;
+
+      const oxMin = Math.max(ba.minX, bb.minX);
+      const oxMax = Math.min(ba.maxX, bb.maxX);
+      const oyMin = Math.max(ba.minY, bb.minY);
+      const oyMax = Math.min(ba.maxY, bb.maxY);
+      const ozMin = Math.max(ba.minZ, bb.minZ);
+      const ozMax = Math.min(ba.maxZ, bb.maxZ);
+
+      const ox = oxMax - oxMin;
+      const oy = oyMax - oyMin;
+      const oz = ozMax - ozMin;
+
+      const oMin: [number, number, number] = [oxMin, oyMin, ozMin];
+      const oMax: [number, number, number] = [oxMax, oyMax, ozMax];
+
+      if (ox >= -tol && ox <= tol) evaluateAxis(a, b, ba, bb, 'x', oMin, oMax);
+      if (oy >= -tol && oy <= tol) evaluateAxis(a, b, ba, bb, 'y', oMin, oMax);
+      if (oz >= -tol && oz <= tol) evaluateAxis(a, b, ba, bb, 'z', oMin, oMax);
+    }
+  }
+
+  return zones;
+}
+
+/**
+ * Live hover & click evaluation for the Screw tool:
+ * snaps cleanly onto nearby joint strips behind the hovered face, verifies
+ * real penetration depth, and returns Green ('ok') vs Red ('air'/'through') feedback.
+ */
+export function evaluateScrewPlacement(
+  partId: string,
+  rawLocalPos: [number, number, number],
+  rawLocalNorm: [number, number, number],
+  screwType: Fastener['type'],
+  parts: FurniturePart[],
+  autoFitLength = true
+): ScrewHoverFeedback | null {
+  const partMap = new Map<string, FurniturePart>();
+  const boxMap = new Map<string, WorldBox>();
+  for (const p of parts) {
+    partMap.set(p.id, p);
+    boxMap.set(p.id, getPartWorldBox(p));
+  }
+
+  const host = partMap.get(partId);
+  if (!host) return null;
+
+  const snapped = snapManualFastenerToJoint(
+    partId,
+    rawLocalPos,
+    rawLocalNorm,
+    screwType,
+    parts,
+    30
+  );
+
+  const snappedToJoint =
+    Math.hypot(
+      snapped.localPosition[0] - rawLocalPos[0],
+      snapped.localPosition[1] - rawLocalPos[1],
+      snapped.localPosition[2] - rawLocalPos[2]
+    ) > 1.2;
+
+  let chosenType: Fastener['type'] = screwType;
+  let audit = auditSingleFastener(
+    {
+      id: '__hover__',
+      partId,
+      type: chosenType,
+      localPosition: snapped.localPosition,
+      localNormal: snapped.localNormal,
+    },
+    parts,
+    partMap,
+    boxMap
+  );
+
+  // If the clicked/snapped spot hits a board but chosen screw is slightly too short/long, check if a catalog screw fits
+  if (autoFitLength && audit && audit.status !== 'ok') {
+    const fallbacks = (['wood_4x45', 'confirmat_7x50', 'dowel_8x35', 'bolt_m8'] as Fastener['type'][]).filter(
+      (t) => t !== screwType
+    );
+    for (const fb of fallbacks) {
+      const fbSnap = snapManualFastenerToJoint(partId, rawLocalPos, rawLocalNorm, fb, parts, 30);
+      const fbAudit = auditSingleFastener(
+        {
+          id: '__hover_fb__',
+          partId,
+          type: fb,
+          localPosition: fbSnap.localPosition,
+          localNormal: fbSnap.localNormal,
+        },
+        parts,
+        partMap,
+        boxMap
+      );
+      if (fbAudit?.status === 'ok') {
+        chosenType = fb;
+        audit = fbAudit;
+        snapped.localPosition = fbSnap.localPosition;
+        snapped.localNormal = fbSnap.localNormal;
+        break;
+      }
+    }
+  }
+
+  const hostQuat = getPartQuaternion(host);
+  const hostPos = new THREE.Vector3(...host.position);
+  const worldPos = new THREE.Vector3(...snapped.localPosition)
+    .applyQuaternion(hostQuat)
+    .add(hostPos);
+  const worldNorm = new THREE.Vector3(...snapped.localNormal)
+    .applyQuaternion(hostQuat)
+    .normalize();
+
+  const targetPart = audit?.targetPartName
+    ? parts.find((p) => p.id !== host.id && p.name === audit?.targetPartName)
+    : undefined;
+
+  return {
+    partId,
+    localPosition: snapped.localPosition,
+    localNormal: snapped.localNormal,
+    worldPosition: [worldPos.x, worldPos.y, worldPos.z],
+    worldNormal: [worldNorm.x, worldNorm.y, worldNorm.z],
+    status: audit?.status ?? 'air',
+    reason: audit?.reason ?? 'Brak sąsiedniej płyty za ścianką',
+    targetPartId: targetPart?.id,
+    targetPartName: audit?.targetPartName,
+    embedDepthMm: audit?.embedDepthMm,
+    recommendedType: chosenType,
+    snappedToJoint,
+  };
+}
+
+/**
+ * Enriches a fastener with relational joint metadata (targetPartId, jointAxis, jointParamU)
+ * so future moves/resizes of either board keep the screw automatically synchronized.
+ */
+export function bindFastenerToJoint(
+  fastener: Fastener,
+  parts: FurniturePart[],
+  zones?: JointZone[]
+): Fastener {
+  const host = parts.find((p) => p.id === fastener.partId);
+  if (!host) return fastener;
+
+  const activeZones = zones ?? computeJointZones(parts, fastener.type);
+  const hostQuat = getPartQuaternion(host);
+  const headWorld = new THREE.Vector3(...fastener.localPosition)
+    .applyQuaternion(hostQuat)
+    .add(new THREE.Vector3(...host.position));
+  const normWorld = new THREE.Vector3(...fastener.localNormal)
+    .applyQuaternion(hostQuat)
+    .normalize();
+
+  let bestZone: JointZone | null = null;
+  let bestScore = Infinity;
+
+  for (const z of activeZones) {
+    if (z.hostPartId !== fastener.partId) continue;
+    const dot =
+      normWorld.x * z.normalWorld[0] +
+      normWorld.y * z.normalWorld[1] +
+      normWorld.z * z.normalWorld[2];
+    if (dot < 0.85) continue;
+
+    const coords = [headWorld.x, headWorld.y, headWorld.z];
+    const axisIdx = z.axis === 'x' ? 0 : z.axis === 'y' ? 1 : 2;
+    const dFace = Math.abs(coords[axisIdx] - z.faceCoordMm);
+    const dShort = Math.abs(coords[z.shortAxisIdx] - z.shortMid);
+    const longVal = coords[z.longAxisIdx];
+    const outsideLong =
+      longVal < z.longMin - 15
+        ? z.longMin - longVal
+        : longVal > z.longMax + 15
+          ? longVal - z.longMax
+          : 0;
+
+    if (dFace > 8 || dShort > 28 || outsideLong > 20) continue;
+    const score = dFace * 2 + dShort + outsideLong;
+    if (score < bestScore) {
+      bestScore = score;
+      bestZone = z;
+    }
+  }
+
+  if (!bestZone) return fastener;
+
+  const coords = [headWorld.x, headWorld.y, headWorld.z];
+  const span = Math.max(1, bestZone.longMax - bestZone.longMin);
+  const paramU = Math.max(
+    0.05,
+    Math.min(0.95, (coords[bestZone.longAxisIdx] - bestZone.longMin) / span)
+  );
+
+  return {
+    ...fastener,
+    targetPartId: bestZone.targetPartId,
+    jointAxis: bestZone.axis,
+    jointParamU: Number(paramU.toFixed(4)),
+  };
+}
+
+/**
+ * Synchronizes all fasteners whenever one or more boards are moved or resized:
+ * - Fasteners attached to a joint slide along the host face to follow the mating shelf/panel.
+ * - Proportional spacing (`jointParamU`) adapts when boards are widened/deepened.
+ * - Screws whose joint was pulled completely apart (no longer touching) are cleanly dropped
+ *   so no floating ghost screws remain in mid-air (fully reversible with Undo!).
+ */
+export function syncFastenersWithParts(
+  prevParts: FurniturePart[],
+  nextParts: FurniturePart[],
+  fasteners: Fastener[],
+  changedPartIds: Set<string>
+): { fasteners: Fastener[]; movedCount: number; removedCount: number } {
+  if (fasteners.length === 0 || changedPartIds.size === 0) {
+    return { fasteners, movedCount: 0, removedCount: 0 };
+  }
+
+  // First bind any legacy/unbound fasteners against the PREVIOUS geometry so we know who they joined!
+  const prevZones = computeJointZones(prevParts);
+  const boundFasteners = fasteners.map((f) =>
+    f.targetPartId ? f : bindFastenerToJoint(f, prevParts, prevZones)
+  );
+
+  const nextZones = computeJointZones(nextParts);
+  const nextPartMap = new Map<string, FurniturePart>();
+  const nextBoxMap = new Map<string, WorldBox>();
+  for (const p of nextParts) {
+    nextPartMap.set(p.id, p);
+    nextBoxMap.set(p.id, getPartWorldBox(p));
+  }
+
+  let movedCount = 0;
+  let removedCount = 0;
+  const updated: Fastener[] = [];
+
+  for (const f of boundFasteners) {
+    const touchesChanged =
+      changedPartIds.has(f.partId) ||
+      (f.targetPartId ? changedPartIds.has(f.targetPartId) : false);
+
+    if (!touchesChanged || !f.targetPartId) {
+      updated.push(f);
+      continue;
+    }
+
+    // If BOTH host and target moved together by the same rigid delta (group / multiselect),
+    // the local position on host is already valid — verify quickly first!
+    if (changedPartIds.has(f.partId) && changedPartIds.has(f.targetPartId)) {
+      const quickAudit = auditSingleFastener(f, nextParts, nextPartMap, nextBoxMap);
+      if (quickAudit?.status === 'ok') {
+        updated.push(f);
+        continue;
+      }
+    }
+
+    // Look up the updated joint zone between host and target
+    const matchingZone = nextZones.find(
+      (z) =>
+        z.hostPartId === f.partId &&
+        z.targetPartId === f.targetPartId &&
+        (!f.jointAxis || z.axis === f.jointAxis)
+    );
+
+    if (!matchingZone) {
+      // Check if fastener is still physically valid (e.g. sloped roof screw into a post)
+      const stillValid = auditSingleFastener(f, nextParts, nextPartMap, nextBoxMap);
+      if (stillValid?.status === 'ok') {
+        updated.push(f);
+      } else {
+        // Boards were pulled apart — remove orphaned floating screw cleanly
+        removedCount++;
+      }
+      continue;
+    }
+
+    const host = nextPartMap.get(matchingZone.hostPartId);
+    if (!host) {
+      removedCount++;
+      continue;
+    }
+
+    const axisIdx =
+      matchingZone.axis === 'x' ? 0 : matchingZone.axis === 'y' ? 1 : 2;
+    const u = f.jointParamU ?? 0.5;
+    const longCoord =
+      matchingZone.longMin + (matchingZone.longMax - matchingZone.longMin) * u;
+
+    const coords: [number, number, number] = [0, 0, 0];
+    coords[axisIdx] = matchingZone.faceCoordMm;
+    coords[matchingZone.longAxisIdx] = longCoord;
+    coords[matchingZone.shortAxisIdx] = matchingZone.shortMid;
+
+    const headWorld = new THREE.Vector3(...coords);
+    const normWorld = new THREE.Vector3(...matchingZone.normalWorld);
+    const newLocalPos = worldToPartLocalPrecise(host, headWorld);
+    const newLocalNorm = worldNormalToPartLocalPrecise(host, normWorld);
+
+    const candidate: Fastener = {
+      ...f,
+      localPosition: newLocalPos,
+      localNormal: newLocalNorm,
+      jointAxis: matchingZone.axis,
+      jointParamU: u,
+    };
+
+    const audit = auditSingleFastener(candidate, nextParts, nextPartMap, nextBoxMap);
+    if (audit?.status === 'ok') {
+      const shifted =
+        Math.hypot(
+          newLocalPos[0] - f.localPosition[0],
+          newLocalPos[1] - f.localPosition[1],
+          newLocalPos[2] - f.localPosition[2]
+        ) > 0.5;
+      if (shifted) movedCount++;
+      updated.push(candidate);
+    } else {
+      // Try the zone's recommended screw length if board thickness changed
+      const resizedCandidate: Fastener = {
+        ...candidate,
+        type: matchingZone.recommendedScrew,
+      };
+      const retryAudit = auditSingleFastener(
+        resizedCandidate,
+        nextParts,
+        nextPartMap,
+        nextBoxMap
+      );
+      if (retryAudit?.status === 'ok') {
+        movedCount++;
+        updated.push(resizedCandidate);
+      } else {
+        removedCount++;
+      }
+    }
+  }
+
+  return { fasteners: updated, movedCount, removedCount };
 }
 
 /**

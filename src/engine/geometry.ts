@@ -1,6 +1,13 @@
 import * as THREE from 'three';
 import { Fastener, FurniturePart, ScrewType } from '../types/furniture';
-import { isWorldPointInsidePart, type FastenerAuditStatus } from './carpentry';
+import {
+  auditSingleFastener,
+  computeJointZones,
+  getPartWorldBox,
+  isWorldPointInsidePart,
+  type FastenerAuditStatus,
+  type WorldBox,
+} from './carpentry';
 
 export const MM_TO_M = 0.001;
 export const M_TO_MM = 1000;
@@ -728,151 +735,134 @@ export function getProjectDimensionsMm(parts: FurniturePart[]): {
 }
 
 /**
- * Automatically detects structural joints between touching boards and generates
- * accurately placed fasteners along each contact zone.
+ * Automatically detects structural joints between touching boards along X, Y, and Z faces
+ * and generates ONLY physically valid, relationally bound fasteners verified by auditSingleFastener.
+ * Pass `filterPartId` to auto-fasten only the joints touching one specific board (e.g. from context menu).
  */
 export function autoDetectJointFasteners(
   parts: FurniturePart[],
   existing: Fastener[],
-  screwType: ScrewType
+  screwType: ScrewType,
+  filterPartId?: string
 ): Fastener[] {
   const added: Fastener[] = [];
-  const tol = 6; // 6mm contact tolerance
+  const zones = computeJointZones(parts, screwType);
 
-  const isNearExisting = (partId: string, lx: number, ly: number, lz: number) => {
-    const checkList = [...existing, ...added];
-    for (const f of checkList) {
-      if (f.partId !== partId) continue;
-      const dx = f.localPosition[0] - lx;
-      const dy = f.localPosition[1] - ly;
-      const dz = f.localPosition[2] - lz;
-      if (dx * dx + dy * dy + dz * dz < 32 * 32) return true;
+  const partMap = new Map<string, FurniturePart>();
+  const boxMap = new Map<string, WorldBox>();
+  for (const p of parts) {
+    partMap.set(p.id, p);
+    boxMap.set(p.id, getPartWorldBox(p));
+  }
+
+  // Precompute world positions of existing fasteners so we never double-fasten the same joint spot
+  const placedWorldPoints: THREE.Vector3[] = [];
+  for (const f of existing) {
+    const host = partMap.get(f.partId);
+    if (!host) continue;
+    placedWorldPoints.push(partLocalToWorld(host, f.localPosition));
+  }
+
+  const isNearAnyFastener = (worldPt: THREE.Vector3) => {
+    for (const pt of placedWorldPoints) {
+      if (pt.distanceToSquared(worldPt) < 34 * 34) return true;
     }
     return false;
   };
 
-  for (let i = 0; i < parts.length; i++) {
-    const a = parts[i];
-    if (a.kind === 'door' || a.materialId === 'glass_clear') continue;
-    // Focus auto-joints on axis-aligned boards for clean precision
-    const aAligned =
-      Math.abs(a.rotation[0] % 90) < 1 &&
-      Math.abs(a.rotation[1] % 90) < 1 &&
-      Math.abs(a.rotation[2] % 90) < 1;
-    if (!aAligned) continue;
+  const screwOrder: ScrewType[] = [
+    screwType,
+    ...(['wood_4x45', 'confirmat_7x50', 'dowel_8x35', 'bolt_m8'] as ScrewType[]).filter(
+      (t) => t !== screwType
+    ),
+  ];
 
-    const ba = getPartWorldBoundsMm(a);
+  for (const z of zones) {
+    if (filterPartId && z.hostPartId !== filterPartId && z.targetPartId !== filterPartId) {
+      continue;
+    }
 
-    for (let j = i + 1; j < parts.length; j++) {
-      const b = parts[j];
-      if (b.kind === 'door' || b.materialId === 'glass_clear') continue;
-      const bAligned =
-        Math.abs(b.rotation[0] % 90) < 1 &&
-        Math.abs(b.rotation[1] % 90) < 1 &&
-        Math.abs(b.rotation[2] % 90) < 1;
-      if (!bAligned) continue;
+    const host = partMap.get(z.hostPartId);
+    const other = partMap.get(z.targetPartId);
+    if (!host || !other) continue;
 
-      const bb = getPartWorldBoundsMm(b);
+    const longSpan = z.longMax - z.longMin;
+    const count =
+      longSpan > 900 ? 4 : longSpan > 380 ? 3 : longSpan > 90 ? 2 : 1;
+    const margin = count === 1 ? longSpan * 0.5 : Math.min(55, longSpan * 0.22);
+    const axisIdx = z.axis === 'x' ? 0 : z.axis === 'y' ? 1 : 2;
+    const normalWorld = new THREE.Vector3(...z.normalWorld);
 
-      const oxMin = Math.max(ba.min[0], bb.min[0]);
-      const oxMax = Math.min(ba.max[0], bb.max[0]);
-      const oyMin = Math.max(ba.min[1], bb.min[1]);
-      const oyMax = Math.min(ba.max[1], bb.max[1]);
-      const ozMin = Math.max(ba.min[2], bb.min[2]);
-      const ozMax = Math.min(ba.max[2], bb.max[2]);
+    for (let k = 0; k < count; k++) {
+      const longCoord =
+        count === 1
+          ? z.longMin + longSpan * 0.5
+          : z.longMin + margin + (k / (count - 1)) * (longSpan - margin * 2);
 
-      const ox = oxMax - oxMin;
-      const oy = oyMax - oyMin;
-      const oz = ozMax - ozMin;
+      const paramU =
+        longSpan > 1 ? (longCoord - z.longMin) / longSpan : 0.5;
 
-      // Check X-face contact (e.g., shelf meeting vertical side panel)
-      if (ox >= -tol && ox <= tol && oy > 10 && oz > 35) {
-        const aIsThinX = ba.max[0] - ba.min[0] <= 45;
-        const bIsThinX = bb.max[0] - bb.min[0] <= 45;
-        const host = aIsThinX ? a : bIsThinX ? b : null;
-        if (host) {
-          const otherPart = host === a ? b : a;
-          const bHost = host === a ? ba : bb;
-          const other = host === a ? bb : ba;
-          // Drive screw from outer X face of host into other
-          const hostOnLeft = (bHost.min[0] + bHost.max[0]) / 2 < (other.min[0] + other.max[0]) / 2;
-          const worldX = hostOnLeft ? bHost.min[0] : bHost.max[0];
-          const hostThickness = bHost.max[0] - bHost.min[0];
-          const normalWorld = new THREE.Vector3(hostOnLeft ? -1 : 1, 0, 0);
-          const midY = (oyMin + oyMax) / 2;
-          const margin = Math.min(55, oz * 0.22);
-          const count = oz > 380 ? 3 : 2;
-          for (let k = 0; k < count; k++) {
-            const t = k / (count - 1);
-            const wz = ozMin + margin + t * (oz - margin * 2);
-            const headWorld = new THREE.Vector3(worldX, midY, wz);
-            const insideHost = isWorldPointInsidePart(headWorld, host, 2);
-            const targetProbe = headWorld
-              .clone()
-              .addScaledVector(normalWorld, -(hostThickness + 10));
-            const insideOther = isWorldPointInsidePart(targetProbe, otherPart, 2);
-            if (!insideHost || !insideOther) continue;
+      const coords: [number, number, number] = [0, 0, 0];
+      coords[axisIdx] = z.faceCoordMm;
+      coords[z.longAxisIdx] = longCoord;
+      coords[z.shortAxisIdx] = z.shortMid;
 
-            const localPos = worldToPartLocal(host, headWorld);
-            const localNorm = worldNormalToPartLocal(host, normalWorld);
-            if (!isNearExisting(host.id, localPos[0], localPos[1], localPos[2])) {
-              added.push({
-                id: `f_auto_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
-                partId: host.id,
-                type: screwType,
-                localPosition: localPos,
-                localNormal: localNorm,
-              });
-            }
-          }
+      const headWorld = new THREE.Vector3(coords[0], coords[1], coords[2]);
+      if (!isWorldPointInsidePart(headWorld, host, 1.5)) continue;
+      if (isNearAnyFastener(headWorld)) continue;
+
+      const localPos = worldToPartLocal(host, headWorld);
+      const localNorm = worldNormalToPartLocal(host, normalWorld);
+
+      let validType: ScrewType | null = null;
+      for (const candidateType of screwOrder) {
+        const probeFastener: Fastener = {
+          id: '__auto_probe__',
+          partId: host.id,
+          type: candidateType,
+          localPosition: localPos,
+          localNormal: localNorm,
+        };
+        const audit = auditSingleFastener(probeFastener, parts, partMap, boxMap);
+        if (audit && audit.status === 'ok' && audit.targetPartName === other.name) {
+          validType = candidateType;
+          break;
         }
       }
 
-      // Check Y-face contact (e.g., top/bottom board resting on vertical side)
-      if (oy >= -tol && oy <= tol && ox > 10 && oz > 35) {
-        const aIsThinY = ba.max[1] - ba.min[1] <= 45;
-        const bIsThinY = bb.max[1] - bb.min[1] <= 45;
-        const host = aIsThinY ? a : bIsThinY ? b : null;
-        if (host) {
-          const otherPart = host === a ? b : a;
-          const bHost = host === a ? ba : bb;
-          const other = host === a ? bb : ba;
-          const hostAbove = (bHost.min[1] + bHost.max[1]) / 2 > (other.min[1] + other.max[1]) / 2;
-          const worldY = hostAbove ? bHost.max[1] : bHost.min[1];
-          const hostThickness = bHost.max[1] - bHost.min[1];
-          const normalWorld = new THREE.Vector3(0, hostAbove ? 1 : -1, 0);
-          const midX = (oxMin + oxMax) / 2;
-          const margin = Math.min(55, oz * 0.22);
-          const count = oz > 380 ? 3 : 2;
-          for (let k = 0; k < count; k++) {
-            const t = k / (count - 1);
-            const wz = ozMin + margin + t * (oz - margin * 2);
-            const headWorld = new THREE.Vector3(midX, worldY, wz);
-            const insideHost = isWorldPointInsidePart(headWorld, host, 2);
-            const targetProbe = headWorld
-              .clone()
-              .addScaledVector(normalWorld, -(hostThickness + 10));
-            const insideOther = isWorldPointInsidePart(targetProbe, otherPart, 2);
-            if (!insideHost || !insideOther) continue;
+      if (!validType) continue;
 
-            const localPos = worldToPartLocal(host, headWorld);
-            const localNorm = worldNormalToPartLocal(host, normalWorld);
-            if (!isNearExisting(host.id, localPos[0], localPos[1], localPos[2])) {
-              added.push({
-                id: `f_auto_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
-                partId: host.id,
-                type: screwType,
-                localPosition: localPos,
-                localNormal: localNorm,
-              });
-            }
-          }
-        }
-      }
+      added.push({
+        id: `f_auto_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+        partId: host.id,
+        type: validType,
+        localPosition: localPos,
+        localNormal: localNorm,
+        targetPartId: other.id,
+        jointAxis: z.axis,
+        jointParamU: Number(paramU.toFixed(4)),
+      });
+      placedWorldPoints.push(headWorld);
     }
   }
 
   return added;
+}
+
+function partLocalToWorld(
+  part: FurniturePart,
+  localMm: [number, number, number]
+): THREE.Vector3 {
+  const euler = new THREE.Euler(
+    THREE.MathUtils.degToRad(part.rotation[0]),
+    THREE.MathUtils.degToRad(part.rotation[1]),
+    THREE.MathUtils.degToRad(part.rotation[2]),
+    'XYZ'
+  );
+  const quat = new THREE.Quaternion().setFromEuler(euler);
+  return new THREE.Vector3(localMm[0], localMm[1], localMm[2])
+    .applyQuaternion(quat)
+    .add(new THREE.Vector3(...part.position));
 }
 
 function worldToPartLocal(part: FurniturePart, worldMm: THREE.Vector3): [number, number, number] {
@@ -884,7 +874,11 @@ function worldToPartLocal(part: FurniturePart, worldMm: THREE.Vector3): [number,
   );
   const invQuat = new THREE.Quaternion().setFromEuler(euler).invert();
   const rel = worldMm.clone().sub(new THREE.Vector3(...part.position)).applyQuaternion(invQuat);
-  return [Math.round(rel.x), Math.round(rel.y), Math.round(rel.z)];
+  return [
+    Number(rel.x.toFixed(1)),
+    Number(rel.y.toFixed(1)),
+    Number(rel.z.toFixed(1)),
+  ];
 }
 
 function worldNormalToPartLocal(part: FurniturePart, normalWorld: THREE.Vector3): [number, number, number] {

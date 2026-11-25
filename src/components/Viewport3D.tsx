@@ -26,24 +26,31 @@ import {
   MM_TO_M,
 } from '../engine/geometry';
 import {
+  evaluateScrewPlacement,
   snapPartToNeighbors,
   type ClearanceGuide,
   type FastenerAudit,
+  type JointZone,
+  type ScrewHoverFeedback,
 } from '../engine/carpentry';
+import type { ContextMenuTarget } from './ContextMenu';
 
 export interface Viewport3DHandle {
   setCameraPreset: (preset: CameraPreset) => void;
   captureSnapshot: () => string | null;
   focusAll: () => void;
+  focusPart: (partId: string) => void;
 }
 
 interface Viewport3DProps {
   parts: FurniturePart[];
   fasteners: Fastener[];
   selectedPartId: string | null;
+  selectedPartIds: string[];
   selectedFastenerId: string | null;
   tool: EditorTool;
   activeScrewType: ScrewType;
+  screwJointsOnly: boolean;
   snapMm: number;
   magneticSnap: boolean;
   showDimensions: boolean;
@@ -55,9 +62,15 @@ interface Viewport3DProps {
   collidingPartIds: Set<string>;
   fastenerAuditMap: Map<string, FastenerAudit>;
   clearances: ClearanceGuide[];
-  onSelectPart: (id: string | null) => void;
+  jointZones: JointZone[];
+  onSelectPart: (id: string | null, additive?: boolean) => void;
   onSelectFastener: (id: string | null) => void;
   onTransformPart: (
+    id: string,
+    position: [number, number, number],
+    rotation: [number, number, number]
+  ) => void;
+  onCloneTransformPart: (
     id: string,
     position: [number, number, number],
     rotation: [number, number, number]
@@ -65,8 +78,12 @@ interface Viewport3DProps {
   onPlaceFastener: (
     partId: string,
     localPosition: [number, number, number],
-    localNormal: [number, number, number]
+    localNormal: [number, number, number],
+    overrideType?: ScrewType,
+    targetPartId?: string
   ) => void;
+  onRejectScrewPlacement: (reason: string) => void;
+  onContextMenu: (target: ContextMenuTarget | null) => void;
 }
 
 const _vec3A = new THREE.Vector3();
@@ -226,6 +243,11 @@ export const Viewport3D = forwardRef<Viewport3DHandle, Viewport3DProps>(
   function Viewport3D(props, ref) {
     const mountRef = useRef<HTMLDivElement | null>(null);
     const [contextLost, setContextLost] = useState(false);
+    const [screwHoverHud, setScrewHoverHud] = useState<{
+      x: number;
+      y: number;
+      feedback: ScrewHoverFeedback;
+    } | null>(null);
 
     // Keep latest props in a ref so Three.js event listeners never go stale
     const propsRef = useRef(props);
@@ -241,10 +263,13 @@ export const Viewport3D = forwardRef<Viewport3DHandle, Viewport3DProps>(
       materials: MaterialLibrary;
       partsRoot: THREE.Group;
       guidesRoot: THREE.Group;
+      jointZonesRoot: THREE.Group;
       partNodes: Map<string, THREE.Group>;
       partBasePos: Map<string, THREE.Vector3>;
       partExplodeDir: Map<string, THREE.Vector3>;
       screwPreview: THREE.Group;
+      screwPreviewRingMat: THREE.MeshBasicMaterial;
+      screwPreviewPinMat: THREE.MeshBasicMaterial;
       keyLight: THREE.DirectionalLight;
       hemiLight: THREE.HemisphereLight;
       rimLight: THREE.DirectionalLight;
@@ -277,6 +302,13 @@ export const Viewport3D = forwardRef<Viewport3DHandle, Viewport3DProps>(
           case 'front':
             pos = new THREE.Vector3(center.x, center.y + 0.05, center.z + dist);
             break;
+          case 'back':
+            pos = new THREE.Vector3(center.x, center.y + 0.05, center.z - dist);
+            break;
+          case 'left':
+            pos = new THREE.Vector3(center.x - dist, center.y + 0.05, center.z);
+            break;
+          case 'right':
           case 'side':
             pos = new THREE.Vector3(center.x + dist, center.y + 0.05, center.z);
             break;
@@ -316,17 +348,34 @@ export const Viewport3D = forwardRef<Viewport3DHandle, Viewport3DProps>(
           center
         );
       },
+      focusPart(partId: string) {
+        const rt = runtimeRef.current;
+        if (!rt) return;
+        const node = rt.partNodes.get(partId);
+        if (!node) return;
+        node.updateWorldMatrix(true, true);
+        const box = new THREE.Box3().setFromObject(node);
+        const center = box.getCenter(new THREE.Vector3());
+        const size = box.getSize(new THREE.Vector3());
+        const dist = Math.max(0.85, size.length() * 1.65);
+        const dir = rt.camera.position.clone().sub(rt.orbit.target);
+        if (dir.lengthSq() < 0.01) dir.set(0.68, 0.42, 0.74);
+        dir.normalize();
+        rt.startCameraTransition(center.clone().addScaledVector(dir, dist), center);
+      },
       captureSnapshot() {
         const rt = runtimeRef.current;
         if (!rt) return null;
-        // Hide gizmo, guides & screw preview cleanly for studio photo export
+        // Hide gizmo, guides, joint zones & screw preview cleanly for studio photo export
         const helper = (rt.transform as unknown as { getHelper?: () => THREE.Object3D }).getHelper?.();
         const prevHelperVis = helper ? helper.visible : true;
         const prevPreviewVis = rt.screwPreview.visible;
         const prevGuidesVis = rt.guidesRoot.visible;
+        const prevJointsVis = rt.jointZonesRoot.visible;
         if (helper) helper.visible = false;
         rt.screwPreview.visible = false;
         rt.guidesRoot.visible = false;
+        rt.jointZonesRoot.visible = false;
 
         rt.renderer.render(rt.scene, rt.camera);
         const dataUrl = rt.renderer.domElement.toDataURL('image/png');
@@ -334,6 +383,7 @@ export const Viewport3D = forwardRef<Viewport3DHandle, Viewport3DProps>(
         if (helper) helper.visible = prevHelperVis;
         rt.screwPreview.visible = prevPreviewVis;
         rt.guidesRoot.visible = prevGuidesVis;
+        rt.jointZonesRoot.visible = prevJointsVis;
         rt.requestRender();
         return dataUrl;
       },
@@ -398,6 +448,11 @@ export const Viewport3D = forwardRef<Viewport3DHandle, Viewport3DProps>(
       orbit.touches = {
         ONE: THREE.TOUCH.ROTATE,
         TWO: THREE.TOUCH.DOLLY_PAN,
+      };
+      orbit.mouseButtons = {
+        LEFT: THREE.MOUSE.ROTATE,
+        MIDDLE: THREE.MOUSE.PAN,
+        RIGHT: THREE.MOUSE.PAN,
       };
       orbit.maxPolarAngle = Math.PI * 0.495;
       orbit.minDistance = 0.5;
@@ -486,25 +541,28 @@ export const Viewport3D = forwardRef<Viewport3DHandle, Viewport3DProps>(
       const guidesRoot = new THREE.Group();
       scene.add(guidesRoot);
 
-      // Screw placement hover preview marker
+      const jointZonesRoot = new THREE.Group();
+      scene.add(jointZonesRoot);
+
+      // Screw placement hover preview marker (dynamically tinted Green=OK / Red=Invalid)
       const screwPreview = new THREE.Group();
       screwPreview.visible = false;
-      const ringGeo = new THREE.RingGeometry(0.007, 0.0115, 24);
+      const ringGeo = new THREE.RingGeometry(0.007, 0.012, 24);
       ringGeo.rotateX(-Math.PI / 2);
       const ringMat = new THREE.MeshBasicMaterial({
-        color: '#F59E0B',
+        color: '#10B981',
         side: THREE.DoubleSide,
         depthTest: false,
       });
       const ringMesh = new THREE.Mesh(ringGeo, ringMat);
       ringMesh.renderOrder = 999;
-      const pinGeo = new THREE.CylinderGeometry(0.0018, 0.0018, 0.032, 10);
+      const pinGeo = new THREE.CylinderGeometry(0.002, 0.002, 0.036, 10);
       const pinMat = new THREE.MeshBasicMaterial({
-        color: '#F59E0B',
+        color: '#10B981',
         depthTest: false,
       });
       const pinMesh = new THREE.Mesh(pinGeo, pinMat);
-      pinMesh.position.y = 0.016;
+      pinMesh.position.y = 0.018;
       pinMesh.renderOrder = 999;
       screwPreview.add(ringMesh, pinMesh);
       scene.add(screwPreview);
@@ -678,10 +736,13 @@ export const Viewport3D = forwardRef<Viewport3DHandle, Viewport3DProps>(
         materials,
         partsRoot,
         guidesRoot,
+        jointZonesRoot,
         partNodes,
         partBasePos,
         partExplodeDir,
         screwPreview,
+        screwPreviewRingMat: ringMat,
+        screwPreviewPinMat: pinMat,
         keyLight,
         hemiLight,
         rimLight,
@@ -795,14 +856,31 @@ export const Viewport3D = forwardRef<Viewport3DHandle, Viewport3DProps>(
         requestRender();
       });
 
-      // Pointer / Touch Picking & Screw Surface Placement (with multi-touch pinch guard)
+      // Pointer / Touch Picking, Direct Board Drag (+Shift Y, +Alt Clone),
+      // Right-Click Context Menu, Double-Click Focus & Live Green/Red Screw Placement
       const raycaster = new THREE.Raycaster();
       const activePointers = new Set<number>();
       let gestureWasMultiTouch = false;
       let downX = 0;
       let downY = 0;
       let downTime = 0;
+      let downButton = 0;
       let lastMoveRaycast = 0;
+
+      // Direct mouse drag state for moving selected boards without hunting thin gizmo arrows
+      let directDragCandidate: {
+        partId: string;
+        node: THREE.Group;
+        startWorldPos: THREE.Vector3;
+        hitPoint: THREE.Vector3;
+        planeXZ: THREE.Plane;
+        planeY: THREE.Plane;
+        offsetXZ: THREE.Vector3;
+        offsetY: number;
+        cloneOnDrop: boolean;
+        active: boolean;
+      } | null = null;
+      const _dragHit = new THREE.Vector3();
 
       const updateNdc = (clientX: number, clientY: number) => {
         const rect = renderer.domElement.getBoundingClientRect();
@@ -822,22 +900,112 @@ export const Viewport3D = forwardRef<Viewport3DHandle, Viewport3DProps>(
         return targets;
       };
 
+      const resolveHitIds = (hitObj: THREE.Object3D) => {
+        let obj: THREE.Object3D | null = hitObj;
+        let fastenerId: string | null = null;
+        let partId: string | null = null;
+        while (obj) {
+          if (!fastenerId && obj.userData.fastenerId) {
+            fastenerId = obj.userData.fastenerId;
+          }
+          if (!partId && obj.userData.partId) {
+            partId = obj.userData.partId;
+          }
+          obj = obj.parent;
+        }
+        return { fastenerId, partId };
+      };
+
       const onPointerDown = (e: PointerEvent) => {
+        downButton = e.button;
+        downX = e.clientX;
+        downY = e.clientY;
+        downTime = performance.now();
+
+        // Dismiss open context menu on any canvas interaction
+        propsRef.current.onContextMenu(null);
+
+        if (e.button === 2 && e.pointerType === 'mouse') {
+          return;
+        }
         if (e.button !== 0 && e.pointerType === 'mouse') return;
+
         activePointers.add(e.pointerId);
         if (activePointers.size > 1) {
           gestureWasMultiTouch = true;
           screwPreview.visible = false;
+          directDragCandidate = null;
           return;
         }
         gestureWasMultiTouch = false;
-        downX = e.clientX;
-        downY = e.clientY;
-        downTime = performance.now();
+
+        // Desktop Direct Mouse Drag on already-selected board (or any board in Move tool)
+        if (
+          e.pointerType === 'mouse' &&
+          !runtimeRef.current?.isDraggingGizmo &&
+          propsRef.current.explodedAmount < 0.01 &&
+          (propsRef.current.tool === 'select' || propsRef.current.tool === 'move') &&
+          !e.shiftKey
+        ) {
+          // Wait one micro-check: TransformControls sets dragging on its own pointerdown
+          const tcAxis = (transform as unknown as { axis?: string | null }).axis;
+          if (!tcAxis) {
+            updateNdc(e.clientX, e.clientY);
+            raycaster.setFromCamera(_pointerNdc, camera);
+            const meshes: THREE.Object3D[] = [];
+            partNodes.forEach((g) => {
+              const m = g.getObjectByName('main_mesh');
+              if (m) meshes.push(m);
+            });
+            const hits = raycaster.intersectObjects(meshes, false);
+            if (hits.length > 0) {
+              const { partId } = resolveHitIds(hits[0].object);
+              const canDirectDrag =
+                partId &&
+                (propsRef.current.tool === 'move' ||
+                  propsRef.current.selectedPartIds.includes(partId) ||
+                  propsRef.current.selectedPartId === partId);
+              if (canDirectDrag && partId) {
+                const node = partNodes.get(partId);
+                if (node) {
+                  const planeXZ = new THREE.Plane(new THREE.Vector3(0, 1, 0), -hits[0].point.y);
+                  const camDir = new THREE.Vector3();
+                  camera.getWorldDirection(camDir);
+                  camDir.y = 0;
+                  if (camDir.lengthSq() < 0.001) camDir.set(0, 0, 1);
+                  camDir.normalize();
+                  const planeY = new THREE.Plane().setFromNormalAndCoplanarPoint(
+                    camDir,
+                    hits[0].point
+                  );
+                  directDragCandidate = {
+                    partId,
+                    node,
+                    startWorldPos: node.position.clone(),
+                    hitPoint: hits[0].point.clone(),
+                    planeXZ,
+                    planeY,
+                    offsetXZ: node.position.clone().sub(hits[0].point),
+                    offsetY: node.position.y - hits[0].point.y,
+                    cloneOnDrop: e.altKey,
+                    active: false,
+                  };
+                  orbit.enabled = false;
+                }
+              }
+            }
+          }
+        }
       };
 
       const onPointerCancel = (e: PointerEvent) => {
         activePointers.delete(e.pointerId);
+        if (directDragCandidate) {
+          directDragCandidate.node.position.copy(directDragCandidate.startWorldPos);
+          directDragCandidate = null;
+          orbit.enabled = true;
+          requestRender();
+        }
         if (activePointers.size === 0) {
           gestureWasMultiTouch = false;
         }
@@ -845,9 +1013,78 @@ export const Viewport3D = forwardRef<Viewport3DHandle, Viewport3DProps>(
 
       const onPointerMove = (e: PointerEvent) => {
         if (e.pointerType === 'touch') return;
+
+        // Handle active Direct Mouse Drag
+        if (directDragCandidate) {
+          const movedPx = Math.hypot(e.clientX - downX, e.clientY - downY);
+          if (!directDragCandidate.active && movedPx > 5) {
+            directDragCandidate.active = true;
+          }
+          if (directDragCandidate.active) {
+            updateNdc(e.clientX, e.clientY);
+            raycaster.setFromCamera(_pointerNdc, camera);
+            const movingPart = propsRef.current.parts.find(
+              (p) => p.id === directDragCandidate!.partId
+            );
+            let rawX = directDragCandidate.node.position.x * M_TO_MM;
+            let rawY = directDragCandidate.node.position.y * M_TO_MM;
+            let rawZ = directDragCandidate.node.position.z * M_TO_MM;
+
+            if (e.shiftKey) {
+              // Vertical Y drag when holding Shift
+              if (raycaster.ray.intersectPlane(directDragCandidate.planeY, _dragHit)) {
+                rawY = (_dragHit.y + directDragCandidate.offsetY) * M_TO_MM;
+              }
+            } else {
+              // Horizontal XZ drag on board plane
+              if (raycaster.ray.intersectPlane(directDragCandidate.planeXZ, _dragHit)) {
+                rawX = (_dragHit.x + directDragCandidate.offsetXZ.x) * M_TO_MM;
+                rawZ = (_dragHit.z + directDragCandidate.offsetXZ.z) * M_TO_MM;
+              }
+            }
+
+            const snapped = computeSnappedTransformPos(directDragCandidate.partId, [
+              rawX,
+              rawY,
+              rawZ,
+            ]);
+            if (movingPart) {
+              const dxM = snapped[0] * MM_TO_M - directDragCandidate.node.position.x;
+              const dyM = snapped[1] * MM_TO_M - directDragCandidate.node.position.y;
+              const dzM = snapped[2] * MM_TO_M - directDragCandidate.node.position.z;
+              directDragCandidate.node.position.set(
+                snapped[0] * MM_TO_M,
+                snapped[1] * MM_TO_M,
+                snapped[2] * MM_TO_M
+              );
+              // Preview co-moving multi-selected / grouped boards smoothly during direct drag
+              if (!directDragCandidate.cloneOnDrop) {
+                const selectedSet = new Set(propsRef.current.selectedPartIds);
+                for (const other of propsRef.current.parts) {
+                  if (other.id === movingPart.id) continue;
+                  const coMove =
+                    (movingPart.groupId && other.groupId === movingPart.groupId) ||
+                    (selectedSet.has(movingPart.id) && selectedSet.has(other.id));
+                  if (coMove) {
+                    const otherNode = partNodes.get(other.id);
+                    if (otherNode) {
+                      otherNode.position.x += dxM;
+                      otherNode.position.y += dyM;
+                      otherNode.position.z += dzM;
+                    }
+                  }
+                }
+              }
+            }
+            requestRender();
+            return;
+          }
+        }
+
         if (propsRef.current.tool !== 'screw') {
           if (screwPreview.visible) {
             screwPreview.visible = false;
+            setScrewHoverHud(null);
             requestRender();
           }
           return;
@@ -868,16 +1105,54 @@ export const Viewport3D = forwardRef<Viewport3DHandle, Viewport3DProps>(
         const hits = raycaster.intersectObjects(meshes, false);
         const hit = hits[0];
         if (hit && hit.face) {
-          const hitObj = hit.object;
-          _mat3A.getNormalMatrix(hitObj.matrixWorld);
-          _vec3A.copy(hit.face.normal).applyMatrix3(_mat3A).normalize();
-          screwPreview.position.copy(hit.point).addScaledVector(_vec3A, 0.0015);
-          _quatA.setFromUnitVectors(_upVec, _vec3A);
-          screwPreview.quaternion.copy(_quatA);
-          screwPreview.visible = true;
-          requestRender();
-        } else if (screwPreview.visible) {
+          const { partId } = resolveHitIds(hit.object);
+          const parentGroup = partId ? partNodes.get(partId) : undefined;
+          if (partId && parentGroup) {
+            parentGroup.updateWorldMatrix(true, false);
+            _vec3B.copy(hit.point);
+            parentGroup.worldToLocal(_vec3B);
+            _vec3C.copy(hit.face.normal).normalize();
+
+            const feedback = evaluateScrewPlacement(
+              partId,
+              [_vec3B.x * M_TO_MM, _vec3B.y * M_TO_MM, _vec3B.z * M_TO_MM],
+              [_vec3C.x, _vec3C.y, _vec3C.z],
+              propsRef.current.activeScrewType,
+              propsRef.current.parts,
+              true
+            );
+
+            if (feedback) {
+              const colorHex = feedback.status === 'ok' ? '#10B981' : '#EF4444';
+              ringMat.color.set(colorHex);
+              pinMat.color.set(colorHex);
+
+              _vec3A.set(...feedback.worldNormal).normalize();
+              screwPreview.position
+                .set(
+                  feedback.worldPosition[0] * MM_TO_M,
+                  feedback.worldPosition[1] * MM_TO_M,
+                  feedback.worldPosition[2] * MM_TO_M
+                )
+                .addScaledVector(_vec3A, 0.002);
+              _quatA.setFromUnitVectors(_upVec, _vec3A);
+              screwPreview.quaternion.copy(_quatA);
+              screwPreview.visible = true;
+
+              const rect = renderer.domElement.getBoundingClientRect();
+              setScrewHoverHud({
+                x: e.clientX - rect.left,
+                y: e.clientY - rect.top,
+                feedback,
+              });
+              requestRender();
+              return;
+            }
+          }
+        }
+        if (screwPreview.visible) {
           screwPreview.visible = false;
+          setScrewHoverHud(null);
           requestRender();
         }
       };
@@ -888,6 +1163,82 @@ export const Viewport3D = forwardRef<Viewport3DHandle, Viewport3DProps>(
         if (activePointers.size === 0) {
           gestureWasMultiTouch = false;
         }
+
+        // Complete Direct Mouse Drag if active
+        if (directDragCandidate) {
+          const drag = directDragCandidate;
+          directDragCandidate = null;
+          orbit.enabled = true;
+          if (drag.active) {
+            const finalPos = computeSnappedTransformPos(drag.partId, [
+              drag.node.position.x * M_TO_MM,
+              drag.node.position.y * M_TO_MM,
+              drag.node.position.z * M_TO_MM,
+            ]);
+            const finalRot: [number, number, number] = [
+              Math.round(THREE.MathUtils.radToDeg(drag.node.rotation.x)),
+              Math.round(THREE.MathUtils.radToDeg(drag.node.rotation.y)),
+              Math.round(THREE.MathUtils.radToDeg(drag.node.rotation.z)),
+            ];
+            if (drag.cloneOnDrop) {
+              // Restore original node before adding the cloned board
+              drag.node.position.copy(drag.startWorldPos);
+              propsRef.current.onCloneTransformPart(drag.partId, finalPos, finalRot);
+            } else {
+              propsRef.current.onTransformPart(drag.partId, finalPos, finalRot);
+            }
+            requestRender();
+            return;
+          }
+        }
+
+        // Right-Click Context Menu (only on crisp click, NOT right-drag pan!)
+        if (e.button === 2 && downButton === 2 && e.pointerType === 'mouse') {
+          const dist = Math.hypot(e.clientX - downX, e.clientY - downY);
+          if (dist <= 6) {
+            updateNdc(e.clientX, e.clientY);
+            raycaster.setFromCamera(_pointerNdc, camera);
+            const targets = collectRaycastTargets();
+            const hits = raycaster.intersectObjects(targets, true);
+            if (hits.length > 0) {
+              const { fastenerId, partId } = resolveHitIds(hits[0].object);
+              if (fastenerId) {
+                propsRef.current.onSelectFastener(fastenerId);
+                propsRef.current.onContextMenu({
+                  kind: 'fastener',
+                  fastenerId,
+                  label: 'Zaznaczony łącznik',
+                  x: e.clientX,
+                  y: e.clientY,
+                });
+                return;
+              }
+              if (partId) {
+                const part = propsRef.current.parts.find((p) => p.id === partId);
+                if (part) {
+                  if (!propsRef.current.selectedPartIds.includes(partId)) {
+                    propsRef.current.onSelectPart(partId, false);
+                  }
+                  propsRef.current.onContextMenu({
+                    kind: 'part',
+                    partId,
+                    partName: part.name,
+                    x: e.clientX,
+                    y: e.clientY,
+                  });
+                  return;
+                }
+              }
+            }
+            propsRef.current.onContextMenu({
+              kind: 'canvas',
+              x: e.clientX,
+              y: e.clientY,
+            });
+          }
+          return;
+        }
+
         if (wasMulti || activePointers.size > 0) return;
         if (e.button !== 0 && e.pointerType === 'mouse') return;
         if (runtimeRef.current?.isDraggingGizmo) return;
@@ -904,25 +1255,13 @@ export const Viewport3D = forwardRef<Viewport3DHandle, Viewport3DProps>(
 
         if (hits.length === 0) {
           if (propsRef.current.tool !== 'screw') {
-            propsRef.current.onSelectPart(null);
+            propsRef.current.onSelectPart(null, false);
             propsRef.current.onSelectFastener(null);
           }
           return;
         }
 
-        // Check if user tapped an existing fastener
-        let obj: THREE.Object3D | null = hits[0].object;
-        let fastenerId: string | null = null;
-        let partId: string | null = null;
-        while (obj) {
-          if (!fastenerId && obj.userData.fastenerId) {
-            fastenerId = obj.userData.fastenerId;
-          }
-          if (!partId && obj.userData.partId) {
-            partId = obj.userData.partId;
-          }
-          obj = obj.parent;
-        }
+        const { fastenerId, partId } = resolveHitIds(hits[0].object);
 
         if (fastenerId) {
           propsRef.current.onSelectFastener(fastenerId);
@@ -933,15 +1272,12 @@ export const Viewport3D = forwardRef<Viewport3DHandle, Viewport3DProps>(
           const parentGroup = partNodes.get(partId);
           if (parentGroup) {
             parentGroup.updateWorldMatrix(true, false);
-            // Convert hit world point to parent local coordinates (mm)
             _vec3B.copy(hits[0].point);
             parentGroup.worldToLocal(_vec3B);
 
             const snap = propsRef.current.snapMm;
-            // Face normal in local space
             _vec3C.copy(hits[0].face.normal).normalize();
 
-            // Snap coordinates parallel to the surface so screws align neatly
             const snapCoord = (vMm: number, normalComp: number) => {
               if (snap <= 0 || Math.abs(normalComp) > 0.7) {
                 return Number(vMm.toFixed(1));
@@ -960,13 +1296,93 @@ export const Viewport3D = forwardRef<Viewport3DHandle, Viewport3DProps>(
               Number(_vec3C.z.toFixed(3)),
             ];
 
-            propsRef.current.onPlaceFastener(partId, localPosMm, localNorm);
+            const evalResult = evaluateScrewPlacement(
+              partId,
+              localPosMm,
+              localNorm,
+              propsRef.current.activeScrewType,
+              propsRef.current.parts,
+              true
+            );
+
+            if (evalResult) {
+              if (propsRef.current.screwJointsOnly && evalResult.status !== 'ok') {
+                propsRef.current.onRejectScrewPlacement(evalResult.reason);
+                return;
+              }
+              propsRef.current.onPlaceFastener(
+                partId,
+                evalResult.localPosition,
+                evalResult.localNormal,
+                evalResult.status === 'ok' ? evalResult.recommendedType : undefined,
+                evalResult.targetPartId
+              );
+            }
           }
           return;
         }
 
         if (partId) {
-          propsRef.current.onSelectPart(partId);
+          propsRef.current.onSelectPart(partId, e.shiftKey);
+        }
+      };
+
+      const onContextMenuDom = (e: MouseEvent) => {
+        e.preventDefault();
+      };
+
+      const onDoubleClick = (e: MouseEvent) => {
+        if (propsRef.current.tool === 'screw') return;
+        updateNdc(e.clientX, e.clientY);
+        raycaster.setFromCamera(_pointerNdc, camera);
+        const meshes: THREE.Object3D[] = [];
+        partNodes.forEach((g) => {
+          const m = g.getObjectByName('main_mesh');
+          if (m) meshes.push(m);
+        });
+        const hits = raycaster.intersectObjects(meshes, false);
+        if (hits.length > 0) {
+          const { partId } = resolveHitIds(hits[0].object);
+          if (partId) {
+            const node = partNodes.get(partId);
+            if (node) {
+              node.updateWorldMatrix(true, true);
+              const box = new THREE.Box3().setFromObject(node);
+              const center = box.getCenter(new THREE.Vector3());
+              const size = box.getSize(new THREE.Vector3());
+              const dist = Math.max(0.85, size.length() * 1.65);
+              const dir = camera.position.clone().sub(orbit.target);
+              if (dir.lengthSq() < 0.01) dir.set(0.68, 0.42, 0.74);
+              dir.normalize();
+              startCameraTransition(center.clone().addScaledVector(dir, dist), center);
+              return;
+            }
+          }
+        }
+        // Double-click empty canvas -> Focus All
+        const box = new THREE.Box3();
+        partsRoot.updateWorldMatrix(true, true);
+        if (partsRoot.children.length > 0) {
+          box.setFromObject(partsRoot);
+          const center = box.getCenter(new THREE.Vector3());
+          const size = box.getSize(new THREE.Vector3());
+          const dist = Math.max(1.8, size.length() * 1.2);
+          startCameraTransition(
+            new THREE.Vector3(
+              center.x + dist * 0.68,
+              center.y + dist * 0.42,
+              center.z + dist * 0.74
+            ),
+            center
+          );
+        }
+      };
+
+      const onPointerLeave = () => {
+        if (screwPreview.visible) {
+          screwPreview.visible = false;
+          setScrewHoverHud(null);
+          requestRender();
         }
       };
 
@@ -975,6 +1391,9 @@ export const Viewport3D = forwardRef<Viewport3DHandle, Viewport3DProps>(
       dom.addEventListener('pointermove', onPointerMove);
       dom.addEventListener('pointerup', onPointerUp);
       dom.addEventListener('pointercancel', onPointerCancel);
+      dom.addEventListener('pointerleave', onPointerLeave);
+      dom.addEventListener('contextmenu', onContextMenuDom);
+      dom.addEventListener('dblclick', onDoubleClick);
 
       // Context loss protection
       const handleContextLost = (e: Event) => {
@@ -1016,6 +1435,9 @@ export const Viewport3D = forwardRef<Viewport3DHandle, Viewport3DProps>(
         dom.removeEventListener('pointermove', onPointerMove);
         dom.removeEventListener('pointerup', onPointerUp);
         dom.removeEventListener('pointercancel', onPointerCancel);
+        dom.removeEventListener('pointerleave', onPointerLeave);
+        dom.removeEventListener('contextmenu', onContextMenuDom);
+        dom.removeEventListener('dblclick', onDoubleClick);
         dom.removeEventListener('webglcontextlost', handleContextLost);
         dom.removeEventListener('webglcontextrestored', handleContextRestored);
 
@@ -1024,6 +1446,7 @@ export const Viewport3D = forwardRef<Viewport3DHandle, Viewport3DProps>(
         orbit.dispose();
         disposeObjectTree(partsRoot);
         disposeObjectTree(guidesRoot);
+        disposeObjectTree(jointZonesRoot);
         materials.dispose();
         floorGeo.dispose();
         floorMat.dispose();
@@ -1151,8 +1574,10 @@ export const Viewport3D = forwardRef<Viewport3DHandle, Viewport3DProps>(
           group.add(handleGroup);
         }
 
-        // Crisp architectural outline for colliding, selected, or X-Ray parts
-        const isSelected = part.id === props.selectedPartId;
+        // Crisp architectural outline for colliding, selected (incl. multi-select), or X-Ray parts
+        const isSelected =
+          part.id === props.selectedPartId ||
+          props.selectedPartIds.includes(part.id);
         const isColliding = props.collidingPartIds.has(part.id);
         if (isSelected || isColliding || props.xrayMode) {
           const edgesGeo = new THREE.EdgesGeometry(geo, 22);
@@ -1259,6 +1684,48 @@ export const Viewport3D = forwardRef<Viewport3DHandle, Viewport3DProps>(
         lineMat.dispose();
       }
 
+      // Rebuild Live Emerald-Green "Joint X-Ray" Mounting Strips when Screw tool is active
+      disposeObjectTree(rt.jointZonesRoot);
+      rt.jointZonesRoot.clear();
+      if (props.tool === 'screw' && props.explodedAmount < 0.01 && props.jointZones.length > 0) {
+        for (const z of props.jointZones) {
+          const stripGeo = new THREE.BoxGeometry(
+            z.worldSize[0] * MM_TO_M,
+            z.worldSize[1] * MM_TO_M,
+            z.worldSize[2] * MM_TO_M
+          );
+          const stripMat = new THREE.MeshBasicMaterial({
+            color: '#10B981',
+            transparent: true,
+            opacity: 0.34,
+            depthWrite: false,
+            polygonOffset: true,
+            polygonOffsetFactor: -2,
+          });
+          const stripMesh = new THREE.Mesh(stripGeo, stripMat);
+          stripMesh.position.set(
+            (z.worldCenter[0] + z.normalWorld[0] * 1.4) * MM_TO_M,
+            (z.worldCenter[1] + z.normalWorld[1] * 1.4) * MM_TO_M,
+            (z.worldCenter[2] + z.normalWorld[2] * 1.4) * MM_TO_M
+          );
+          stripMesh.userData.disposeMaterial = true;
+          stripMesh.renderOrder = 995;
+          rt.jointZonesRoot.add(stripMesh);
+
+          const borderGeo = new THREE.EdgesGeometry(stripGeo);
+          const borderMat = new THREE.LineBasicMaterial({
+            color: '#34D399',
+            transparent: true,
+            opacity: 0.9,
+          });
+          const border = new THREE.LineSegments(borderGeo, borderMat);
+          border.position.copy(stripMesh.position);
+          border.userData.disposeMaterial = true;
+          border.renderOrder = 996;
+          rt.jointZonesRoot.add(border);
+        }
+      }
+
       // Update contact shadow size to match furniture footprint
       if (props.parts.length > 0) {
         const box = new THREE.Box3().setFromObject(rt.partsRoot);
@@ -1296,6 +1763,7 @@ export const Viewport3D = forwardRef<Viewport3DHandle, Viewport3DProps>(
 
       if (props.tool !== 'screw') {
         rt.screwPreview.visible = false;
+        setScrewHoverHud(null);
       }
 
       rt.requestRender();
@@ -1303,6 +1771,7 @@ export const Viewport3D = forwardRef<Viewport3DHandle, Viewport3DProps>(
       props.parts,
       props.fasteners,
       props.selectedPartId,
+      props.selectedPartIds,
       props.selectedFastenerId,
       props.tool,
       props.snapMm,
@@ -1315,11 +1784,39 @@ export const Viewport3D = forwardRef<Viewport3DHandle, Viewport3DProps>(
       props.collidingPartIds,
       props.fastenerAuditMap,
       props.clearances,
+      props.jointZones,
     ]);
 
     return (
       <div className="relative w-full h-full overflow-hidden">
         <div ref={mountRef} className="w-full h-full canvas-touch-lock" />
+        {/* Live Green/Red Screw Target HUD near cursor */}
+        {props.tool === 'screw' && screwHoverHud && (
+          <div
+            style={{
+              left: Math.min(Math.max(12, screwHoverHud.x + 16), window.innerWidth - 250),
+              top: Math.max(12, screwHoverHud.y - 38),
+            }}
+            className={`pointer-events-none absolute z-20 flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-[11px] font-semibold shadow-lg whitespace-nowrap ${
+              screwHoverHud.feedback.status === 'ok'
+                ? 'border-emerald-500/60 bg-emerald-950/95 text-emerald-100'
+                : 'border-red-500/60 bg-red-950/95 text-red-100'
+            }`}
+          >
+            <span
+              className={`h-2 w-2 rounded-full ${
+                screwHoverHud.feedback.status === 'ok' ? 'bg-emerald-400' : 'bg-red-400'
+              }`}
+            />
+            <span>
+              {screwHoverHud.feedback.status === 'ok'
+                ? `Trafia: ${screwHoverHud.feedback.targetPartName} (${screwHoverHud.feedback.embedDepthMm ?? 18} mm)`
+                : screwHoverHud.feedback.status === 'through'
+                  ? `Przelot przez: ${screwHoverHud.feedback.targetPartName}`
+                  : 'Powietrze — brak płyty za ścianką'}
+            </span>
+          </div>
+        )}
         {contextLost && (
           <div className="absolute inset-0 z-20 flex items-center justify-center bg-[#EAECEF] p-6">
             <div className="max-w-sm rounded-xl bg-[#141518] px-6 py-5 text-center text-zinc-100 shadow-lg">

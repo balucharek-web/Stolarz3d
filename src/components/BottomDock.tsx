@@ -38,6 +38,8 @@ interface BottomDockProps {
   onChangeTool: (tool: EditorTool) => void;
   activeScrewType: ScrewType;
   onChangeScrewType: (type: ScrewType) => void;
+  screwJointsOnly: boolean;
+  onToggleScrewJointsOnly: () => void;
   snapMm: number;
   onCycleSnap: () => void;
   magneticSnap: boolean;
@@ -59,6 +61,7 @@ interface BottomDockProps {
   onUndo: () => void;
   onRedo: () => void;
   selectedPartName: string | null;
+  selectedCount: number;
   selectedFastenerLabel: string | null;
   onOpenInspector: () => void;
   onDeleteSelectedFastener: () => void;
@@ -81,6 +84,8 @@ export const BottomDock: React.FC<BottomDockProps> = ({
   onChangeTool,
   activeScrewType,
   onChangeScrewType,
+  screwJointsOnly,
+  onToggleScrewJointsOnly,
   snapMm,
   onCycleSnap,
   magneticSnap,
@@ -102,6 +107,7 @@ export const BottomDock: React.FC<BottomDockProps> = ({
   onUndo,
   onRedo,
   selectedPartName,
+  selectedCount,
   selectedFastenerLabel,
   onOpenInspector,
   onDeleteSelectedFastener,
@@ -150,6 +156,17 @@ export const BottomDock: React.FC<BottomDockProps> = ({
                     </option>
                   ))}
                 </select>
+                <button
+                  type="button"
+                  onClick={onToggleScrewJointsOnly}
+                  className={`flex min-h-[36px] items-center gap-1 rounded-lg border px-2 text-[11px] font-medium whitespace-nowrap shrink-0 ${
+                    screwJointsOnly
+                      ? 'border-emerald-500/60 bg-emerald-500/15 text-emerald-300'
+                      : 'border-zinc-700 bg-zinc-900 text-zinc-400'
+                  }`}
+                >
+                  <span>Styki</span>
+                </button>
                 <button
                   type="button"
                   onClick={onAutoFasteners}
@@ -464,16 +481,20 @@ export const BottomDock: React.FC<BottomDockProps> = ({
                   </span>
                 </div>
               ) : tool === 'screw' ? (
-                <div className="flex items-center gap-2 min-w-0 text-amber-300/95">
+                <div className="flex items-center gap-2 min-w-0 text-emerald-300/95">
                   <Crosshair className="h-3.5 w-3.5 shrink-0" />
                   <span className="truncate">
-                    Kliknij dowolną ściankę płyty, aby wkręcić łącznik prostopadle do powierzchni
+                    {screwJointsOnly
+                      ? 'Zielone pasy pokazują miejsca styku z drugą płytą — kliknij w zieloną strefę, aby wkręcić'
+                      : 'Tryb dowolny — kursor pokazuje na żywo na zielono/czerwono czy wkręt trafia w drugą płytę'}
                   </span>
                 </div>
               ) : (
                 <div className="flex items-center gap-2 min-w-0">
                   <span className="truncate font-medium text-zinc-200">
-                    {selectedPartName}
+                    {selectedCount > 1
+                      ? `Zaznaczono: ${selectedCount} płyt (przeciągnij myszką lub użyj strzałek)`
+                      : selectedPartName}
                   </span>
                 </div>
               )}
@@ -548,6 +569,19 @@ export const BottomDock: React.FC<BottomDockProps> = ({
                     </option>
                   ))}
                 </select>
+                <button
+                  type="button"
+                  onClick={onToggleScrewJointsOnly}
+                  className={`flex min-h-[38px] items-center gap-1.5 rounded-lg border px-2.5 text-xs font-medium transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                    screwJointsOnly
+                      ? 'border-emerald-500/60 bg-emerald-500/15 text-emerald-300'
+                      : 'border-zinc-800 bg-zinc-900 text-zinc-300 hover:text-white'
+                  }`}
+                  title="Blokuj wkręcanie w puste miejsca — wkręty trafiają tylko w zielone strefy styku"
+                >
+                  <Magnet className="h-3.5 w-3.5" />
+                  <span>Tylko styki</span>
+                </button>
                 <button
                   type="button"
                   onClick={onAutoFasteners}

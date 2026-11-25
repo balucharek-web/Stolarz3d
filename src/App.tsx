@@ -18,10 +18,14 @@ import {
 } from './engine/geometry';
 import {
   analyzeFasteners,
+  bindFastenerToJoint,
+  computeJointZones,
   computePartClearances,
   createEvenShelfArray,
   detectPartCollisions,
+  getPartWorldBox,
   mirrorPartX,
+  syncFastenersWithParts,
 } from './engine/carpentry';
 import {
   compressTextureDataUrl,
@@ -41,6 +45,8 @@ import {
 } from './components/PartsTemplatesDrawer';
 import { CutListModal } from './components/CutListModal';
 import { ShapeSketchModal } from './components/ShapeSketchModal';
+import { ContextMenu, type ContextMenuTarget } from './components/ContextMenu';
+import { ViewCube } from './components/ViewCube';
 
 const SNAP_STEPS = [10, 5, 25, 0];
 const LIGHTING_ORDER: StudioLighting[] = ['daylight', 'studio', 'warm'];
@@ -59,10 +65,12 @@ export default function App() {
   const [historyFuture, setHistoryFuture] = useState<FurnitureProject[]>([]);
 
   const [selectedPartId, setSelectedPartId] = useState<string | null>(null);
+  const [selectedPartIds, setSelectedPartIds] = useState<string[]>([]);
   const [selectedFastenerId, setSelectedFastenerId] = useState<string | null>(null);
 
   const [tool, setTool] = useState<EditorTool>('move');
   const [activeScrewType, setActiveScrewType] = useState<ScrewType>('wood_4x45');
+  const [screwJointsOnly, setScrewJointsOnly] = useState<boolean>(true);
   const [snapIdx, setSnapIdx] = useState<number>(0);
   const [magneticSnap, setMagneticSnap] = useState<boolean>(true);
   const [showDimensions, setShowDimensions] = useState<boolean>(true);
@@ -79,6 +87,7 @@ export default function App() {
   const [sketchEditingPart, setSketchEditingPart] = useState<FurniturePart | null>(null);
   const [leftDrawerMode, setLeftDrawerMode] = useState<LeftDrawerMode>(null);
   const [cutListOpen, setCutListOpen] = useState<boolean>(false);
+  const [contextMenu, setContextMenu] = useState<ContextMenuTarget | null>(null);
   const [toastMsg, setToastMsg] = useState<string | null>(null);
 
   const toastTimerRef = useRef<number | null>(null);
@@ -172,7 +181,9 @@ export default function App() {
       setHistoryPast([]);
       setHistoryFuture([]);
       setSelectedPartId(null);
+      setSelectedPartIds([]);
       setSelectedFastenerId(null);
+      setContextMenu(null);
       setInspectorOpen(false);
       setExplodedAmount(0);
       setTimeout(() => viewportRef.current?.focusAll(), 40);
@@ -197,7 +208,9 @@ export default function App() {
     setHistoryPast([]);
     setHistoryFuture([]);
     setSelectedPartId(null);
+    setSelectedPartIds([]);
     setSelectedFastenerId(null);
+    setContextMenu(null);
     setInspectorOpen(false);
     setExplodedAmount(0);
     setLeftDrawerMode(null);
@@ -221,7 +234,9 @@ export default function App() {
       setHistoryPast([]);
       setHistoryFuture([]);
       setSelectedPartId(null);
+      setSelectedPartIds([]);
       setSelectedFastenerId(null);
+      setContextMenu(null);
       showToast(`Zduplikowano: ${copy.name}`);
     },
     [projectStore.projects, showToast]
@@ -248,18 +263,33 @@ export default function App() {
       setHistoryPast([]);
       setHistoryFuture([]);
       setSelectedPartId(null);
+      setSelectedPartIds([]);
       setSelectedFastenerId(null);
+      setContextMenu(null);
       setInspectorOpen(false);
       showToast('Usunięto projekt');
     },
     [showToast]
   );
 
-  const handleSelectPart = useCallback((id: string | null) => {
-    setSelectedPartId(id);
+  const handleSelectPart = useCallback((id: string | null, additive = false) => {
     setSelectedFastenerId(null);
     if (!id) {
+      setSelectedPartId(null);
+      setSelectedPartIds([]);
       setInspectorOpen(false);
+      return;
+    }
+    if (additive) {
+      setSelectedPartIds((prev) => {
+        const exists = prev.includes(id);
+        const next = exists ? prev.filter((x) => x !== id) : [...prev, id];
+        setSelectedPartId(next.length > 0 ? next[next.length - 1] : null);
+        return next;
+      });
+    } else {
+      setSelectedPartId(id);
+      setSelectedPartIds([id]);
     }
   }, []);
 
@@ -267,11 +297,12 @@ export default function App() {
     setSelectedFastenerId(id);
     if (id) {
       setSelectedPartId(null);
+      setSelectedPartIds([]);
       setInspectorOpen(false);
     }
   }, []);
 
-  // Group-aware 3D transform: when moving a grouped part, move all group members by the same delta
+  // Group + Multiselect aware 3D transform with LIVE relational fastener synchronization!
   const handleTransformPart = useCallback(
     (
       id: string,
@@ -285,37 +316,94 @@ export default function App() {
         const dy = position[1] - target.position[1];
         const dz = position[2] - target.position[2];
         const groupId = target.groupId;
+        const multiSet = new Set(selectedPartIds.includes(id) ? selectedPartIds : [id]);
+        const changedIds = new Set<string>([id]);
+
+        const nextParts = prev.parts.map((p) => {
+          if (p.id === id) {
+            return { ...p, position, rotation };
+          }
+          const shouldCoMove =
+            (groupId && p.groupId === groupId) || multiSet.has(p.id);
+          if (shouldCoMove && (dx !== 0 || dy !== 0 || dz !== 0)) {
+            changedIds.add(p.id);
+            return {
+              ...p,
+              position: [
+                Math.round((p.position[0] + dx) * 10) / 10,
+                Math.max(10, Math.round((p.position[1] + dy) * 10) / 10),
+                Math.round((p.position[2] + dz) * 10) / 10,
+              ] as [number, number, number],
+            };
+          }
+          return p;
+        });
+
+        const synced = syncFastenersWithParts(
+          prev.parts,
+          nextParts,
+          prev.fasteners,
+          changedIds
+        );
 
         return {
           ...prev,
-          parts: prev.parts.map((p) => {
-            if (p.id === id) {
-              return { ...p, position, rotation };
-            }
-            if (groupId && p.groupId === groupId && (dx !== 0 || dy !== 0 || dz !== 0)) {
-              return {
-                ...p,
-                position: [
-                  Math.round((p.position[0] + dx) * 10) / 10,
-                  Math.max(10, Math.round((p.position[1] + dy) * 10) / 10),
-                  Math.round((p.position[2] + dz) * 10) / 10,
-                ],
-              };
-            }
-            return p;
-          }),
+          parts: nextParts,
+          fasteners: synced.fasteners,
         };
       });
     },
-    [commitProject]
+    [commitProject, selectedPartIds]
+  );
+
+  // Alt + Drag instant clone-and-place
+  const handleCloneTransformPart = useCallback(
+    (
+      id: string,
+      position: [number, number, number],
+      rotation: [number, number, number]
+    ) => {
+      const src = project.parts.find((p) => p.id === id);
+      if (!src) return;
+      const newId = `part_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+      const copy: FurniturePart = {
+        ...structuredClone(src),
+        id: newId,
+        name: `${src.name} (kopia)`,
+        position,
+        rotation,
+      };
+      commitProject((prev) => ({
+        ...prev,
+        parts: [...prev.parts, copy],
+      }));
+      setSelectedPartId(newId);
+      setSelectedPartIds([newId]);
+      showToast(`Sklonowano (Alt+przeciągnij): ${copy.name}`);
+    },
+    [project.parts, commitProject, showToast]
   );
 
   const handleUpdatePart = useCallback(
     (id: string, patch: Partial<FurniturePart>) => {
-      commitProject((prev) => ({
-        ...prev,
-        parts: prev.parts.map((p) => (p.id === id ? { ...p, ...patch } : p)),
-      }));
+      commitProject((prev) => {
+        const nextParts = prev.parts.map((p) => (p.id === id ? { ...p, ...patch } : p));
+        const affectsGeometry =
+          patch.width !== undefined ||
+          patch.height !== undefined ||
+          patch.depth !== undefined ||
+          patch.position !== undefined ||
+          patch.rotation !== undefined ||
+          patch.customPolygon !== undefined;
+        const synced = affectsGeometry
+          ? syncFastenersWithParts(prev.parts, nextParts, prev.fasteners, new Set([id]))
+          : { fasteners: prev.fasteners };
+        return {
+          ...prev,
+          parts: nextParts,
+          fasteners: synced.fasteners,
+        };
+      });
     },
     [commitProject]
   );
@@ -332,6 +420,7 @@ export default function App() {
         parts: [...prev.parts, newPart],
       }));
       setSelectedPartId(newId);
+      setSelectedPartIds([newId]);
       setSelectedFastenerId(null);
       setTool('move');
       setExplodedAmount(0);
@@ -343,23 +432,37 @@ export default function App() {
 
   const handleDuplicatePart = useCallback(
     (id: string) => {
-      const src = project.parts.find((p) => p.id === id);
-      if (!src) return;
-      const newId = `part_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
-      const copy: FurniturePart = {
-        ...structuredClone(src),
-        id: newId,
-        name: `${src.name} (kopia)`,
-        position: [src.position[0] + 60, src.position[1], src.position[2] + 60],
-      };
+      const idsToCopy =
+        selectedPartIds.length > 1 && selectedPartIds.includes(id)
+          ? selectedPartIds
+          : [id];
+      const copies: FurniturePart[] = [];
+      for (const srcId of idsToCopy) {
+        const src = project.parts.find((p) => p.id === srcId);
+        if (!src) continue;
+        const newId = `part_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+        copies.push({
+          ...structuredClone(src),
+          id: newId,
+          name: `${src.name} (kopia)`,
+          position: [src.position[0] + 60, src.position[1], src.position[2] + 60],
+        });
+      }
+      if (copies.length === 0) return;
       commitProject((prev) => ({
         ...prev,
-        parts: [...prev.parts, copy],
+        parts: [...prev.parts, ...copies],
       }));
-      setSelectedPartId(newId);
-      showToast('Zduplikowano element');
+      const newIds = copies.map((c) => c.id);
+      setSelectedPartIds(newIds);
+      setSelectedPartId(newIds[newIds.length - 1]);
+      showToast(
+        copies.length > 1
+          ? `Zduplikowano ${copies.length} elementów`
+          : 'Zduplikowano element'
+      );
     },
-    [project.parts, commitProject, showToast]
+    [project.parts, selectedPartIds, commitProject, showToast]
   );
 
   const handleMirrorPart = useCallback(
@@ -373,12 +476,23 @@ export default function App() {
           parts: [...prev.parts, mirrored],
         }));
         setSelectedPartId(mirrored.id);
+        setSelectedPartIds([mirrored.id]);
         showToast('Utworzono lustrzaną kopię elementu');
       } else {
-        commitProject((prev) => ({
-          ...prev,
-          parts: prev.parts.map((p) => (p.id === id ? mirrored : p)),
-        }));
+        commitProject((prev) => {
+          const nextParts = prev.parts.map((p) => (p.id === id ? mirrored : p));
+          const synced = syncFastenersWithParts(
+            prev.parts,
+            nextParts,
+            prev.fasteners,
+            new Set([id])
+          );
+          return {
+            ...prev,
+            parts: nextParts,
+            fasteners: synced.fasteners,
+          };
+        });
         showToast('Odbito element lustrzanie');
       }
     },
@@ -401,40 +515,60 @@ export default function App() {
 
   const handleDeletePart = useCallback(
     (id: string) => {
+      const toRemove = new Set(
+        selectedPartIds.length > 1 && selectedPartIds.includes(id)
+          ? selectedPartIds
+          : [id]
+      );
       commitProject((prev) => ({
         ...prev,
-        parts: prev.parts.filter((p) => p.id !== id),
-        fasteners: prev.fasteners.filter((f) => f.partId !== id),
+        parts: prev.parts.filter((p) => !toRemove.has(p.id)),
+        fasteners: prev.fasteners.filter(
+          (f) => !toRemove.has(f.partId) && !(f.targetPartId && toRemove.has(f.targetPartId))
+        ),
       }));
-      if (selectedPartId === id) {
+      if (selectedPartId && toRemove.has(selectedPartId)) {
         setSelectedPartId(null);
+        setSelectedPartIds([]);
         setInspectorOpen(false);
       }
-      showToast('Usunięto element');
+      showToast(
+        toRemove.size > 1 ? `Usunięto ${toRemove.size} elementów` : 'Usunięto element'
+      );
     },
-    [commitProject, selectedPartId, showToast]
+    [commitProject, selectedPartId, selectedPartIds, showToast]
   );
 
   const handlePlaceFastener = useCallback(
     (
       partId: string,
       localPosition: [number, number, number],
-      localNormal: [number, number, number]
+      localNormal: [number, number, number],
+      overrideType?: ScrewType,
+      targetPartId?: string
     ) => {
-      const newF: Fastener = {
-        id: `f_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
-        partId,
-        type: activeScrewType,
-        localPosition,
-        localNormal,
-      };
-      commitProject((prev) => ({
-        ...prev,
-        fasteners: [...prev.fasteners, newF],
-      }));
+      const usedType = overrideType ?? activeScrewType;
+      commitProject((prev) => {
+        const rawF: Fastener = {
+          id: `f_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+          partId,
+          type: usedType,
+          localPosition,
+          localNormal,
+          targetPartId,
+        };
+        const bound = bindFastenerToJoint(rawF, prev.parts);
+        return {
+          ...prev,
+          fasteners: [...prev.fasteners, bound],
+        };
+      });
       setShowFasteners(true);
+      if (overrideType && overrideType !== activeScrewType) {
+        showToast(`Dobrano ${SCREW_MAP[overrideType].shortName}, aby idealnie złapał drugą płytę`);
+      }
     },
-    [activeScrewType, commitProject]
+    [activeScrewType, commitProject, showToast]
   );
 
   const handleDeleteFastener = useCallback(
@@ -460,29 +594,86 @@ export default function App() {
     [commitProject]
   );
 
-  const handleAutoFasteners = useCallback(() => {
-    const detected = autoDetectJointFasteners(
-      project.parts,
-      project.fasteners,
-      activeScrewType
-    );
-    if (detected.length === 0) {
-      showToast('Nie znaleziono nowych połączeń stykających się płyt');
-      return;
-    }
-    commitProject((prev) => ({
-      ...prev,
-      fasteners: [...prev.fasteners, ...detected],
-    }));
-    setShowFasteners(true);
-    showToast(`Dodano automatycznie ${detected.length} łączników na stykach`);
-  }, [project.parts, project.fasteners, activeScrewType, commitProject, showToast]);
+  const handleAutoFasteners = useCallback(
+    (filterPartId?: string) => {
+      const detected = autoDetectJointFasteners(
+        project.parts,
+        project.fasteners,
+        activeScrewType,
+        filterPartId
+      );
+      if (detected.length === 0) {
+        showToast('Nie znaleziono nowych połączeń stykających się płyt');
+        return;
+      }
+      commitProject((prev) => ({
+        ...prev,
+        fasteners: [...prev.fasteners, ...detected],
+      }));
+      setShowFasteners(true);
+      showToast(
+        filterPartId
+          ? `Wkręcono ${detected.length} łączników w styki tej płyty`
+          : `Dodano automatycznie ${detected.length} łączników na stykach`
+      );
+    },
+    [project.parts, project.fasteners, activeScrewType, commitProject, showToast]
+  );
+
+  const handleNudgeSelected = useCallback(
+    (dx: number, dy: number, dz: number) => {
+      if (!selectedPartId) return;
+      const target = project.parts.find((p) => p.id === selectedPartId);
+      if (!target) return;
+      handleTransformPart(
+        target.id,
+        [
+          Math.round((target.position[0] + dx) * 10) / 10,
+          Math.max(10, Math.round((target.position[1] + dy) * 10) / 10),
+          Math.round((target.position[2] + dz) * 10) / 10,
+        ],
+        target.rotation
+      );
+    },
+    [selectedPartId, project.parts, handleTransformPart]
+  );
+
+  const handleRotate90Y = useCallback(
+    (partId: string) => {
+      const target = project.parts.find((p) => p.id === partId);
+      if (!target) return;
+      const nextY = (target.rotation[1] + 90) % 360;
+      handleUpdatePart(partId, {
+        rotation: [target.rotation[0], nextY, target.rotation[2]],
+      });
+      showToast('Obrócono płytę o 90°');
+    },
+    [project.parts, handleUpdatePart, showToast]
+  );
+
+  const handleDropToFloor = useCallback(
+    (partId: string) => {
+      const target = project.parts.find((p) => p.id === partId);
+      if (!target) return;
+      const box = getPartWorldBox(target);
+      const nextY = Math.round((target.position[1] - box.minY) * 10) / 10;
+      handleTransformPart(
+        partId,
+        [target.position[0], nextY, target.position[2]],
+        target.rotation
+      );
+      showToast('Postawiono płytę na podłodze (Y = 0)');
+    },
+    [project.parts, handleTransformPart, showToast]
+  );
 
   const handleLoadTemplate = useCallback(
     (tplProject: FurnitureProject) => {
       commitProject(() => structuredClone(tplProject));
       setSelectedPartId(null);
+      setSelectedPartIds([]);
       setSelectedFastenerId(null);
+      setContextMenu(null);
       setInspectorOpen(false);
       setExplodedAmount(0);
       setTimeout(() => viewportRef.current?.focusAll(), 40);
@@ -549,7 +740,12 @@ export default function App() {
           setAddPartOpen(false);
           return;
         }
+        if (contextMenu) {
+          setContextMenu(null);
+          return;
+        }
         setSelectedPartId(null);
+        setSelectedPartIds([]);
         setSelectedFastenerId(null);
         setInspectorOpen(false);
         setLeftDrawerMode(null);
@@ -568,6 +764,35 @@ export default function App() {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'y') {
         e.preventDefault();
         handleRedo();
+        return;
+      }
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'd') {
+        if (selectedPartId) {
+          e.preventDefault();
+          handleDuplicatePart(selectedPartId);
+        }
+        return;
+      }
+
+      // Precision arrow-key nudging (1 mm, or 10 mm with Shift; Alt+Up/Down for Z depth)
+      if (
+        selectedPartId &&
+        (e.key === 'ArrowLeft' ||
+          e.key === 'ArrowRight' ||
+          e.key === 'ArrowUp' ||
+          e.key === 'ArrowDown')
+      ) {
+        e.preventDefault();
+        const step = e.shiftKey ? 10 : 1;
+        if (e.key === 'ArrowLeft') handleNudgeSelected(-step, 0, 0);
+        else if (e.key === 'ArrowRight') handleNudgeSelected(step, 0, 0);
+        else if (e.key === 'ArrowUp') {
+          if (e.altKey) handleNudgeSelected(0, 0, -step);
+          else handleNudgeSelected(0, step, 0);
+        } else if (e.key === 'ArrowDown') {
+          if (e.altKey) handleNudgeSelected(0, 0, step);
+          else handleNudgeSelected(0, -step, 0);
+        }
         return;
       }
 
@@ -589,6 +814,10 @@ export default function App() {
           break;
         case 'd':
           setShowDimensions((d) => !d);
+          break;
+        case 'f':
+          if (selectedPartId) viewportRef.current?.focusPart(selectedPartId);
+          else viewportRef.current?.focusAll();
           break;
         case 'h':
           setDockCollapsed((c) => !c);
@@ -614,8 +843,11 @@ export default function App() {
     sketchOpen,
     cutListOpen,
     addPartOpen,
+    contextMenu,
     handleUndo,
     handleRedo,
+    handleDuplicatePart,
+    handleNudgeSelected,
     selectedPartId,
     selectedFastenerId,
     handleDeletePart,
@@ -675,6 +907,11 @@ export default function App() {
   const selectedClearances = useMemo(
     () => (selectedPart ? computePartClearances(selectedPart, project.parts) : []),
     [selectedPart, project.parts]
+  );
+
+  const jointZones = useMemo(
+    () => computeJointZones(project.parts, activeScrewType),
+    [project.parts, activeScrewType]
   );
 
   const snapMm = SNAP_STEPS[snapIdx];
@@ -812,6 +1049,12 @@ export default function App() {
         </div>
       )}
 
+      {/* Compact CAD View Compass (Desktop/Tablet) */}
+      <ViewCube
+        onSelectView={(preset) => viewportRef.current?.setCameraPreset(preset)}
+        onFocusAll={() => viewportRef.current?.focusAll()}
+      />
+
       {/* Full-Viewport Realistic 3D CAD Canvas */}
       <main className="h-full w-full pt-12">
         <Viewport3D
@@ -819,9 +1062,11 @@ export default function App() {
           parts={project.parts}
           fasteners={project.fasteners}
           selectedPartId={selectedPartId}
+          selectedPartIds={selectedPartIds}
           selectedFastenerId={selectedFastenerId}
           tool={tool}
           activeScrewType={activeScrewType}
+          screwJointsOnly={screwJointsOnly}
           snapMm={snapMm}
           magneticSnap={magneticSnap}
           showDimensions={showDimensions}
@@ -833,12 +1078,51 @@ export default function App() {
           collidingPartIds={collisionReport.collidingIds}
           fastenerAuditMap={fastenerAuditMap}
           clearances={selectedClearances}
+          jointZones={jointZones}
           onSelectPart={handleSelectPart}
           onSelectFastener={handleSelectFastener}
           onTransformPart={handleTransformPart}
+          onCloneTransformPart={handleCloneTransformPart}
           onPlaceFastener={handlePlaceFastener}
+          onRejectScrewPlacement={(reason) =>
+            showToast(`Wkręt zablokowany: ${reason} (wyłącz „Tylko styki”, aby wymusić)`)
+          }
+          onContextMenu={setContextMenu}
         />
       </main>
+
+      {/* Right-Click Commercial CAD Context Menu */}
+      <ContextMenu
+        menu={contextMenu}
+        selectedCount={selectedPartIds.length}
+        onClose={() => setContextMenu(null)}
+        onOpenInspector={(id) => {
+          setSelectedPartId(id);
+          setSelectedPartIds([id]);
+          setInspectorOpen(true);
+        }}
+        onEditShape2D={(id) => {
+          const p = project.parts.find((x) => x.id === id);
+          if (p) {
+            setSketchEditingPart(p);
+            setSketchOpen(true);
+          }
+        }}
+        onDuplicate={handleDuplicatePart}
+        onMirrorDuplicate={(id) => handleMirrorPart(id, true)}
+        onRotate90Y={handleRotate90Y}
+        onDropToFloor={handleDropToFloor}
+        onAutoFastenPart={(id) => handleAutoFasteners(id)}
+        onDeletePart={handleDeletePart}
+        onDeleteFastener={handleDeleteFastener}
+        onAddPart={() => setAddPartOpen(true)}
+        onSketchNew2D={() => {
+          setSketchEditingPart(null);
+          setSketchOpen(true);
+        }}
+        onAutoFastenAll={() => handleAutoFasteners()}
+        onFocusAll={() => viewportRef.current?.focusAll()}
+      />
 
       {/* Unified Collapsible Bottom Control Dock */}
       <BottomDock
@@ -853,6 +1137,8 @@ export default function App() {
         }}
         activeScrewType={activeScrewType}
         onChangeScrewType={setActiveScrewType}
+        screwJointsOnly={screwJointsOnly}
+        onToggleScrewJointsOnly={() => setScrewJointsOnly((v) => !v)}
         snapMm={snapMm}
         onCycleSnap={() => setSnapIdx((i) => (i + 1) % SNAP_STEPS.length)}
         magneticSnap={magneticSnap}
@@ -875,12 +1161,13 @@ export default function App() {
         onCameraPreset={(preset: CameraPreset) =>
           viewportRef.current?.setCameraPreset(preset)
         }
-        onAutoFasteners={handleAutoFasteners}
+        onAutoFasteners={() => handleAutoFasteners()}
         canUndo={historyPast.length > 0}
         canRedo={historyFuture.length > 0}
         onUndo={handleUndo}
         onRedo={handleRedo}
         selectedPartName={selectedPart?.name ?? null}
+        selectedCount={selectedPartIds.length}
         selectedFastenerLabel={
           selectedFastener ? SCREW_MAP[selectedFastener.type].name : null
         }
@@ -913,6 +1200,7 @@ export default function App() {
         onLoadTemplate={handleLoadTemplate}
         onSelectPart={(id) => {
           setSelectedPartId(id);
+          setSelectedPartIds([id]);
           setSelectedFastenerId(null);
           setInspectorOpen(true);
           if (window.innerWidth < 640) {
@@ -990,7 +1278,9 @@ export default function App() {
           setHistoryPast([]);
           setHistoryFuture([]);
           setSelectedPartId(null);
+          setSelectedPartIds([]);
           setSelectedFastenerId(null);
+          setContextMenu(null);
           setExplodedAmount(0);
           setTimeout(() => viewportRef.current?.focusAll(), 40);
           showToast(`Zaimportowano jako nowy projekt: ${importedCopy.name}`);
