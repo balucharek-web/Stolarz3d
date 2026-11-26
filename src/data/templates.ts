@@ -436,6 +436,7 @@ export const FURNITURE_TEMPLATES: FurnitureTemplateMeta[] = [
           handleSide: 'right',
           hingeSide: 'left',
           hingeCount: 2,
+          grainRotated: true,
           edgeBanding: { thicknessMm: 0.8, top: true, bottom: true, left: true, right: true },
           hardwareTag: 'door_overlay',
         },

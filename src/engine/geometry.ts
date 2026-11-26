@@ -34,14 +34,15 @@ function applyWorldScaleUVs(
   rotateGrain = false,
   boardDimsM?: [number, number, number],
   forcedThinAxis?: 'x' | 'y' | 'z',
-  partId?: string
+  partId?: string,
+  isProfile = false
 ) {
   const pos = geometry.attributes.position;
   const norm = geometry.attributes.normal;
   if (!pos || !norm) return;
 
   const uvArray = new Float32Array(pos.count * 2);
-  const scale = 1 / 1.25; // 1250mm per seamless synthesized sheet tile
+  const scale = 1 / 1.25; // 1250mm per seamless sheet tile
   const [offU, offV] = hashPartUvOffset(partId);
 
   // Determine which local axis is the thin board thickness (if any)
@@ -59,6 +60,41 @@ function applyWorldScaleUVs(
         : forcedThinAxis === 'x'
           ? Math.max(0.008, wM)
           : Math.max(0.008, Math.min(wM, hM, dM));
+
+  // For structural posts/profiles (e.g. 40x1600x40), project uniform world-scale UVs along the longest axis on all 4 sides
+  if (isProfile) {
+    const longAxis = hM >= wM && hM >= dM ? 'y' : wM >= dM ? 'x' : 'z';
+    for (let i = 0; i < pos.count; i++) {
+      const x = pos.getX(i);
+      const y = pos.getY(i);
+      const z = pos.getZ(i);
+      const nx = Math.abs(norm.getX(i));
+      const ny = Math.abs(norm.getY(i));
+      const nz = Math.abs(norm.getZ(i));
+
+      let u: number;
+      let v: number;
+      if (nz >= nx && nz >= ny) {
+        u = longAxis === 'y' ? y * scale : x * scale;
+        v = longAxis === 'y' ? x * scale : y * scale;
+      } else if (ny >= nx && ny >= nz) {
+        u = longAxis === 'z' ? z * scale : x * scale;
+        v = longAxis === 'z' ? x * scale : z * scale;
+      } else {
+        u = longAxis === 'y' ? y * scale : z * scale;
+        v = longAxis === 'y' ? z * scale : y * scale;
+      }
+      if (rotateGrain) {
+        uvArray[i * 2] = v + offU;
+        uvArray[i * 2 + 1] = u + offV;
+      } else {
+        uvArray[i * 2] = u + offU;
+        uvArray[i * 2 + 1] = v + offV;
+      }
+    }
+    geometry.setAttribute('uv', new THREE.BufferAttribute(uvArray, 2));
+    return;
+  }
 
   for (let i = 0; i < pos.count; i++) {
     const x = pos.getX(i);
@@ -139,7 +175,8 @@ function applyWorldScaleUVs(
 function assignFaceEdgeGroups(
   geometry: THREE.BufferGeometry,
   dimsM: [number, number, number],
-  forcedThinAxis?: 'x' | 'y' | 'z'
+  forcedThinAxis?: 'x' | 'y' | 'z',
+  isProfile = false
 ) {
   const norm = geometry.attributes.normal;
   if (!norm || geometry.index) return;
@@ -153,6 +190,11 @@ function assignFaceEdgeGroups(
   if (triCount === 0) return;
 
   geometry.clearGroups();
+  if (isProfile) {
+    geometry.addGroup(0, triCount * 3, 0);
+    return;
+  }
+
   let runStart = 0;
   let runMat = -1;
 
@@ -462,8 +504,9 @@ export function buildPartGeometry(part: FurniturePart): THREE.BufferGeometry {
 
   geo.translate(0, 0, -innerD / 2);
   geo.computeVertexNormals();
-  applyWorldScaleUVs(geo, !!part.grainRotated, [w, h, d], undefined, part.id);
-  assignFaceEdgeGroups(geo, [w, h, d]);
+  const isProfile = part.kind === 'profile';
+  applyWorldScaleUVs(geo, !!part.grainRotated, [w, h, d], undefined, part.id, isProfile);
+  assignFaceEdgeGroups(geo, [w, h, d], undefined, isProfile);
   return geo;
 }
 

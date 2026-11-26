@@ -123,6 +123,8 @@ const PRESETS: PresetBlueprint[] = [
       position: [0, 460, 280],
       rotation: [0, 0, 0],
       handleSide: 'right',
+      grainRotated: true,
+      edgeBanding: { thicknessMm: 0.8, top: true, bottom: true, left: true, right: true },
     }),
   },
   {

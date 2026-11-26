@@ -384,55 +384,55 @@ const LIGHTING_CONFIGS: Record<
 > = {
   daylight: {
     bg: '#EAECEF',
-    keyColor: '#FFF8EC',
-    keyIntensity: 2.1,
-    hemiSky: '#E6F0FA',
-    hemiGround: '#D0C8BE',
-    hemiIntensity: 1.05,
-    rimColor: '#DDEAFF',
-    rimIntensity: 0.75,
-    exposure: 1.08,
-    softboxIntensity: 0,
-    envIntensity: 1.0,
+    keyColor: '#FFF7E8',
+    keyIntensity: 2.35,
+    hemiSky: '#E6EFFA',
+    hemiGround: '#C8BFB4',
+    hemiIntensity: 0.72,
+    rimColor: '#D6E6FF',
+    rimIntensity: 0.58,
+    exposure: 1.03,
+    softboxIntensity: 0.3,
+    envIntensity: 0.82,
   },
   studio: {
-    bg: '#F4F5F7',
+    bg: '#F3F4F6',
     keyColor: '#FFFFFF',
-    keyIntensity: 2.35,
-    hemiSky: '#F7FAFF',
-    hemiGround: '#DCDFE4',
-    hemiIntensity: 1.2,
-    rimColor: '#F0F6FF',
-    rimIntensity: 0.9,
-    exposure: 1.12,
-    softboxIntensity: 0.65,
-    envIntensity: 1.15,
+    keyIntensity: 2.5,
+    hemiSky: '#F4F8FF',
+    hemiGround: '#D2D6DC',
+    hemiIntensity: 0.82,
+    rimColor: '#EAF2FF',
+    rimIntensity: 0.72,
+    exposure: 1.06,
+    softboxIntensity: 0.75,
+    envIntensity: 0.92,
   },
   warm: {
     bg: '#E7E2DA',
-    keyColor: '#FFE4BC',
-    keyIntensity: 2.25,
-    hemiSky: '#F5E7D2',
-    hemiGround: '#BAA78F',
-    hemiIntensity: 0.92,
+    keyColor: '#FFE2B5',
+    keyIntensity: 2.4,
+    hemiSky: '#F3E5CE',
+    hemiGround: '#AE9A82',
+    hemiIntensity: 0.68,
     rimColor: '#C8D8F0',
-    rimIntensity: 0.65,
-    exposure: 1.04,
-    softboxIntensity: 0.4,
-    envIntensity: 0.95,
+    rimIntensity: 0.52,
+    exposure: 1.02,
+    softboxIntensity: 0.45,
+    envIntensity: 0.78,
   },
   photoreal: {
     bg: '#ECEEF2',
-    keyColor: '#FFFBF2',
-    keyIntensity: 2.65,
-    hemiSky: '#F3F7FF',
-    hemiGround: '#D2CCC4',
-    hemiIntensity: 1.12,
-    rimColor: '#DCEAFF',
-    rimIntensity: 1.1,
-    exposure: 1.16,
-    softboxIntensity: 2.25,
-    envIntensity: 1.4,
+    keyColor: '#FFF9EE',
+    keyIntensity: 2.7,
+    hemiSky: '#EEF4FF',
+    hemiGround: '#C5BEB6',
+    hemiIntensity: 0.64,
+    rimColor: '#D8E8FF',
+    rimIntensity: 0.86,
+    exposure: 1.07,
+    softboxIntensity: 1.85,
+    envIntensity: 1.05,
   },
 };
 
@@ -658,6 +658,7 @@ export const Viewport3D = forwardRef<Viewport3DHandle, Viewport3DProps>(
       const pmrem = new THREE.PMREMGenerator(renderer);
       const envTex = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
       scene.environment = envTex;
+      scene.environmentIntensity = initialLight.envIntensity;
       pmrem.dispose();
 
       const isTouchDevice =
@@ -709,19 +710,21 @@ export const Viewport3D = forwardRef<Viewport3DHandle, Viewport3DProps>(
         initialLight.keyColor,
         initialLight.keyIntensity
       );
-      keyLight.position.set(3.2, 5.4, 3.6);
+      keyLight.position.set(3.4, 5.1, 3.8);
       keyLight.castShadow = !isSoftwareGl;
       keyLight.shadow.mapSize.set(2048, 2048);
-      keyLight.shadow.camera.near = 0.5;
+      keyLight.shadow.camera.near = 0.4;
       keyLight.shadow.camera.far = 16;
-      const d = 2.6;
+      const d = 2.2;
       keyLight.shadow.camera.left = -d;
       keyLight.shadow.camera.right = d;
       keyLight.shadow.camera.top = d;
       keyLight.shadow.camera.bottom = -d;
-      keyLight.shadow.bias = -0.0005;
-      keyLight.shadow.normalBias = 0.02;
+      keyLight.shadow.bias = -0.00025;
+      keyLight.shadow.normalBias = 0.008;
+      keyLight.shadow.radius = 2.6;
       scene.add(keyLight);
+      scene.add(keyLight.target);
 
       const rimLight = new THREE.DirectionalLight(
         initialLight.rimColor,
@@ -2550,10 +2553,15 @@ export const Viewport3D = forwardRef<Viewport3DHandle, Viewport3DProps>(
           }
         } else {
           geo = buildPartGeometry(part);
+          const edgeMode =
+            part.edgeBanding && part.edgeBanding.thicknessMm === 0
+              ? 'raw'
+              : 'banded';
           const mat = rt.materials.getMaterial(
             part.materialId,
             props.xrayMode,
-            part.surfaceFinish ?? 'matte'
+            part.surfaceFinish ?? 'matte',
+            edgeMode
           );
           const mesh = new THREE.Mesh(geo, mat);
           mesh.name = 'main_mesh';
@@ -2686,6 +2694,36 @@ export const Viewport3D = forwardRef<Viewport3DHandle, Viewport3DProps>(
 
       // Apply current exploded & open-door/drawer transforms immediately after rebuild
       rt.applyPartAnimations();
+
+      // Fit directional shadow camera frustum tightly around furniture bounds for razor-sharp cabinet interior shadows
+      if (props.parts.length > 0) {
+        const bounds = new THREE.Box3();
+        for (const p of props.parts) {
+          const wb = getPartWorldBox(p);
+          bounds.expandByPoint(
+            new THREE.Vector3(wb.minX * MM_TO_M, wb.minY * MM_TO_M, wb.minZ * MM_TO_M)
+          );
+          bounds.expandByPoint(
+            new THREE.Vector3(wb.maxX * MM_TO_M, wb.maxY * MM_TO_M, wb.maxZ * MM_TO_M)
+          );
+        }
+        const center = bounds.getCenter(new THREE.Vector3());
+        const size = bounds.getSize(new THREE.Vector3());
+        const halfExtent = Math.max(1.15, Math.min(4.8, size.length() * 0.68 + 0.35));
+        rt.keyLight.target.position.copy(center);
+        rt.keyLight.target.updateMatrixWorld();
+        rt.keyLight.position.set(
+          center.x + halfExtent * 1.55,
+          center.y + halfExtent * 2.25,
+          center.z + halfExtent * 1.65
+        );
+        rt.keyLight.shadow.camera.left = -halfExtent;
+        rt.keyLight.shadow.camera.right = halfExtent;
+        rt.keyLight.shadow.camera.top = halfExtent;
+        rt.keyLight.shadow.camera.bottom = -halfExtent;
+        rt.keyLight.shadow.camera.far = Math.max(14, halfExtent * 8);
+        rt.keyLight.shadow.camera.updateProjectionMatrix();
+      }
 
       // Rebuild 3D Clearance Dimension Guides ("Prześwity w świetle") & Assembly Joint Contact Pins
       disposeObjectTree(rt.guidesRoot);
