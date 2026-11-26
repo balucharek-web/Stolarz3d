@@ -2,6 +2,7 @@ import {
   getMaterialMeta,
   type FurniturePart,
   type MaterialId,
+  type OffcutRemnant,
 } from '../types/furniture';
 import { computePolygonAreaM2 } from './geometry';
 
@@ -52,6 +53,10 @@ export interface NestedSheet {
   placements: NestedPlacement[];
   usedAreaM2: number;
   wastePercent: number;
+  /** True when this board comes from the workshop offcut remnant rack (0 PLN fresh purchase cost) */
+  isOffcut?: boolean;
+  offcutId?: string;
+  offcutLabel?: string;
 }
 
 export interface MaterialNestingResult {
@@ -66,7 +71,14 @@ export interface MaterialNestingResult {
   trimMm: number;
   grainLocked: boolean;
   totalParts: number;
+  /** Total boards (fresh factory sheets + used offcuts) */
   totalSheets: number;
+  /** Count of fresh factory sheets to purchase */
+  freshSheetsCount: number;
+  /** Count of workshop offcut remnants reused */
+  usedOffcutsCount: number;
+  /** Estimated savings from reusing workshop offcuts (PLN) */
+  savedOffcutCostPln: number;
   totalBoardAreaM2: number;
   totalSheetAreaM2: number;
   wastePercent: number;
@@ -364,7 +376,8 @@ function tryPlaceOnSheet(
 export function nestMaterialSheets(
   parts: FurniturePart[],
   kerfMm = 4,
-  trimMm = 10
+  trimMm = 10,
+  offcuts: OffcutRemnant[] = []
 ): MaterialNestingResult[] {
   // Global 1-based part index matching CutListModal, PDF, DXF, and Board Labels
   const globalIndexByPartId = new Map<string, number>();
@@ -420,7 +433,43 @@ export function nestMaterialSheets(
         return b.spec.sawLenMm * b.spec.sawWidMm - a.spec.sawLenMm * a.spec.sawWidMm;
       });
 
-    const builders: SheetBuilder[] = [];
+    type ExtendedBuilder = SheetBuilder & {
+      boardW: number;
+      boardH: number;
+      boardTrimMm: number;
+      isOffcut?: boolean;
+      offcutId?: string;
+      offcutLabel?: string;
+    };
+
+    // Pre-populate matching workshop offcuts (sorted smallest-area first so smaller scraps are consumed before large ones)
+    const matchingOffcuts = offcuts
+      .filter(
+        (o) =>
+          o.materialId === materialId &&
+          Math.abs(o.thicknessMm - thicknessMm) <= 0.5 &&
+          o.lengthMm >= 120 &&
+          o.widthMm >= 80 &&
+          o.quantity > 0
+      )
+      .sort((a, b) => a.lengthMm * a.widthMm - b.lengthMm * b.widthMm);
+
+    const builders: ExtendedBuilder[] = [];
+    for (const off of matchingOffcuts) {
+      const offTrim = isCountertopStock ? 0 : Math.min(4, trimMm);
+      for (let q = 0; q < off.quantity; q++) {
+        const b = createSheetBuilder(off.lengthMm, off.widthMm, offTrim, offTrim) as ExtendedBuilder;
+        b.boardW = off.lengthMm;
+        b.boardH = off.widthMm;
+        b.boardTrimMm = offTrim;
+        b.isOffcut = true;
+        b.offcutId = off.id;
+        b.offcutLabel =
+          off.label || `Odpad ${off.lengthMm}×${off.widthMm}${off.quantity > 1 ? ` #${q + 1}` : ''}`;
+        builders.push(b);
+      }
+    }
+
     const usableW = Math.max(100, sheetW - trimXMm * 2);
     const usableH = Math.max(100, sheetH - trimYMm * 2);
 
@@ -452,7 +501,10 @@ export function nestMaterialSheets(
       }
 
       if (!placed) {
-        const fresh = createSheetBuilder(sheetW, sheetH, trimXMm, trimYMm);
+        const fresh = createSheetBuilder(sheetW, sheetH, trimXMm, trimYMm) as ExtendedBuilder;
+        fresh.boardW = sheetW;
+        fresh.boardH = sheetH;
+        fresh.boardTrimMm = trimMm;
         const frBefore = [...fresh.freeRects];
         const hit = tryPlaceOnSheet(fresh, w, h, allowRotation, kerfMm);
         if (hit) {
@@ -487,29 +539,46 @@ export function nestMaterialSheets(
       }
     }
 
+    // Keep only builders that actually received at least one cut piece
+    const activeBuilders = builders.filter((b) => b.placements.length > 0);
+
     const singleSheetAreaM2 = (sheetW * sheetH) / 1_000_000;
-    const sheets: NestedSheet[] = builders.map((b, idx) => {
+    const sheets: NestedSheet[] = activeBuilders.map((b, idx) => {
+      const boardAreaM2 = (b.boardW * b.boardH) / 1_000_000;
       const usedM2 = b.placements.reduce(
         (sum, p) => sum + (p.wMm * p.hMm) / 1_000_000,
         0
       );
-      const wastePercent = Math.max(
-        0,
-        Math.min(99, Math.round((1 - usedM2 / singleSheetAreaM2) * 100))
-      );
+      const wastePercent =
+        boardAreaM2 > 0
+          ? Math.max(0, Math.min(99, Math.round((1 - usedM2 / boardAreaM2) * 100)))
+          : 0;
       return {
         sheetIndex: idx + 1,
-        sheetWidthMm: sheetW,
-        sheetHeightMm: sheetH,
-        trimMm,
+        sheetWidthMm: b.boardW,
+        sheetHeightMm: b.boardH,
+        trimMm: b.boardTrimMm,
         placements: b.placements,
         usedAreaM2: Math.round(usedM2 * 100) / 100,
         wastePercent,
+        isOffcut: b.isOffcut,
+        offcutId: b.offcutId,
+        offcutLabel: b.offcutLabel,
       };
     });
 
+    const freshSheetsCount = sheets.filter((s) => !s.isOffcut).length;
+    const usedOffcutsCount = sheets.filter((s) => s.isOffcut).length;
+    const offcutUsedAreaM2 = sheets
+      .filter((s) => s.isOffcut)
+      .reduce((sum, s) => sum + s.usedAreaM2, 0);
+
     const totalBoardAreaM2 = specs.reduce((sum, s) => sum + s.areaM2, 0);
-    const totalSheetAreaM2 = sheets.length * singleSheetAreaM2;
+    const totalSheetAreaM2 = sheets.reduce(
+      (sum, s) => sum + (s.sheetWidthMm * s.sheetHeightMm) / 1_000_000,
+      0
+    );
+    const freshSheetAreaM2 = freshSheetsCount * singleSheetAreaM2;
     const totalWastePercent =
       totalSheetAreaM2 > 0
         ? Math.max(
@@ -517,6 +586,10 @@ export function nestMaterialSheets(
             Math.min(99, Math.round((1 - totalBoardAreaM2 / totalSheetAreaM2) * 100))
           )
         : 0;
+
+    // Estimate savings vs cutting without offcuts (fresh sheets needed if no offcuts were used, or value of reused area)
+    const savedOffcutCostPln =
+      usedOffcutsCount > 0 ? Math.round(offcutUsedAreaM2 * meta.pricePerM2Pln) : 0;
 
     results.push({
       groupKey,
@@ -529,10 +602,13 @@ export function nestMaterialSheets(
       grainLocked,
       totalParts: specs.length,
       totalSheets: sheets.length,
+      freshSheetsCount,
+      usedOffcutsCount,
+      savedOffcutCostPln,
       totalBoardAreaM2: Math.round(totalBoardAreaM2 * 100) / 100,
       totalSheetAreaM2: Math.round(totalSheetAreaM2 * 100) / 100,
       wastePercent: totalWastePercent,
-      estimatedCostPln: Math.round(totalSheetAreaM2 * meta.pricePerM2Pln),
+      estimatedCostPln: Math.round(freshSheetAreaM2 * meta.pricePerM2Pln),
       sheets,
     });
   }

@@ -834,11 +834,12 @@ export function buildDoorHingesGroup(part: FurniturePart): THREE.Group | null {
  */
 export function buildPartMachiningGroup(part: FurniturePart): THREE.Group | null {
   const hasDado = Boolean(part.dadoGroove?.enabled);
+  const hasLed = Boolean(part.ledGroove?.enabled);
   const hasMiter = Boolean(
     part.miter45 &&
       (part.miter45.left || part.miter45.right || part.miter45.top || part.miter45.bottom)
   );
-  if (!hasDado && !hasMiter) return null;
+  if (!hasDado && !hasLed && !hasMiter) return null;
 
   const group = new THREE.Group();
   group.name = 'part_machining';
@@ -884,6 +885,58 @@ export function buildPartMachiningGroup(part: FurniturePart): THREE.Group | null
       strip.position.set(0, -h / 2 + inset, 0);
       strip.userData.disposeMaterial = true;
       group.add(strip);
+    }
+  }
+
+  if (hasLed && part.ledGroove) {
+    const lg = part.ledGroove;
+    const ledW = Math.max(0.008, lg.widthMm * MM_TO_M);
+    const inset = lg.insetMm * MM_TO_M;
+    const aluMat = new THREE.MeshStandardMaterial({
+      color: '#C0C7D0',
+      metalness: 0.82,
+      roughness: 0.28,
+      polygonOffset: true,
+      polygonOffsetFactor: -2,
+      polygonOffsetUnits: -2,
+    });
+    const diffuserMat = new THREE.MeshStandardMaterial({
+      color: '#FFF9E6',
+      emissive: '#FFE8A3',
+      emissiveIntensity: 0.75,
+      roughness: 0.35,
+      metalness: 0.05,
+      polygonOffset: true,
+      polygonOffsetFactor: -3,
+      polygonOffsetUnits: -3,
+    });
+
+    if (h <= w && h <= d) {
+      // Horizontal bottom deck / shelf: LED strip recessed into underside (-Y face)
+      const zPos = lg.edge === 'back' ? -d / 2 + inset : d / 2 - inset;
+      const rail = new THREE.Mesh(new THREE.BoxGeometry(w - 0.012, 0.0024, ledW), aluMat);
+      rail.position.set(0, -h / 2 - 0.0004, zPos);
+      rail.userData.disposeMaterial = true;
+      const diffuser = new THREE.Mesh(
+        new THREE.BoxGeometry(w - 0.016, 0.0028, ledW * 0.68),
+        diffuserMat
+      );
+      diffuser.position.set(0, -h / 2 - 0.0007, zPos);
+      diffuser.userData.disposeMaterial = true;
+      group.add(rail, diffuser);
+    } else if (w <= h && w <= d) {
+      // Vertical side wall (e.g. wardrobe vertical LED strip): visible on both faces near front/back
+      const zPos = lg.edge === 'back' ? -d / 2 + inset : d / 2 - inset;
+      const rail = new THREE.Mesh(new THREE.BoxGeometry(w + 0.0012, h - 0.016, ledW), aluMat);
+      rail.position.set(0, 0, zPos);
+      rail.userData.disposeMaterial = true;
+      const diffuser = new THREE.Mesh(
+        new THREE.BoxGeometry(w + 0.0018, h - 0.02, ledW * 0.66),
+        diffuserMat
+      );
+      diffuser.position.set(0, 0, zPos);
+      diffuser.userData.disposeMaterial = true;
+      group.add(rail, diffuser);
     }
   }
 

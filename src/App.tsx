@@ -19,6 +19,7 @@ import {
   MaterialId,
   MaterialsCatalogConfig,
   MeasureSegment,
+  ParametricCabinetConfig,
   QuoteSettings,
   SCREW_MAP,
   ScrewType,
@@ -36,6 +37,8 @@ import {
 } from './engine/geometry';
 import {
   alignSelectedParts,
+  analyzeCountertopCutouts,
+  analyzeDoorSwingCollisions,
   analyzeFasteners,
   analyzeShelfDeflection,
   auditRoomClearances,
@@ -47,12 +50,16 @@ import {
   distributeSelectedParts,
   getPartWorldBox,
   groupSelectedParts,
+  mergeCountertopsForRow,
   mirrorPartX,
+  syncApplianceCutoutsOnCountertops,
   syncFastenersWithParts,
   ungroupSelectedParts,
+  type ClearanceGuide,
 } from './engine/carpentry';
 import {
   getGroupBoundingSizeMm,
+  rebuildParametricCabinetInPlace,
   smartResizeGroup,
 } from './engine/parametric';
 import {
@@ -132,6 +139,7 @@ export default function App() {
   const [inspectorOpen, setInspectorOpen] = useState<boolean>(false);
   const [addPartOpen, setAddPartOpen] = useState<boolean>(false);
   const [cabinetBuilderOpen, setCabinetBuilderOpen] = useState<boolean>(false);
+  const [editingCabinetGroupId, setEditingCabinetGroupId] = useState<string | null>(null);
   const [materialsModalOpen, setMaterialsModalOpen] = useState<boolean>(false);
   const [roomModalOpen, setRoomModalOpen] = useState<boolean>(false);
   const [sketchOpen, setSketchOpen] = useState<boolean>(false);
@@ -463,6 +471,44 @@ export default function App() {
     [commitProject]
   );
 
+  const handleBatchUpdateParts = useCallback(
+    (
+      ids: string[],
+      updater: Partial<FurniturePart> | ((p: FurniturePart) => Partial<FurniturePart>)
+    ) => {
+      if (ids.length === 0) return;
+      const idSet = new Set(ids);
+      commitProject((prev) => {
+        let affectsGeometry = false;
+        const nextParts = prev.parts.map((p) => {
+          if (!idSet.has(p.id)) return p;
+          const patch = typeof updater === 'function' ? updater(p) : updater;
+          if (
+            patch.width !== undefined ||
+            patch.height !== undefined ||
+            patch.depth !== undefined ||
+            patch.position !== undefined ||
+            patch.rotation !== undefined ||
+            patch.customPolygon !== undefined
+          ) {
+            affectsGeometry = true;
+          }
+          return { ...p, ...patch };
+        });
+        const synced = affectsGeometry
+          ? syncFastenersWithParts(prev.parts, nextParts, prev.fasteners, idSet)
+          : { fasteners: prev.fasteners };
+        return {
+          ...prev,
+          parts: nextParts,
+          fasteners: synced.fasteners,
+        };
+      });
+      showToast(`Zaktualizowano ${ids.length} zaznaczonych elementów`);
+    },
+    [commitProject, showToast]
+  );
+
   const handleResizePart = useCallback(
     (
       id: string,
@@ -498,11 +544,20 @@ export default function App() {
   );
 
   const handleInsertCabinet = useCallback(
-    (newParts: FurniturePart[], newFasteners: Fastener[], groupName: string) => {
+    (
+      newParts: FurniturePart[],
+      newFasteners: Fastener[],
+      groupName: string,
+      config: ParametricCabinetConfig
+    ) => {
       commitProject((prev) => ({
         ...prev,
         parts: [...prev.parts, ...newParts],
         fasteners: [...prev.fasteners, ...newFasteners],
+        cabinetConfigs: {
+          ...(prev.cabinetConfigs ?? {}),
+          [groupName]: structuredClone(config),
+        },
       }));
       const ids = newParts.map((p) => p.id);
       setSelectedPartIds(ids);
@@ -511,9 +566,89 @@ export default function App() {
       setExplodedAmount(0);
       setShowFasteners(true);
       setTimeout(() => viewportRef.current?.focusAll(), 45);
-      showToast(`Wstawiono moduł: ${groupName} (${newParts.length} płyt, ${newFasteners.length} łączników)`);
+      showToast(
+        `Wstawiono moduł: ${groupName} (${newParts.length} płyt, ${newFasteners.length} łączników)`
+      );
     },
     [commitProject, showToast]
+  );
+
+  const handleUpdateParametricCabinet = useCallback(
+    (groupId: string, nextCfg: ParametricCabinetConfig) => {
+      let nextSelectedIds: string[] = [];
+      commitProject((prev) => {
+        const rebuilt = rebuildParametricCabinetInPlace(
+          prev.parts,
+          prev.fasteners,
+          groupId,
+          nextCfg
+        );
+        nextSelectedIds = rebuilt.newPartIds;
+        return {
+          ...prev,
+          parts: rebuilt.parts,
+          fasteners: rebuilt.fasteners,
+          cabinetConfigs: {
+            ...(prev.cabinetConfigs ?? {}),
+            [groupId]: structuredClone(nextCfg),
+          },
+        };
+      });
+      if (nextSelectedIds.length > 0) {
+        setSelectedPartIds(nextSelectedIds);
+        setSelectedPartId(nextSelectedIds[0]);
+      }
+      setEditingCabinetGroupId(null);
+      showToast(`Zaktualizowano parametrycznie: ${nextCfg.name}`);
+    },
+    [commitProject, showToast]
+  );
+
+  const handleOpenParametricEditorForPart = useCallback(
+    (partId?: string | null) => {
+      const targetId = partId ?? selectedPartId;
+      if (!targetId) return;
+      const target = project.parts.find((p) => p.id === targetId);
+      if (!target?.groupId || !project.cabinetConfigs?.[target.groupId]) return;
+      setEditingCabinetGroupId(target.groupId);
+      setCabinetBuilderOpen(true);
+    },
+    [project.parts, project.cabinetConfigs, selectedPartId]
+  );
+
+  const handleSetClearanceDistance = useCallback(
+    (partId: string, guide: ClearanceGuide, targetDistanceMm: number) => {
+      const target = project.parts.find((p) => p.id === partId);
+      if (!target) return;
+      const clampedTarget = Math.max(0, Math.min(5000, Math.round(targetDistanceMm)));
+      let dx = 0;
+      let dy = 0;
+      let dz = 0;
+      if (guide.direction === 'left') dx = clampedTarget - guide.distanceMm;
+      else if (guide.direction === 'right') dx = guide.distanceMm - clampedTarget;
+      else if (guide.direction === 'down') dy = clampedTarget - guide.distanceMm;
+      else if (guide.direction === 'up') dy = guide.distanceMm - clampedTarget;
+      else if (guide.direction === 'back') dz = clampedTarget - guide.distanceMm;
+
+      if (Math.abs(dx) < 0.05 && Math.abs(dy) < 0.05 && Math.abs(dz) < 0.05) {
+        showToast(`Prześwit już wynosi ${clampedTarget} mm`);
+        return;
+      }
+
+      const nextPos: [number, number, number] = [
+        Math.round((target.position[0] + dx) * 10) / 10,
+        Math.max(5, Math.round((target.position[1] + dy) * 10) / 10),
+        Math.round((target.position[2] + dz) * 10) / 10,
+      ];
+
+      if (guide.isSameGroup) {
+        handleUpdatePart(partId, { position: nextPos });
+      } else {
+        handleTransformPart(partId, nextPos, target.rotation);
+      }
+      showToast(`Ustawiono prześwit: ${clampedTarget} mm (${guide.targetName})`);
+    },
+    [project.parts, handleUpdatePart, handleTransformPart, showToast]
   );
 
   const handleSmartResizeGroup = useCallback(
@@ -527,10 +662,22 @@ export default function App() {
           heightMm,
           depthMm
         );
+        const existingCfg = prev.cabinetConfigs?.[groupId];
         return {
           ...prev,
           parts: resized.parts,
           fasteners: resized.fasteners,
+          cabinetConfigs: existingCfg
+            ? {
+                ...(prev.cabinetConfigs ?? {}),
+                [groupId]: {
+                  ...existingCfg,
+                  widthMm,
+                  heightMm,
+                  depthMm,
+                },
+              }
+            : prev.cabinetConfigs,
         };
       });
       showToast(`Przeskalowano szafkę na ${widthMm} × ${heightMm} × ${depthMm} mm`);
@@ -941,6 +1088,7 @@ export default function App() {
         }
         if (cabinetBuilderOpen) {
           setCabinetBuilderOpen(false);
+          setEditingCabinetGroupId(null);
           return;
         }
         if (sketchOpen) {
@@ -1095,6 +1243,27 @@ export default function App() {
     [project.parts, selectedPartId]
   );
 
+  const selectedParts = useMemo(() => {
+    const idSet = new Set(selectedPartIds);
+    return project.parts.filter((p) => idSet.has(p.id));
+  }, [project.parts, selectedPartIds]);
+
+  const selectedHasParametricConfig = Boolean(
+    selectedPart?.groupId && project.cabinetConfigs?.[selectedPart.groupId]
+  );
+
+  const contextMenuCanEditParametric = useMemo(() => {
+    if (!contextMenu || contextMenu.kind !== 'part') return false;
+    const p = project.parts.find((x) => x.id === contextMenu.partId);
+    return Boolean(p?.groupId && project.cabinetConfigs?.[p.groupId]);
+  }, [contextMenu, project.parts, project.cabinetConfigs]);
+
+  const editingCabinetProp = useMemo(() => {
+    if (!editingCabinetGroupId) return null;
+    const cfg = project.cabinetConfigs?.[editingCabinetGroupId];
+    return cfg ? { groupId: editingCabinetGroupId, config: cfg } : null;
+  }, [editingCabinetGroupId, project.cabinetConfigs]);
+
   const selectedPartFasteners = useMemo(
     () =>
       selectedPartId
@@ -1158,9 +1327,61 @@ export default function App() {
     [project.parts, project.room]
   );
 
+  const doorSwingCollisions = useMemo(
+    () => analyzeDoorSwingCollisions(project.parts, project.room),
+    [project.parts, project.room]
+  );
+
+  const countertopBridgeIssues = useMemo(
+    () => analyzeCountertopCutouts(project.parts),
+    [project.parts]
+  );
+
+  const countertopCount = useMemo(
+    () => project.parts.filter((p) => p.kind === 'countertop').length,
+    [project.parts]
+  );
+
+  const handleMergeCountertops = useCallback(() => {
+    let mergedCount = 0;
+    let needsMiterJoint = false;
+    commitProject((prev) => {
+      const res = mergeCountertopsForRow(prev.parts);
+      mergedCount = res.mergedCount;
+      needsMiterJoint = res.needsMiterJoint;
+      if (mergedCount === 0) return prev;
+      const syncedParts = syncApplianceCutoutsOnCountertops(res.parts).parts;
+      return { ...prev, parts: syncedParts };
+    });
+    if (mergedCount > 0) {
+      showToast(
+        needsMiterJoint
+          ? `Połączono ${mergedCount} blaty w ciąg (>3050 mm — wymagane śruby rzymskie)`
+          : `Połączono ${mergedCount} sąsiednie blaty w 1 ciągły blat`
+      );
+    } else {
+      showToast('Brak sąsiadujących blatów tej samej wysokości i głębokości do połączenia');
+    }
+  }, [commitProject, showToast]);
+
+  const handleSyncApplianceCutouts = useCallback(() => {
+    let syncedCount = 0;
+    commitProject((prev) => {
+      const res = syncApplianceCutoutsOnCountertops(prev.parts);
+      syncedCount = res.cutoutsSynced;
+      if (syncedCount === 0) return prev;
+      return { ...prev, parts: res.parts };
+    });
+    if (syncedCount > 0) {
+      showToast(`Zsynchronizowano ${syncedCount} otwór(ów) w blacie pod zlew / indukcję`);
+    } else {
+      showToast('Brak zlewu lub płyty indukcyjnej nad blatem do wycięcia');
+    }
+  }, [commitProject, showToast]);
+
   const selectedClearances = useMemo(
-    () => (selectedPart ? computePartClearances(selectedPart, project.parts) : []),
-    [selectedPart, project.parts]
+    () => (selectedPart ? computePartClearances(selectedPart, project.parts, project.room) : []),
+    [selectedPart, project.parts, project.room]
   );
 
   const jointZones = useMemo(
@@ -1286,7 +1507,10 @@ export default function App() {
           </button>
           <button
             type="button"
-            onClick={() => setCabinetBuilderOpen(true)}
+            onClick={() => {
+              setEditingCabinetGroupId(null);
+              setCabinetBuilderOpen(true);
+            }}
             className="flex min-h-[34px] items-center gap-1.5 rounded-lg border border-emerald-500/50 bg-emerald-500/12 px-2.5 sm:px-3 text-xs font-medium text-emerald-300 hover:bg-emerald-500/20 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
             title="Kreator parametrycznej szafki, szuflad i frontów"
           >
@@ -1339,11 +1563,13 @@ export default function App() {
         {(collisionReport.pairs.length > 0 ||
           faultyFastenerCount > 0 ||
           criticalSagCount > 0 ||
-          roomIssues.length > 0) && (
+          roomIssues.length > 0 ||
+          doorSwingCollisions.length > 0 ||
+          countertopBridgeIssues.length > 0) && (
           <button
             type="button"
             onClick={() =>
-              roomIssues.length > 0
+              roomIssues.length > 0 || doorSwingCollisions.length > 0
                 ? setRoomModalOpen(true)
                 : collisionReport.pairs.length > 0
                   ? setLeftDrawerMode('parts')
@@ -1358,6 +1584,8 @@ export default function App() {
                 faultyFastenerCount > 0 ? `${faultyFastenerCount} wkręt.` : null,
                 criticalSagCount > 0 ? `${criticalSagCount} ugięcie półki` : null,
                 roomIssues.length > 0 ? `${roomIssues.length} wnęka/skos` : null,
+                doorSwingCollisions.length > 0 ? `${doorSwingCollisions.length} otwieranie frontu` : null,
+                countertopBridgeIssues.length > 0 ? `${countertopBridgeIssues.length} mostek blatu` : null,
               ]
                 .filter(Boolean)
                 .join(' · ')}
@@ -1599,6 +1827,7 @@ export default function App() {
             showToast(`Wkręt zablokowany: ${reason} (wyłącz „Styki”, aby wymusić)`)
           }
           onContextMenu={setContextMenu}
+          onSetClearanceDistance={handleSetClearanceDistance}
         />
       </main>
 
@@ -1607,12 +1836,14 @@ export default function App() {
         menu={contextMenu}
         selectedCount={selectedPartIds.length}
         selectedCanUngroup={selectedCanUngroup}
+        canEditParametricCabinet={contextMenuCanEditParametric}
         onClose={() => setContextMenu(null)}
         onOpenInspector={(id) => {
           setSelectedPartId(id);
           setSelectedPartIds([id]);
           setInspectorOpen(true);
         }}
+        onEditParametricCabinet={(id) => handleOpenParametricEditorForPart(id)}
         onEditShape2D={(id) => {
           const p = project.parts.find((x) => x.id === id);
           if (p) {
@@ -1694,6 +1925,7 @@ export default function App() {
         selectedPartName={selectedPart?.name ?? null}
         selectedCount={selectedPartIds.length}
         selectedCanUngroup={selectedCanUngroup}
+        canEditParametricCabinet={selectedHasParametricConfig}
         selectedFastenerLabel={
           selectedFastener ? SCREW_MAP[selectedFastener.type].name : null
         }
@@ -1702,6 +1934,7 @@ export default function App() {
         onGroupSelected={handleGroupSelected}
         onUngroupSelected={handleUngroupSelected}
         onOpenInspector={() => setInspectorOpen(true)}
+        onEditParametricCabinet={() => handleOpenParametricEditorForPart(selectedPartId)}
         onDeleteSelectedFastener={() => {
           if (selectedFastenerId) handleDeleteFastener(selectedFastenerId);
         }}
@@ -1743,17 +1976,41 @@ export default function App() {
       <InspectorDrawer
         open={inspectorOpen && Boolean(selectedPart)}
         part={selectedPart}
+        selectedParts={selectedParts}
+        allParts={project.parts}
         partFasteners={selectedPartFasteners}
+        hasParametricConfig={selectedHasParametricConfig}
         materialsVersion={materialsVersion}
         customTextures={customTextures}
         isColliding={Boolean(selectedPart && collisionReport.collidingIds.has(selectedPart.id))}
         clearances={selectedClearances}
         fastenerAuditMap={fastenerAuditMap}
         shelfDeflection={selectedPart ? shelfDeflectionMap.get(selectedPart.id) : undefined}
+        doorSwingCollision={
+          selectedPart
+            ? doorSwingCollisions.find((c) => c.doorId === selectedPart.id)
+            : undefined
+        }
+        countertopBridgeIssues={
+          selectedPart
+            ? countertopBridgeIssues.filter((i) => i.partId === selectedPart.id)
+            : []
+        }
+        countertopCount={countertopCount}
         groupBounds={selectedGroupBounds}
         onSmartResizeGroup={handleSmartResizeGroup}
         onClose={() => setInspectorOpen(false)}
         onUpdatePart={handleUpdatePart}
+        onBatchUpdateParts={handleBatchUpdateParts}
+        onSelectPartIds={(ids) => {
+          setSelectedPartIds(ids);
+          setSelectedPartId(ids[0] ?? null);
+          setSelectedFastenerId(null);
+        }}
+        onSetClearanceDistance={handleSetClearanceDistance}
+        onOpenParametricEditor={() => handleOpenParametricEditorForPart(selectedPartId)}
+        onGroupSelected={handleGroupSelected}
+        onUngroupSelected={handleUngroupSelected}
         onDuplicatePart={handleDuplicatePart}
         onDeletePart={handleDeletePart}
         onDeleteFastener={handleDeleteFastener}
@@ -1765,6 +2022,8 @@ export default function App() {
         }}
         onMirrorPart={handleMirrorPart}
         onDistributeShelves={handleDistributeShelves}
+        onMergeCountertops={handleMergeCountertops}
+        onSyncApplianceCutouts={handleSyncApplianceCutouts}
       />
 
       <AddPartDrawer
@@ -1777,7 +2036,10 @@ export default function App() {
           setSketchEditingPart(null);
           setSketchOpen(true);
         }}
-        onOpenCabinetBuilder={() => setCabinetBuilderOpen(true)}
+        onOpenCabinetBuilder={() => {
+          setEditingCabinetGroupId(null);
+          setCabinetBuilderOpen(true);
+        }}
         onOpenMaterialsManager={() => setMaterialsModalOpen(true)}
       />
 
@@ -1793,8 +2055,16 @@ export default function App() {
 
       <CabinetBuilderModal
         open={cabinetBuilderOpen}
-        onClose={() => setCabinetBuilderOpen(false)}
+        existingParts={project.parts}
+        selectedPartId={selectedPartId}
+        room={project.room}
+        editingCabinet={editingCabinetProp}
+        onClose={() => {
+          setCabinetBuilderOpen(false);
+          setEditingCabinetGroupId(null);
+        }}
         onInsertCabinet={handleInsertCabinet}
+        onUpdateCabinet={handleUpdateParametricCabinet}
       />
 
       <ShapeSketchModal
@@ -1838,6 +2108,8 @@ export default function App() {
         fastenerAuditMap={fastenerAuditMap}
         shelfDeflectionMap={shelfDeflectionMap}
         roomIssues={roomIssues}
+        doorSwingCollisions={doorSwingCollisions}
+        countertopBridgeIssues={countertopBridgeIssues}
         collisionCount={collisionReport.pairs.length}
         quoteSettings={quoteSettings}
         onChangeQuoteSettings={setQuoteSettings}

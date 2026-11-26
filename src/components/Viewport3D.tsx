@@ -107,6 +107,11 @@ interface Viewport3DProps {
   ) => void;
   onRejectScrewPlacement: (reason: string) => void;
   onContextMenu: (target: ContextMenuTarget | null) => void;
+  onSetClearanceDistance?: (
+    partId: string,
+    guide: ClearanceGuide,
+    targetDistanceMm: number
+  ) => void;
 }
 
 const _vec3A = new THREE.Vector3();
@@ -156,24 +161,34 @@ function createContactShadowTexture(): THREE.CanvasTexture {
   return tex;
 }
 
-function createClearanceSprite(label: string): THREE.Sprite {
+function createClearanceSprite(label: string, editable = false): THREE.Sprite {
   const canvas = document.createElement('canvas');
-  canvas.width = 256;
+  canvas.width = editable ? 284 : 256;
   canvas.height = 72;
   const ctx = canvas.getContext('2d')!;
-  ctx.fillStyle = 'rgba(15, 23, 42, 0.92)';
+  ctx.fillStyle = 'rgba(15, 23, 42, 0.94)';
   ctx.beginPath();
-  ctx.roundRect(8, 8, 240, 56, 14);
+  ctx.roundRect(6, 6, canvas.width - 12, 60, 14);
   ctx.fill();
-  ctx.strokeStyle = '#0EA5E9';
+  ctx.strokeStyle = editable ? '#38BDF8' : '#0EA5E9';
   ctx.lineWidth = 3;
   ctx.stroke();
 
   ctx.fillStyle = '#F0F9FF';
-  ctx.font = 'bold 28px "JetBrains Mono", monospace';
+  ctx.font = 'bold 27px "JetBrains Mono", monospace';
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
-  ctx.fillText(label, 128, 37);
+  ctx.fillText(label, editable ? 124 : 128, 37);
+
+  if (editable) {
+    ctx.fillStyle = 'rgba(56, 189, 248, 0.22)';
+    ctx.beginPath();
+    ctx.roundRect(canvas.width - 52, 16, 36, 40, 8);
+    ctx.fill();
+    ctx.fillStyle = '#7DD3FC';
+    ctx.font = 'bold 22px sans-serif';
+    ctx.fillText('✎', canvas.width - 34, 37);
+  }
 
   const tex = new THREE.CanvasTexture(canvas);
   tex.colorSpace = THREE.SRGBColorSpace;
@@ -183,7 +198,7 @@ function createClearanceSprite(label: string): THREE.Sprite {
     transparent: true,
   });
   const sprite = new THREE.Sprite(mat);
-  sprite.scale.set(0.22, 0.062, 1);
+  sprite.scale.set(editable ? 0.245 : 0.22, 0.062, 1);
   sprite.renderOrder = 998;
   sprite.userData.disposeMaterial = true;
   sprite.userData.disposeTexture = tex;
@@ -435,6 +450,18 @@ export const Viewport3D = forwardRef<Viewport3DHandle, Viewport3DProps>(
       y: number;
       label: string;
     } | null>(null);
+    const [activeClearanceEdit, setActiveClearanceEdit] = useState<{
+      x: number;
+      y: number;
+      partId: string;
+      guide: ClearanceGuide;
+      value: string;
+    } | null>(null);
+
+    // Close inline 3D clearance editor whenever selection, tool or exploded view changes
+    useEffect(() => {
+      setActiveClearanceEdit(null);
+    }, [props.selectedPartId, props.tool, props.explodedAmount]);
 
     // Keep latest props in a ref so Three.js event listeners never go stale
     const propsRef = useRef(props);
@@ -1626,6 +1653,31 @@ export const Viewport3D = forwardRef<Viewport3DHandle, Viewport3DProps>(
             setScrewHoverHud(null);
             requestRender();
           }
+          // Subtle pointer cursor when hovering a clickable 3D clearance dimension sprite
+          if (
+            propsRef.current.showDimensions &&
+            propsRef.current.onSetClearanceDistance &&
+            propsRef.current.selectedPartId &&
+            propsRef.current.explodedAmount < 0.01
+          ) {
+            const now = performance.now();
+            if (now - lastMoveRaycast >= 55) {
+              lastMoveRaycast = now;
+              const clearanceSprites = guidesRoot.children.filter(
+                (c) => c.userData?.raycastKind === 'clearance'
+              );
+              if (clearanceSprites.length > 0) {
+                updateNdc(e.clientX, e.clientY);
+                raycaster.setFromCamera(_pointerNdc, camera);
+                const cHits = raycaster.intersectObjects(clearanceSprites, false);
+                renderer.domElement.style.cursor = cHits.length > 0 ? 'pointer' : '';
+              } else if (renderer.domElement.style.cursor === 'pointer') {
+                renderer.domElement.style.cursor = '';
+              }
+            }
+          } else if (renderer.domElement.style.cursor === 'pointer') {
+            renderer.domElement.style.cursor = '';
+          }
           return;
         }
         if (runtimeRef.current?.isDraggingGizmo) return;
@@ -1856,6 +1908,39 @@ export const Viewport3D = forwardRef<Viewport3DHandle, Viewport3DProps>(
 
         updateNdc(e.clientX, e.clientY);
         raycaster.setFromCamera(_pointerNdc, camera);
+
+        // Priority hit test: Clickable 3D Clearance Dimension Sprites (inline distance editor)
+        if (
+          propsRef.current.tool !== 'screw' &&
+          propsRef.current.showDimensions &&
+          propsRef.current.selectedPartId &&
+          propsRef.current.onSetClearanceDistance &&
+          propsRef.current.explodedAmount < 0.01
+        ) {
+          const clearanceSprites = guidesRoot.children.filter(
+            (c) => c.userData?.raycastKind === 'clearance'
+          );
+          if (clearanceSprites.length > 0) {
+            const clearanceHits = raycaster.intersectObjects(clearanceSprites, false);
+            if (clearanceHits.length > 0) {
+              const guide = clearanceHits[0].object.userData
+                .clearanceGuide as ClearanceGuide | undefined;
+              if (guide) {
+                const rect = renderer.domElement.getBoundingClientRect();
+                setActiveClearanceEdit({
+                  x: e.clientX - rect.left,
+                  y: e.clientY - rect.top,
+                  partId: propsRef.current.selectedPartId,
+                  guide,
+                  value: String(guide.distanceMm),
+                });
+                return;
+              }
+            }
+          }
+        }
+
+        setActiveClearanceEdit(null);
         const targets = collectRaycastTargets();
         const hits = raycaster.intersectObjects(targets, true);
 
@@ -2649,7 +2734,9 @@ export const Viewport3D = forwardRef<Viewport3DHandle, Viewport3DProps>(
           down: '↓',
           left: '←',
           right: '→',
+          back: '↖',
         };
+        const editable = Boolean(props.onSetClearanceDistance);
         for (const g of props.clearances) {
           const s = new THREE.Vector3(
             g.startWorld[0] * MM_TO_M,
@@ -2662,10 +2749,10 @@ export const Viewport3D = forwardRef<Viewport3DHandle, Viewport3DProps>(
             g.endWorld[2] * MM_TO_M
           );
           const tickSize = 0.018;
-          const isVertical = g.direction === 'up' || g.direction === 'down';
-          const tickOff = isVertical
-            ? new THREE.Vector3(tickSize, 0, 0)
-            : new THREE.Vector3(0, tickSize, 0);
+          const tickOff =
+            g.direction === 'up' || g.direction === 'down' || g.direction === 'back'
+              ? new THREE.Vector3(tickSize, 0, 0)
+              : new THREE.Vector3(0, tickSize, 0);
 
           const lineGeo = new THREE.BufferGeometry().setFromPoints([
             s,
@@ -2681,8 +2768,13 @@ export const Viewport3D = forwardRef<Viewport3DHandle, Viewport3DProps>(
           rt.guidesRoot.add(lineSeg);
 
           const mid = s.clone().add(e).multiplyScalar(0.5);
-          const sprite = createClearanceSprite(`${dirArrows[g.direction]} ${g.distanceMm} mm`);
+          const sprite = createClearanceSprite(
+            `${dirArrows[g.direction]} ${g.distanceMm} mm`,
+            editable
+          );
           sprite.position.copy(mid);
+          sprite.userData.raycastKind = 'clearance';
+          sprite.userData.clearanceGuide = g;
           rt.guidesRoot.add(sprite);
         }
         lineMat.dispose();
@@ -2930,6 +3022,99 @@ export const Viewport3D = forwardRef<Viewport3DHandle, Viewport3DProps>(
                   : 'Powietrze — brak płyty za ścianką'}
             </span>
           </div>
+        )}
+        {/* Inline Clickable 3D Clearance Distance Editor Popover */}
+        {activeClearanceEdit && props.onSetClearanceDistance && (
+          <form
+            onSubmit={(ev) => {
+              ev.preventDefault();
+              const parsed = Number(activeClearanceEdit.value);
+              if (!Number.isNaN(parsed) && parsed >= 0) {
+                props.onSetClearanceDistance?.(
+                  activeClearanceEdit.partId,
+                  activeClearanceEdit.guide,
+                  Math.max(0, Math.min(5000, Math.round(parsed)))
+                );
+              }
+              setActiveClearanceEdit(null);
+            }}
+            onPointerDown={(ev) => ev.stopPropagation()}
+            style={{
+              left: Math.min(
+                Math.max(12, activeClearanceEdit.x - 115),
+                Math.max(12, window.innerWidth - 252)
+              ),
+              top: Math.min(
+                Math.max(12, activeClearanceEdit.y - 68),
+                Math.max(12, window.innerHeight - 190)
+              ),
+            }}
+            className="absolute z-30 w-[236px] rounded-xl border border-sky-500/70 bg-[#141518] p-2.5 text-zinc-100 shadow-2xl space-y-2"
+          >
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-[11px] font-semibold text-sky-300 truncate">
+                Prześwit → {activeClearanceEdit.guide.targetName}
+              </span>
+              <button
+                type="button"
+                onClick={() => setActiveClearanceEdit(null)}
+                className="flex h-6 w-6 items-center justify-center rounded text-zinc-400 hover:bg-zinc-800 hover:text-white cursor-pointer shrink-0"
+                aria-label="Zamknij edycję prześwitu"
+              >
+                ×
+              </button>
+            </div>
+            <div className="flex items-center gap-1.5">
+              <input
+                type="number"
+                min={0}
+                max={5000}
+                step={1}
+                autoFocus
+                value={activeClearanceEdit.value}
+                onChange={(ev) =>
+                  setActiveClearanceEdit((prev) =>
+                    prev ? { ...prev, value: ev.target.value } : null
+                  )
+                }
+                onKeyDown={(ev) => {
+                  if (ev.key === 'Escape') {
+                    ev.stopPropagation();
+                    setActiveClearanceEdit(null);
+                  }
+                }}
+                className="w-full min-w-0 rounded-lg border border-zinc-700 bg-zinc-900 px-2.5 py-1.5 text-xs font-mono-num text-white focus:border-sky-400 focus:outline-none"
+              />
+              <span className="text-[11px] font-mono-num text-zinc-400 shrink-0">mm</span>
+            </div>
+            <div className="flex items-center gap-1.5">
+              <button
+                type="button"
+                onClick={() => {
+                  props.onSetClearanceDistance?.(
+                    activeClearanceEdit.partId,
+                    activeClearanceEdit.guide,
+                    0
+                  );
+                  setActiveClearanceEdit(null);
+                }}
+                className="flex-1 min-h-[32px] rounded-lg border border-zinc-700 bg-zinc-900 px-2 text-[11px] font-medium text-zinc-200 hover:border-sky-500/60 hover:text-sky-200 whitespace-nowrap cursor-pointer"
+              >
+                0 mm (na styk)
+              </button>
+              <button
+                type="submit"
+                className="min-h-[32px] rounded-lg bg-sky-500 px-3 text-[11px] font-semibold text-zinc-950 hover:bg-sky-400 whitespace-nowrap cursor-pointer"
+              >
+                Zastosuj
+              </button>
+            </div>
+            <p className="text-[10px] text-zinc-400 leading-tight">
+              {activeClearanceEdit.guide.isSameGroup
+                ? 'Przesunie tylko tę płytę wewnątrz modułu.'
+                : 'Przesunie zaznaczony moduł / płytę względem celu.'}
+            </p>
+          </form>
         )}
         {contextLost && (
           <div className="absolute inset-0 z-20 flex items-center justify-center bg-[#EAECEF] p-6">

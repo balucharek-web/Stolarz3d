@@ -9,8 +9,12 @@ import {
   FileJson,
   LayoutGrid,
   ListChecks,
+  PackageCheck,
+  Plus,
   Printer,
+  Scale,
   Tag,
+  Trash2,
   Upload,
   X,
 } from 'lucide-react';
@@ -18,7 +22,9 @@ import {
   FurniturePart,
   FurnitureProject,
   getMaterialMeta,
+  MATERIAL_CATALOG,
   MaterialId,
+  OffcutRemnant,
   PART_KIND_LABELS,
   QuoteSettings,
   SCREW_CATALOG,
@@ -26,7 +32,11 @@ import {
 } from '../types/furniture';
 import { getProjectDimensionsMm } from '../engine/geometry';
 import {
+  computePartWeightKg,
+  computeProjectWeightSummary,
   computeSawCutAngles,
+  type CountertopBridgeIssue,
+  type DoorSwingCollision,
   type FastenerAudit,
   type RoomClearanceIssue,
   type ShelfDeflectionAudit,
@@ -44,10 +54,11 @@ import {
   generateProjectDxf,
   getBoardOutline2D,
   getDadoGrooveLine2D,
+  getLedGrooveLine2D,
   printBoardLabels,
   printTechnicalDocumentation,
 } from '../engine/documentation';
-import { sanitizeImportedProject } from '../engine/storage';
+import { loadOffcuts, sanitizeImportedProject, saveOffcuts } from '../engine/storage';
 
 interface CutListModalProps {
   open: boolean;
@@ -56,6 +67,8 @@ interface CutListModalProps {
   fastenerAuditMap: Map<string, FastenerAudit>;
   shelfDeflectionMap: Map<string, ShelfDeflectionAudit>;
   roomIssues: RoomClearanceIssue[];
+  doorSwingCollisions?: DoorSwingCollision[];
+  countertopBridgeIssues?: CountertopBridgeIssue[];
   collisionCount: number;
   quoteSettings: QuoteSettings;
   onChangeQuoteSettings: (next: QuoteSettings) => void;
@@ -94,6 +107,7 @@ function formatMachiningNote(part: FurniturePart): string {
   if (part.cornerRadiusMm) notes.push(`R${part.cornerRadiusMm}`);
   if (part.cutouts?.length) notes.push(`${part.cutouts.length} wyc.`);
   if (part.dadoGroove?.enabled) notes.push(`Nut ${part.dadoGroove.widthMm}×${part.dadoGroove.depthMm}`);
+  if (part.ledGroove?.enabled) notes.push(`Frez LED ${part.ledGroove.widthMm}×${part.ledGroove.depthMm}`);
   if (part.miter45 && (part.miter45.left || part.miter45.right || part.miter45.top || part.miter45.bottom)) {
     notes.push('Ukos 45°');
   }
@@ -114,6 +128,8 @@ export const CutListModal: React.FC<CutListModalProps> = ({
   fastenerAuditMap,
   shelfDeflectionMap,
   roomIssues,
+  doorSwingCollisions = [],
+  countertopBridgeIssues = [],
   collisionCount,
   quoteSettings,
   onChangeQuoteSettings,
@@ -128,6 +144,39 @@ export const CutListModal: React.FC<CutListModalProps> = ({
   const [selectedNestKey, setSelectedNestKey] = useState<string | null>(null);
   const [selectedDrillPartId, setSelectedDrillPartId] = useState<string | null>(null);
 
+  // Workshop offcuts (remnant boards warehouse)
+  const [offcuts, setOffcuts] = useState<OffcutRemnant[]>(() => loadOffcuts());
+  const [useOffcuts, setUseOffcuts] = useState<boolean>(true);
+  const [offcutPanelOpen, setOffcutPanelOpen] = useState<boolean>(false);
+  const [newOffMat, setNewOffMat] = useState<MaterialId>('white_matte');
+  const [newOffThick, setNewOffThick] = useState<number>(18);
+  const [newOffLen, setNewOffLen] = useState<number>(1400);
+  const [newOffWid, setNewOffWid] = useState<number>(800);
+  const [newOffQty, setNewOffQty] = useState<number>(1);
+  const [newOffLabel, setNewOffLabel] = useState<string>('');
+
+  const handleAddOffcut = () => {
+    const rem: OffcutRemnant = {
+      id: `off_${Date.now()}_${Math.random().toString(36).slice(2, 5)}`,
+      materialId: newOffMat,
+      thicknessMm: Math.max(3, Math.round(newOffThick)),
+      lengthMm: Math.max(150, Math.round(newOffLen)),
+      widthMm: Math.max(120, Math.round(newOffWid)),
+      quantity: Math.max(1, Math.min(20, Math.round(newOffQty))),
+      label: newOffLabel.trim() || undefined,
+    };
+    const next = [rem, ...offcuts];
+    setOffcuts(next);
+    saveOffcuts(next);
+    setNewOffLabel('');
+  };
+
+  const handleDeleteOffcut = (id: string) => {
+    const next = offcuts.filter((o) => o.id !== id);
+    setOffcuts(next);
+    saveOffcuts(next);
+  };
+
   const cutSpecs = useMemo(() => {
     void materialsVersion;
     const map = new Map<string, CarpentryCutSpec>();
@@ -139,8 +188,13 @@ export const CutListModal: React.FC<CutListModalProps> = ({
 
   const nestingResults = useMemo(() => {
     void materialsVersion;
-    return nestMaterialSheets(project.parts, kerfMm, 10);
-  }, [project.parts, kerfMm, materialsVersion]);
+    return nestMaterialSheets(project.parts, kerfMm, 10, useOffcuts ? offcuts : []);
+  }, [project.parts, kerfMm, materialsVersion, useOffcuts, offcuts]);
+
+  const weightSummary = useMemo(() => {
+    void materialsVersion;
+    return computeProjectWeightSummary(project.parts);
+  }, [project.parts, materialsVersion]);
 
   const linearResults = useMemo(() => {
     void materialsVersion;
@@ -240,9 +294,18 @@ export const CutListModal: React.FC<CutListModalProps> = ({
 
   const activeDrillEntry =
     drillingMaps.find((d) => d.map.part.id === selectedDrillPartId) ??
-    drillingMaps.find((d) => d.map.holes.length > 0 || d.map.cutouts.length > 0) ??
+    drillingMaps.find(
+      (d) =>
+        d.map.holes.length > 0 ||
+        d.map.cutouts.length > 0 ||
+        d.map.part.dadoGroove?.enabled ||
+        d.map.part.ledGroove?.enabled
+    ) ??
     drillingMaps[0] ??
     null;
+
+  const totalUsedOffcuts = nestingResults.reduce((s, n) => s + n.usedOffcutsCount, 0);
+  const totalSavedOffcutPln = nestingResults.reduce((s, n) => s + n.savedOffcutCostPln, 0);
 
   const exportCsv = () => {
     const header = [
@@ -336,6 +399,9 @@ export const CutListModal: React.FC<CutListModalProps> = ({
       ),
       ...(quote.hardware.hingeCupsCount > 0
         ? [`"Zawias puszkowy Ø35";"Ø35 mm [szt.]";${quote.hardware.hingeCupsCount}`]
+        : []),
+      ...(quote.hardware.flapLiftsCount > 0
+        ? [`"Podnośnik klapy / siłownik gazowy";"kpl.";${quote.hardware.flapLiftsCount}`]
         : []),
       ...(quote.hardware.drawerSlidePairs > 0
         ? [`"Prowadnice szuflad (komplety)";"L/P [kpl.]";${quote.hardware.drawerSlidePairs}`]
@@ -442,6 +508,7 @@ export const CutListModal: React.FC<CutListModalProps> = ({
   const hw = quote.hardware;
   const hasHardware =
     hw.hingeCupsCount > 0 ||
+    hw.flapLiftsCount > 0 ||
     hw.drawerSlidePairs > 0 ||
     hw.handlesCount > 0 ||
     hw.tipOnCount > 0 ||
@@ -507,7 +574,12 @@ export const CutListModal: React.FC<CutListModalProps> = ({
           {activeTab === 'list' && (
             <>
               {/* Structural Audit Banner */}
-              {collisionCount > 0 || screwWarnings > 0 || sagWarnings.length > 0 || roomIssues.length > 0 ? (
+              {collisionCount > 0 ||
+              screwWarnings > 0 ||
+              sagWarnings.length > 0 ||
+              roomIssues.length > 0 ||
+              doorSwingCollisions.length > 0 ||
+              countertopBridgeIssues.length > 0 ? (
                 <div className="flex flex-wrap items-center gap-3 rounded-xl border border-red-500/40 bg-red-950/35 px-3.5 py-2.5 text-xs text-red-200">
                   <AlertTriangle className="h-4 w-4 text-red-400 shrink-0" />
                   <div className="flex flex-wrap gap-x-4 gap-y-1">
@@ -537,6 +609,17 @@ export const CutListModal: React.FC<CutListModalProps> = ({
                         <strong>{roomIssues.length}</strong> kolizji z wnęką/przeszkodą
                       </span>
                     )}
+                    {doorSwingCollisions.length > 0 && (
+                      <span className="text-amber-200">
+                        <strong>{doorSwingCollisions.length}</strong> kolizji otwierania frontów (np.{' '}
+                        {doorSwingCollisions[0].doorName} przy {doorSwingCollisions[0].hitAngleDeg}°)
+                      </span>
+                    )}
+                    {countertopBridgeIssues.length > 0 && (
+                      <span>
+                        <strong>{countertopBridgeIssues.length}</strong> mostków blatu &lt; 50 mm!
+                      </span>
+                    )}
                   </div>
                 </div>
               ) : (
@@ -544,7 +627,7 @@ export const CutListModal: React.FC<CutListModalProps> = ({
                   <div className="flex items-center gap-2 rounded-xl border border-emerald-500/30 bg-emerald-950/25 px-3.5 py-2 text-xs text-emerald-200">
                     <CheckCircle2 className="h-4 w-4 text-emerald-400 shrink-0" />
                     <span>
-                      Audyt stolarski: brak kolizji płyt, półki sztywne
+                      Audyt stolarski: brak kolizji płyt, fronty otwierają się bez kolizji, półki sztywne
                       {project.fasteners.length > 0
                         ? `, wszystkie ${summary.screwsOk} łączników prawidłowo osadzone.`
                         : '.'}
@@ -554,7 +637,7 @@ export const CutListModal: React.FC<CutListModalProps> = ({
               )}
 
               {/* Clean Unboxed KPI Row */}
-              <div className="grid grid-cols-2 sm:grid-cols-5 gap-3.5 border-b border-zinc-800/80 pb-4">
+              <div className="grid grid-cols-2 sm:grid-cols-6 gap-3.5 border-b border-zinc-800/80 pb-4">
                 <div>
                   <div className="text-[11px] text-zinc-400">Formatki</div>
                   <div className="mt-0.5 text-lg font-semibold text-white font-mono-num">
@@ -565,6 +648,12 @@ export const CutListModal: React.FC<CutListModalProps> = ({
                   <div className="text-[11px] text-zinc-400">Pow. netto</div>
                   <div className="mt-0.5 text-lg font-semibold text-white font-mono-num">
                     {summary.totalAreaM2.toFixed(2)} m²
+                  </div>
+                </div>
+                <div>
+                  <div className="text-[11px] text-zinc-400">Masa całkowita</div>
+                  <div className="mt-0.5 text-lg font-semibold text-emerald-300 font-mono-num">
+                    {weightSummary.totalWeightKg} kg
                   </div>
                 </div>
                 <div>
@@ -684,6 +773,7 @@ export const CutListModal: React.FC<CutListModalProps> = ({
                         </th>
                         <th className="py-2 px-2 font-medium text-right">Cięcie piłą</th>
                         <th className="py-2 px-2 font-medium text-right">Okleina</th>
+                        <th className="py-2 px-2 font-medium text-right">Waga</th>
                         <th className="py-2 px-2 font-medium text-right">Kąty</th>
                         <th className="py-2 pl-2 font-medium text-right">Obróbka CNC</th>
                       </tr>
@@ -700,6 +790,7 @@ export const CutListModal: React.FC<CutListModalProps> = ({
                         const sawReduced =
                           !isProfile &&
                           (spec.sawLenMm !== spec.grainLenMm || spec.sawWidMm !== spec.crossWidMm);
+                        const kg = computePartWeightKg(part);
                         return (
                           <tr key={part.id} className="text-zinc-200">
                             <td className="py-2 pr-2 text-zinc-500 font-mono-num">{i + 1}</td>
@@ -728,6 +819,9 @@ export const CutListModal: React.FC<CutListModalProps> = ({
                             <td className="py-2 px-2 text-right font-mono-num text-sky-300/90 whitespace-nowrap">
                               {isProfile ? '—' : spec.edgeBandingLabel}
                             </td>
+                            <td className="py-2 px-2 text-right font-mono-num text-zinc-300 whitespace-nowrap">
+                              {kg.toFixed(1)} kg
+                            </td>
                             <td className="py-2 px-2 text-right font-mono-num text-amber-300/90 whitespace-nowrap">
                               {formatAnglesNote(part)}
                             </td>
@@ -754,6 +848,14 @@ export const CutListModal: React.FC<CutListModalProps> = ({
                         <div className="text-[11px] text-zinc-400">Zawiasy puszkowe Ø35</div>
                         <div className="mt-0.5 text-sm font-semibold text-sky-300 font-mono-num">
                           {hw.hingeCupsCount} szt.
+                        </div>
+                      </div>
+                    )}
+                    {hw.flapLiftsCount > 0 && (
+                      <div className="rounded-xl border border-violet-500/35 bg-violet-950/25 px-3 py-2.5">
+                        <div className="text-[11px] text-violet-300">Podnośniki klap / Aventos</div>
+                        <div className="mt-0.5 text-sm font-semibold text-violet-200 font-mono-num">
+                          {hw.flapLiftsCount} kpl.
                         </div>
                       </div>
                     )}
@@ -818,6 +920,67 @@ export const CutListModal: React.FC<CutListModalProps> = ({
                         </div>
                       </div>
                     )}
+                  </div>
+                </div>
+              )}
+
+              {/* Weight & Hardware Load Sizing Calculator */}
+              {(weightSummary.flapRecommendations.length > 0 ||
+                weightSummary.hingeRecommendations.length > 0 ||
+                weightSummary.drawerRecommendations.length > 0 ||
+                weightSummary.heaviestPart) && (
+                <div className="rounded-xl border border-zinc-800 bg-zinc-900/50 p-3.5 space-y-2.5">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="flex items-center gap-1.5 text-xs font-semibold text-emerald-300">
+                      <Scale className="h-4 w-4" />
+                      <span>Kalkulator masy ({weightSummary.totalWeightKg} kg) i dobór okuć</span>
+                    </div>
+                    {weightSummary.heaviestPart && (
+                      <span className="text-[11px] text-zinc-400 font-mono-num">
+                        Najcięższy element: {weightSummary.heaviestPart.name} ({weightSummary.heaviestPart.weightKg} kg)
+                      </span>
+                    )}
+                  </div>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-[11px]">
+                    {weightSummary.flapRecommendations.map((fl) => (
+                      <div
+                        key={fl.partId}
+                        className="rounded-lg border border-violet-500/35 bg-violet-950/25 px-3 py-2 space-y-0.5"
+                      >
+                        <div className="flex items-center justify-between font-semibold text-violet-200">
+                          <span>Klapa: {fl.partName}</span>
+                          <span className="font-mono-num">{fl.weightKg} kg · LF {fl.powerFactorLF}</span>
+                        </div>
+                        <div className="text-zinc-300">{fl.recommendedLift}</div>
+                      </div>
+                    ))}
+                    {weightSummary.hingeRecommendations
+                      .filter((d) => d.needsMoreHinges)
+                      .map((d) => (
+                        <div
+                          key={d.partId}
+                          className="rounded-lg border border-amber-500/40 bg-amber-950/25 px-3 py-2 space-y-0.5"
+                        >
+                          <div className="flex items-center justify-between font-semibold text-amber-200">
+                            <span>Front: {d.partName}</span>
+                            <span className="font-mono-num">{d.weightKg} kg</span>
+                          </div>
+                          <div className="text-amber-100/90">
+                            Aktualnie {d.currentHinges} zaw. — zalecane min. {d.recommendedHinges} zawiasy!
+                          </div>
+                        </div>
+                      ))}
+                    {weightSummary.drawerRecommendations.slice(0, 4).map((dr) => (
+                      <div
+                        key={dr.partId}
+                        className="rounded-lg border border-zinc-800 bg-zinc-950/60 px-3 py-2 flex items-center justify-between gap-2"
+                      >
+                        <span className="text-zinc-300 truncate">{dr.partName}</span>
+                        <span className="font-mono-num text-sky-300 shrink-0">
+                          Prow. {dr.recommendedLoadKg} kg ({dr.widthMm} mm)
+                        </span>
+                      </div>
+                    ))}
                   </div>
                 </div>
               )}
@@ -896,6 +1059,144 @@ export const CutListModal: React.FC<CutListModalProps> = ({
                 </div>
               </div>
 
+              {/* Workshop Offcuts Warehouse (Magazyn odpadów / resztek płyt) */}
+              <div className="rounded-xl border border-emerald-500/30 bg-emerald-950/15 p-3 space-y-2.5">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex items-center gap-2">
+                    <PackageCheck className="h-4 w-4 text-emerald-400 shrink-0" />
+                    <div>
+                      <div className="text-xs font-semibold text-emerald-200">
+                        Magazyn odpadów z warsztatu ({offcuts.reduce((s, o) => s + o.quantity, 0)} resztek)
+                      </div>
+                      <div className="text-[10px] text-zinc-400">
+                        {totalUsedOffcuts > 0
+                          ? `Wykorzystano ${totalUsedOffcuts} resztek · Oszczędność na płytach: ~${totalSavedOffcutPln} zł`
+                          : 'Dodaj pozostałe kawałki płyt — rozkrój użyje ich przed cięciem nowych arkuszy'}
+                      </div>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <label className="flex items-center gap-1.5 text-[11px] text-zinc-200 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={useOffcuts}
+                        onChange={(e) => setUseOffcuts(e.target.checked)}
+                        className="h-3.5 w-3.5 accent-emerald-500"
+                      />
+                      <span>Użyj w rozkroju</span>
+                    </label>
+                    <button
+                      type="button"
+                      onClick={() => setOffcutPanelOpen((v) => !v)}
+                      className="rounded-lg border border-emerald-500/45 bg-emerald-500/15 px-2.5 py-1 text-[11px] font-semibold text-emerald-300 hover:bg-emerald-500/25 cursor-pointer"
+                    >
+                      {offcutPanelOpen ? 'Zwiń magazyn' : '+ Zarządzaj resztkami'}
+                    </button>
+                  </div>
+                </div>
+
+                {offcutPanelOpen && (
+                  <div className="space-y-2.5 border-t border-emerald-500/20 pt-2.5">
+                    <div className="grid grid-cols-2 sm:grid-cols-6 gap-1.5 items-end">
+                      <label className="col-span-2 sm:col-span-2">
+                        <span className="text-[10px] text-zinc-400">Materiał</span>
+                        <select
+                          value={newOffMat}
+                          onChange={(e) => setNewOffMat(e.target.value as MaterialId)}
+                          className="mt-0.5 w-full rounded-lg border border-zinc-800 bg-zinc-950 px-2 py-1.5 text-[11px] text-white"
+                        >
+                          {MATERIAL_CATALOG.map((m) => (
+                            <option key={m.id} value={m.id}>
+                              {m.shortName}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      <label>
+                        <span className="text-[10px] text-zinc-400">Grub. [mm]</span>
+                        <input
+                          type="number"
+                          min={3}
+                          max={40}
+                          value={newOffThick}
+                          onChange={(e) => setNewOffThick(Number(e.target.value) || 18)}
+                          className="mt-0.5 w-full rounded-lg border border-zinc-800 bg-zinc-950 px-2 py-1.5 text-[11px] font-mono-num text-white"
+                        />
+                      </label>
+                      <label>
+                        <span className="text-[10px] text-zinc-400">Dł. (słój)</span>
+                        <input
+                          type="number"
+                          min={150}
+                          max={2800}
+                          step={50}
+                          value={newOffLen}
+                          onChange={(e) => setNewOffLen(Number(e.target.value) || 1000)}
+                          className="mt-0.5 w-full rounded-lg border border-zinc-800 bg-zinc-950 px-2 py-1.5 text-[11px] font-mono-num text-white"
+                        />
+                      </label>
+                      <label>
+                        <span className="text-[10px] text-zinc-400">Szer.</span>
+                        <input
+                          type="number"
+                          min={120}
+                          max={2070}
+                          step={50}
+                          value={newOffWid}
+                          onChange={(e) => setNewOffWid(Number(e.target.value) || 600)}
+                          className="mt-0.5 w-full rounded-lg border border-zinc-800 bg-zinc-950 px-2 py-1.5 text-[11px] font-mono-num text-white"
+                        />
+                      </label>
+                      <div className="flex gap-1">
+                        <input
+                          type="number"
+                          min={1}
+                          max={20}
+                          value={newOffQty}
+                          onChange={(e) => setNewOffQty(Number(e.target.value) || 1)}
+                          title="Ilość sztuk"
+                          className="w-12 rounded-lg border border-zinc-800 bg-zinc-950 px-1.5 py-1.5 text-[11px] font-mono-num text-white"
+                        />
+                        <button
+                          type="button"
+                          onClick={handleAddOffcut}
+                          className="flex flex-1 items-center justify-center gap-1 rounded-lg bg-emerald-500 px-2 py-1.5 text-[11px] font-semibold text-zinc-950 hover:bg-emerald-400 cursor-pointer"
+                        >
+                          <Plus className="h-3.5 w-3.5" />
+                          <span>Dodaj</span>
+                        </button>
+                      </div>
+                    </div>
+
+                    {offcuts.length > 0 && (
+                      <div className="flex flex-wrap gap-1.5">
+                        {offcuts.map((o) => (
+                          <div
+                            key={o.id}
+                            className="flex items-center gap-2 rounded-lg border border-zinc-800 bg-zinc-950/80 px-2.5 py-1 text-[11px]"
+                          >
+                            <span className="text-zinc-200 font-medium">
+                              {getMaterialMeta(o.materialId).shortName} {o.thicknessMm} mm
+                            </span>
+                            <span className="font-mono-num text-emerald-300">
+                              {o.lengthMm}×{o.widthMm} ({o.quantity} szt.)
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => handleDeleteOffcut(o.id)}
+                              className="text-zinc-500 hover:text-red-400 cursor-pointer"
+                              aria-label="Usuń resztkę"
+                            >
+                              <Trash2 className="h-3 w-3" />
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+
               {!activeNesting ? (
                 <p className="py-10 text-center text-xs text-zinc-500">
                   Brak płyt arkuszowych do rozkroju w tym projekcie.
@@ -909,6 +1210,11 @@ export const CutListModal: React.FC<CutListModalProps> = ({
                         {activeNesting.sheetWidthMm} × {activeNesting.sheetHeightMm} mm
                       </span>{' '}
                       · obrzyn 10 mm · rzaz {kerfMm} mm
+                      {activeNesting.usedOffcutsCount > 0 && (
+                        <span className="ml-2 text-emerald-300 font-semibold">
+                          ({activeNesting.usedOffcutsCount} z odpadów, {activeNesting.freshSheetsCount} nowych · oszczędność ~{activeNesting.savedOffcutCostPln} zł)
+                        </span>
+                      )}
                     </span>
                     <span className="font-mono-num text-amber-300">
                       {activeNesting.grainLocked
@@ -920,11 +1226,28 @@ export const CutListModal: React.FC<CutListModalProps> = ({
                   {activeNesting.sheets.map((sheet) => (
                     <div
                       key={sheet.sheetIndex}
-                      className="rounded-xl border border-zinc-800 bg-zinc-950/70 p-3 space-y-2"
+                      className={`rounded-xl border p-3 space-y-2 ${
+                        sheet.isOffcut
+                          ? 'border-emerald-500/45 bg-emerald-950/15'
+                          : 'border-zinc-800 bg-zinc-950/70'
+                      }`}
                     >
-                      <div className="flex items-center justify-between text-xs">
-                        <span className="font-semibold text-zinc-100">
-                          Arkusz #{sheet.sheetIndex} z {activeNesting.totalSheets}
+                      <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+                        <span className="flex items-center gap-2 font-semibold text-zinc-100">
+                          {sheet.isOffcut ? (
+                            <>
+                              <span className="rounded bg-emerald-500 px-1.5 py-0.5 text-[10px] font-bold text-zinc-950">
+                                ODPAD
+                              </span>
+                              <span>
+                                {sheet.offcutLabel || 'Resztka warsztatowa'} ({sheet.sheetWidthMm}×{sheet.sheetHeightMm} mm)
+                              </span>
+                            </>
+                          ) : (
+                            <span>
+                              Arkusz #{sheet.sheetIndex} z {activeNesting.totalSheets}
+                            </span>
+                          )}
                         </span>
                         <span className="font-mono-num text-zinc-400">
                           Wykorzystanie: {100 - sheet.wastePercent}% · Odpad: {sheet.wastePercent}% (
@@ -1194,6 +1517,12 @@ export const CutListModal: React.FC<CutListModalProps> = ({
                           m.faceWidthMm,
                           m.faceHeightMm
                         );
+                        const ledLine = getLedGrooveLine2D(
+                          m.part,
+                          m.thinAxis,
+                          m.faceWidthMm,
+                          m.faceHeightMm
+                        );
                         return (
                           <svg
                             viewBox={`0 0 ${vw} ${vh}`}
@@ -1230,6 +1559,18 @@ export const CutListModal: React.FC<CutListModalProps> = ({
                                 stroke="#38BDF8"
                                 strokeWidth={Math.max(3, groove.widthMm)}
                                 strokeDasharray="16 8"
+                              />
+                            )}
+                            {/* Recessed LED channel groove line (10×8 mm) */}
+                            {ledLine && (
+                              <line
+                                x1={pad + ledLine.x1}
+                                y1={pad + m.faceHeightMm - ledLine.y1}
+                                x2={pad + ledLine.x2}
+                                y2={pad + m.faceHeightMm - ledLine.y2}
+                                stroke="#F59E0B"
+                                strokeWidth={Math.max(6, ledLine.widthMm)}
+                                opacity={0.9}
                               />
                             )}
                             {/* Internal cutouts */}
@@ -1350,6 +1691,9 @@ export const CutListModal: React.FC<CutListModalProps> = ({
                         <span className="flex items-center gap-1">
                           <span className="h-2.5 w-2.5 rounded-full bg-red-400 inline-block" /> Wycięcie
                         </span>
+                        <span className="flex items-center gap-1">
+                          <span className="h-1.5 w-3.5 rounded-xs bg-amber-400 inline-block" /> Frez LED
+                        </span>
                       </div>
                     </div>
 
@@ -1444,6 +1788,7 @@ export const CutListModal: React.FC<CutListModalProps> = ({
                         { key: 'cuttingPricePerMbPln', label: 'Cięcie [zł/mb]' },
                         { key: 'edgeBandingPricePerMbPln', label: 'Oklejanie [zł/mb]' },
                         { key: 'hingePricePln', label: 'Zawias Ø35 [zł/szt]' },
+                        { key: 'flapLiftPricePln', label: 'Podnośnik klapy [zł/kpl]' },
                         { key: 'slidePairPricePln', label: 'Prow. szuflad [zł/kpl]' },
                         { key: 'handlePricePln', label: 'Uchwyt [zł/szt]' },
                         { key: 'legPricePln', label: 'Nóżka reg. [zł/szt]' },
@@ -1461,7 +1806,7 @@ export const CutListModal: React.FC<CutListModalProps> = ({
                           type="number"
                           min={0}
                           step={key === 'fastenerPricePln' ? 0.05 : 1}
-                          value={quoteSettings[key]}
+                          value={quoteSettings[key] ?? (key === 'flapLiftPricePln' ? 145 : 0)}
                           onChange={(e) => {
                             const v = parseFloat(e.target.value);
                             if (Number.isFinite(v) && v >= 0) updateQuoteField(key, v);

@@ -140,6 +140,31 @@ export interface DadoGrooveConfig {
   depthMm: number;
 }
 
+/** Recessed aluminum LED strip groove (frez pod profil LED np. 10×8 mm) */
+export interface LedGrooveConfig {
+  enabled: boolean;
+  edge: 'front' | 'back' | 'left' | 'right';
+  /** Distance from edge to LED groove center (mm), e.g. 45 mm */
+  insetMm: number;
+  /** Channel width (mm), e.g. 10 or 12 mm */
+  widthMm: number;
+  /** Channel depth (mm), e.g. 8 mm */
+  depthMm: number;
+}
+
+/** Workshop offcut / scrap board remnant available for 2D nesting before buying fresh sheets */
+export interface OffcutRemnant {
+  id: string;
+  materialId: MaterialId;
+  thicknessMm: number;
+  /** Length along grain (mm) */
+  lengthMm: number;
+  /** Width across grain (mm) */
+  widthMm: number;
+  quantity: number;
+  label?: string;
+}
+
 /** 45-degree miter chamfer edges (zacinanie na 45° / gerung) */
 export interface MiterEdgesConfig {
   left?: boolean;
@@ -191,6 +216,8 @@ export interface FurniturePart {
   cutouts?: PartCutout[];
   /** Dado groove (nut pod plecy HDF) */
   dadoGroove?: DadoGrooveConfig;
+  /** Recessed aluminum LED strip channel groove (frez pod profil LED) */
+  ledGroove?: LedGrooveConfig;
   /** 45-degree mitered edges (gerung) */
   miter45?: MiterEdgesConfig;
   /** Cabinet door hinge side & count (Ø35 mm cup hinges) */
@@ -206,6 +233,7 @@ export interface FurniturePart {
     | 'door_overlay'
     | 'door_inset'
     | 'sliding_door'
+    | 'flap_door'
     | 'wall_filler';
   /** Enable dual System 32 (Ø5 mm every 32 mm, 37 mm inset) adjustable shelf-pin drilling rows */
   system32ShelfHoles?: boolean;
@@ -250,6 +278,7 @@ export interface QuoteSettings {
   handlePricePln: number;
   legPricePln: number;
   fastenerPricePln: number;
+  flapLiftPricePln?: number;
   laborHours: number;
   laborRatePln: number;
   marginPercent: number;
@@ -267,6 +296,7 @@ export const DEFAULT_QUOTE_SETTINGS: QuoteSettings = {
   handlePricePln: 24,
   legPricePln: 8,
   fastenerPricePln: 0.45,
+  flapLiftPricePln: 145,
   laborHours: 8,
   laborRatePln: 110,
   marginPercent: 20,
@@ -337,12 +367,73 @@ export const DEFAULT_ROOM_CONFIG: RoomConfig = {
   obstacles: [],
 };
 
+export type CabinetPresetId =
+  | 'base_kitchen'
+  | 'corner_l'
+  | 'drawer_chest'
+  | 'wall_cabinet'
+  | 'wardrobe'
+  | 'sliding_wardrobe'
+  | 'tv_console'
+  | 'steel_rack'
+  | 'oven_tower'
+  | 'sink_cabinet'
+  | 'dishwasher_bay';
+
+export type CabinetPlacementMode = 'auto' | 'right' | 'left' | 'back_wall' | 'center';
+
+export interface ParametricCabinetConfig {
+  name: string;
+  preset: CabinetPresetId;
+  widthMm: number;
+  heightMm: number;
+  depthMm: number;
+  boardThicknessMm: number;
+  /** Floor clearance / plinth height (0 = sitting flat on floor, e.g. 100mm for kitchen legs/plinth) */
+  plinthHeightMm: number;
+  /** Elevation from floor (e.g. 1400mm for hanging wall cabinet) */
+  elevationYmm: number;
+  plinthStyle: 'plinth_board' | 'legs' | 'none';
+  /** Full top deck vs 2 upper stretchers (trawersy) for kitchen base cabinets */
+  topType: 'full_panel' | 'stretchers';
+  /** Internal vertical dividers (0, 1, or 2 bays) */
+  verticalDividers: 0 | 1 | 2;
+  shelfCount: number;
+  drawerCount: number;
+  doorMode: 'none' | 'single_left' | 'single_right' | 'double' | 'flap_up';
+  frontType: 'overlay' | 'inset';
+  frontGapMm: number;
+  handleStyle: HandleStyle;
+  backType: 'hdf_grooved' | 'hdf_nailed' | 'none';
+  slideType: DrawerSlideType;
+  /** Optional wall filler strip (blenda przyścienna) for flush installation against uneven walls */
+  wallFillerSide: 'none' | 'left' | 'right' | 'both';
+  wallFillerWidthMm: number;
+  /** Enable System 32 shelf-pin Ø5 drilling rows on vertical walls */
+  system32Holes: boolean;
+  /** Blind panel width for L-corner blind kitchen cabinet */
+  cornerBlindWidthMm?: number;
+  /** Include oval chrome wardrobe hanging rod inside upper bay */
+  addWardrobeRod?: boolean;
+  /** Include recessed 10×8 mm LED aluminum strip groove in bottom deck (wall cabinets) or sides */
+  addLedGroove?: boolean;
+  corpusMaterialId: MaterialId;
+  frontMaterialId: MaterialId;
+  frontFinish: SurfaceFinish;
+  addCountertop: boolean;
+  countertopMaterialId: MaterialId;
+  autoFasteners: boolean;
+  fastenerType: ScrewType;
+}
+
 export interface FurnitureProject {
   id: string;
   name: string;
   parts: FurniturePart[];
   fasteners: Fastener[];
   room?: RoomConfig;
+  /** Saved parametric generator configurations keyed by groupId so cabinets can be re-edited later */
+  cabinetConfigs?: Record<string, ParametricCabinetConfig>;
   updatedAt?: number;
 }
 

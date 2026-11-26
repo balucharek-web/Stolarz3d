@@ -4,6 +4,7 @@ import {
   type Fastener,
   type FurniturePart,
   type HandleSide,
+  type RoomConfig,
 } from '../types/furniture';
 
 export interface WorldBox {
@@ -44,11 +45,13 @@ export interface FastenerAudit {
 }
 
 export interface ClearanceGuide {
-  direction: 'up' | 'down' | 'left' | 'right';
+  direction: 'up' | 'down' | 'left' | 'right' | 'back';
   distanceMm: number;
   startWorld: [number, number, number];
   endWorld: [number, number, number];
   targetName: string;
+  targetPartId?: string;
+  isSameGroup?: boolean;
 }
 
 export interface SawCutAngle {
@@ -384,10 +387,12 @@ export function detectPartCollisions(
 
   for (let i = 0; i < parts.length; i++) {
     const a = parts[i];
+    if (a.kind === 'appliance') continue;
     const ba = boxes[i];
 
     for (let j = i + 1; j < parts.length; j++) {
       const b = parts[j];
+      if (b.kind === 'appliance') continue;
       const bb = boxes[j];
 
       const oxMin = Math.max(ba.minX, bb.minX);
@@ -1413,11 +1418,13 @@ export function syncFastenersWithParts(
 
 /**
  * Computes interior clearances ("prześwity w świetle") from the selected part
- * to the nearest neighboring surfaces (up, down/floor, left, right).
+ * to the nearest neighboring surfaces (up, down/floor, left, right, back)
+ * including enabled room walls & ceiling so dimensions can be clicked and edited directly in 3D.
  */
 export function computePartClearances(
   selectedPart: FurniturePart,
-  allParts: FurniturePart[]
+  allParts: FurniturePart[],
+  room?: RoomConfig
 ): ClearanceGuide[] {
   const sb = getPartWorldBox(selectedPart);
   const cx = (sb.minX + sb.maxX) / 2;
@@ -1432,9 +1439,13 @@ export function computePartClearances(
   const overlaps1D = (aMin: number, aMax: number, bMin: number, bMax: number) =>
     Math.min(aMax, bMax) - Math.max(aMin, bMin) > 8;
 
+  const isSameGroupPart = (other?: FurniturePart) =>
+    Boolean(selectedPart.groupId && other?.groupId && other.groupId === selectedPart.groupId);
+
   // DOWN (-Y): start with floor Y = 0
   let downDist = sb.minY;
   let downTarget = 'Podłoga';
+  let downTargetPart: FurniturePart | undefined;
   for (const { part, box } of otherBoxes) {
     if (
       overlaps1D(sb.minX, sb.maxX, box.minX, box.maxX) &&
@@ -1445,6 +1456,7 @@ export function computePartClearances(
       if (gap < downDist) {
         downDist = gap;
         downTarget = part.name;
+        downTargetPart = part;
       }
     }
   }
@@ -1455,12 +1467,19 @@ export function computePartClearances(
       startWorld: [cx, sb.minY, cz],
       endWorld: [cx, sb.minY - downDist, cz],
       targetName: downTarget,
+      targetPartId: downTargetPart?.id,
+      isSameGroup: isSameGroupPart(downTargetPart),
     });
   }
 
-  // UP (+Y)
+  // UP (+Y): boards above or room ceiling
   let upDist = Infinity;
   let upTarget = '';
+  let upTargetPart: FurniturePart | undefined;
+  if (room?.enabled && room.showCeiling && room.heightMm >= sb.maxY - 0.5) {
+    upDist = room.heightMm - sb.maxY;
+    upTarget = 'Sufit';
+  }
   for (const { part, box } of otherBoxes) {
     if (
       overlaps1D(sb.minX, sb.maxX, box.minX, box.maxX) &&
@@ -1471,6 +1490,7 @@ export function computePartClearances(
       if (gap < upDist) {
         upDist = gap;
         upTarget = part.name;
+        upTargetPart = part;
       }
     }
   }
@@ -1481,12 +1501,22 @@ export function computePartClearances(
       startWorld: [cx, sb.maxY, cz],
       endWorld: [cx, sb.maxY + upDist, cz],
       targetName: upTarget,
+      targetPartId: upTargetPart?.id,
+      isSameGroup: isSameGroupPart(upTargetPart),
     });
   }
 
-  // LEFT (-X)
+  // LEFT (-X): boards or room left wall
   let leftDist = Infinity;
   let leftTarget = '';
+  let leftTargetPart: FurniturePart | undefined;
+  if (room?.enabled && room.showLeftWall) {
+    const wallX = -room.widthMm / 2;
+    if (wallX <= sb.minX + 0.5) {
+      leftDist = sb.minX - wallX;
+      leftTarget = 'Ściana lewa';
+    }
+  }
   for (const { part, box } of otherBoxes) {
     if (
       overlaps1D(sb.minY, sb.maxY, box.minY, box.maxY) &&
@@ -1497,22 +1527,33 @@ export function computePartClearances(
       if (gap < leftDist) {
         leftDist = gap;
         leftTarget = part.name;
+        leftTargetPart = part;
       }
     }
   }
-  if (leftDist > 1 && leftDist <= 3000) {
+  if (leftDist > 1 && leftDist <= 3500) {
     guides.push({
       direction: 'left',
       distanceMm: Math.round(leftDist),
       startWorld: [sb.minX, cy, cz],
       endWorld: [sb.minX - leftDist, cy, cz],
       targetName: leftTarget,
+      targetPartId: leftTargetPart?.id,
+      isSameGroup: isSameGroupPart(leftTargetPart),
     });
   }
 
-  // RIGHT (+X)
+  // RIGHT (+X): boards or room right wall
   let rightDist = Infinity;
   let rightTarget = '';
+  let rightTargetPart: FurniturePart | undefined;
+  if (room?.enabled && room.showRightWall) {
+    const wallX = room.widthMm / 2;
+    if (wallX >= sb.maxX - 0.5) {
+      rightDist = wallX - sb.maxX;
+      rightTarget = 'Ściana prawa';
+    }
+  }
   for (const { part, box } of otherBoxes) {
     if (
       overlaps1D(sb.minY, sb.maxY, box.minY, box.maxY) &&
@@ -1523,17 +1564,52 @@ export function computePartClearances(
       if (gap < rightDist) {
         rightDist = gap;
         rightTarget = part.name;
+        rightTargetPart = part;
       }
     }
   }
-  if (rightDist > 1 && rightDist <= 3000) {
+  if (rightDist > 1 && rightDist <= 3500) {
     guides.push({
       direction: 'right',
       distanceMm: Math.round(rightDist),
       startWorld: [sb.maxX, cy, cz],
       endWorld: [sb.maxX + rightDist, cy, cz],
       targetName: rightTarget,
+      targetPartId: rightTargetPart?.id,
+      isSameGroup: isSameGroupPart(rightTargetPart),
     });
+  }
+
+  // BACK (-Z): distance to back wall when room is enabled (useful for pipe clearance or wall alignment)
+  if (room?.enabled && room.showBackWall && room.backWallZMm <= sb.minZ + 0.5) {
+    let backDist = sb.minZ - room.backWallZMm;
+    let backTarget = 'Ściana tylna';
+    let backTargetPart: FurniturePart | undefined;
+    for (const { part, box } of otherBoxes) {
+      if (
+        overlaps1D(sb.minX, sb.maxX, box.minX, box.maxX) &&
+        overlaps1D(sb.minY, sb.maxY, box.minY, box.maxY) &&
+        box.maxZ <= sb.minZ + 0.5
+      ) {
+        const gap = sb.minZ - box.maxZ;
+        if (gap < backDist) {
+          backDist = gap;
+          backTarget = part.name;
+          backTargetPart = part;
+        }
+      }
+    }
+    if (backDist > 1 && backDist <= 2500) {
+      guides.push({
+        direction: 'back',
+        distanceMm: Math.round(backDist),
+        startWorld: [cx, cy, sb.minZ],
+        endWorld: [cx, cy, sb.minZ - backDist],
+        targetName: backTarget,
+        targetPartId: backTargetPart?.id,
+        isSameGroup: isSameGroupPart(backTargetPart),
+      });
+    }
   }
 
   return guides;
@@ -2272,5 +2348,680 @@ export function auditRoomClearances(
 
   return issues;
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 1. DYNAMIC DOOR SWING COLLISION ANALYZER (95°–105° sweep vs walls, obstacles, adjacent cabinets)
+// ═══════════════════════════════════════════════════════════════════════════
+
+export interface DoorSwingCollision {
+  doorId: string;
+  doorName: string;
+  hitAngleDeg: number;
+  hitKind: 'wall' | 'obstacle' | 'cabinet' | 'ceiling';
+  hitLabel: string;
+  recommendation: string;
+}
+
+/**
+ * Sweeps every hinged door (left, right, or upward flap) in 10° steps from 12° to 100°
+ * (including handle clearance protrusion) and detects dynamic collisions against room walls,
+ * ceiling/attic slope, room obstacles (radiator, window, pipe), and neighboring cabinets.
+ */
+export function analyzeDoorSwingCollisions(
+  parts: FurniturePart[],
+  room?: import('../types/furniture').RoomConfig
+): DoorSwingCollision[] {
+  const results: DoorSwingCollision[] = [];
+  const boxMap = new Map<string, WorldBox>();
+  for (const p of parts) {
+    boxMap.set(p.id, getPartWorldBox(p));
+  }
+
+  const obstacleBoxes =
+    room && room.enabled
+      ? room.obstacles.map((obs) => ({
+          obs,
+          box: getRoomObstacleWorldBox(obs, room),
+        }))
+      : [];
+
+  for (const door of parts) {
+    if (
+      door.kind !== 'door' ||
+      door.hardwareTag === 'drawer_front' ||
+      door.hardwareTag === 'sliding_door'
+    ) {
+      continue;
+    }
+    const hingeSide =
+      door.hingeSide && door.hingeSide !== 'none'
+        ? door.hingeSide
+        : door.handleSide === 'left'
+          ? 'right'
+          : door.handleSide === 'right'
+            ? 'left'
+            : null;
+    if (!hingeSide) continue;
+
+    const handleProtrusionMm =
+      door.handleStyle === 'bar' || !door.handleStyle ? 28 : 4;
+    const halfW = door.width / 2;
+    const halfH = door.height / 2;
+    const halfD = door.depth / 2;
+    const baseQuat = getPartQuaternion(door);
+    const basePos = new THREE.Vector3(...door.position);
+
+    const isFlap = hingeSide === 'top';
+    const maxSweepDeg = isFlap ? 90 : 100;
+
+    // Pivot in door's local space (outer hinge edge)
+    const pivotLocal = isFlap
+      ? new THREE.Vector3(0, halfH, -halfD)
+      : new THREE.Vector3(hingeSide === 'left' ? -halfW : halfW, 0, -halfD);
+
+    // Sample points on the swinging leaf (far edge corners + midpoints + handle tip)
+    const localSamples: THREE.Vector3[] = isFlap
+      ? [
+          new THREE.Vector3(-halfW + 12, -halfH, halfD + handleProtrusionMm),
+          new THREE.Vector3(0, -halfH, halfD + handleProtrusionMm),
+          new THREE.Vector3(halfW - 12, -halfH, halfD + handleProtrusionMm),
+          new THREE.Vector3(-halfW + 12, 0, halfD),
+          new THREE.Vector3(halfW - 12, 0, halfD),
+        ]
+      : [
+          new THREE.Vector3(hingeSide === 'left' ? halfW : -halfW, -halfH + 15, halfD + handleProtrusionMm),
+          new THREE.Vector3(hingeSide === 'left' ? halfW : -halfW, 0, halfD + handleProtrusionMm),
+          new THREE.Vector3(hingeSide === 'left' ? halfW : -halfW, halfH - 15, halfD + handleProtrusionMm),
+          new THREE.Vector3(0, 0, halfD + handleProtrusionMm),
+        ];
+
+    let foundHit: DoorSwingCollision | null = null;
+
+    for (let deg = 12; deg <= maxSweepDeg && !foundHit; deg += 8) {
+      const rad = THREE.MathUtils.degToRad(deg);
+      const swingQuat = isFlap
+        ? new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), -rad)
+        : new THREE.Quaternion().setFromAxisAngle(
+            new THREE.Vector3(0, 1, 0),
+            hingeSide === 'left' ? -rad : rad
+          );
+
+      for (const ls of localSamples) {
+        const rel = ls.clone().sub(pivotLocal).applyQuaternion(swingQuat).add(pivotLocal);
+        const worldPt = rel.applyQuaternion(baseQuat).add(basePos);
+
+        // 1. Check Room Walls & Ceiling / Attic Slope
+        if (room && room.enabled) {
+          const halfRoomW = room.widthMm / 2;
+          if (room.showLeftWall && worldPt.x < -halfRoomW + 4) {
+            foundHit = {
+              doorId: door.id,
+              doorName: door.name,
+              hitAngleDeg: deg,
+              hitKind: 'wall',
+              hitLabel: 'Lewa ściana wnęki',
+              recommendation: `Front uderza w lewą ścianę przy ~${deg}° — dodaj blendę przyścienną min. 45 mm lub ogranicznik kąta 86°.`,
+            };
+            break;
+          }
+          if (room.showRightWall && worldPt.x > halfRoomW - 4) {
+            foundHit = {
+              doorId: door.id,
+              doorName: door.name,
+              hitAngleDeg: deg,
+              hitKind: 'wall',
+              hitLabel: 'Prawa ściana wnęki',
+              recommendation: `Front uderza w prawą ścianę przy ~${deg}° — dodaj blendę przyścienną min. 45 mm lub ogranicznik kąta 86°.`,
+            };
+            break;
+          }
+          const ceilY = getRoomCeilingHeightAtX(worldPt.x, room);
+          if (worldPt.y > ceilY - 5) {
+            foundHit = {
+              doorId: door.id,
+              doorName: door.name,
+              hitAngleDeg: deg,
+              hitKind: 'ceiling',
+              hitLabel: room.slopedCeiling.enabled ? 'Skos dachu / sufit' : 'Sufit pomieszczenia',
+              recommendation: `Klapa uderza w sufit/skos przy ~${deg}° — zastosuj ogranicznik podnośnika ${Math.max(60, deg - 12)}° lub obniż szafkę.`,
+            };
+            break;
+          }
+
+          // 2. Check Room Obstacles (radiator, window, pipe)
+          for (const { obs, box: ob } of obstacleBoxes) {
+            if (
+              worldPt.x >= ob.minX - 4 &&
+              worldPt.x <= ob.maxX + 4 &&
+              worldPt.y >= ob.minY - 4 &&
+              worldPt.y <= ob.maxY + 4 &&
+              worldPt.z >= ob.minZ - 4 &&
+              worldPt.z <= ob.maxZ + 4
+            ) {
+              foundHit = {
+                doorId: door.id,
+                doorName: door.name,
+                hitAngleDeg: deg,
+                hitKind: 'obstacle',
+                hitLabel: obs.label,
+                recommendation: `Front koliduje przy ~${deg}° z „${obs.label}” — zastosuj blendę dystansową, odwróć stronę zawiasów lub ogranicznik kąta.`,
+              };
+              break;
+            }
+          }
+          if (foundHit) break;
+        }
+
+        // 3. Check Neighboring Cabinets / Protruding Panels from OTHER groups (e.g. L-corner perpendicular cabinet)
+        for (const other of parts) {
+          if (other.id === door.id) continue;
+          // Skip parts belonging to the same cabinet carcass
+          if (door.groupId && other.groupId === door.groupId) continue;
+          if (other.hardwareTag === 'leg') continue;
+          const ob = boxMap.get(other.id)!;
+          if (
+            worldPt.x >= ob.minX + 3 &&
+            worldPt.x <= ob.maxX - 3 &&
+            worldPt.y >= ob.minY + 3 &&
+            worldPt.y <= ob.maxY - 3 &&
+            worldPt.z >= ob.minZ + 3 &&
+            worldPt.z <= ob.maxZ - 3
+          ) {
+            foundHit = {
+              doorId: door.id,
+              doorName: door.name,
+              hitAngleDeg: deg,
+              hitKind: 'cabinet',
+              hitLabel: other.name,
+              recommendation: `Front uderza w „${other.name}” przy ~${deg}° — odsuń szafkę blendą narożną min. 45 mm lub zmień kierunek otwierania.`,
+            };
+            break;
+          }
+        }
+        if (foundHit) break;
+      }
+    }
+
+    if (foundHit) {
+      results.push(foundHit);
+    }
+  }
+
+  return results;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 2. SHARED COUNTERTOP MERGER & AUTO APPLIANCE CUTOUTS (+ 50 mm BRIDGE AUDIT)
+// ═══════════════════════════════════════════════════════════════════════════
+
+export interface CountertopBridgeIssue {
+  partId: string;
+  partName: string;
+  cutoutId: string;
+  cutoutLabel: string;
+  frontBridgeMm: number;
+  backBridgeMm: number;
+  sideBridgeMm: number;
+  status: 'ok' | 'warning' | 'critical';
+  message: string;
+}
+
+/**
+ * Merges horizontally adjacent aligned kitchen countertops (same Y ±10 mm, depth ±30 mm, gap <= 40 mm)
+ * into a single continuous shared countertop, preserving & re-centering any existing cutouts.
+ */
+export function mergeCountertopsForRow(parts: FurniturePart[]): {
+  parts: FurniturePart[];
+  mergedCount: number;
+  needsMiterJoint: boolean;
+} {
+  const countertops = parts.filter(
+    (p) => p.kind === 'countertop' && Math.abs(p.rotation[1] % 180) < 2
+  );
+  if (countertops.length < 2) {
+    return { parts, mergedCount: 0, needsMiterJoint: false };
+  }
+
+  // Group countertops into contiguous horizontal runs
+  const sorted = [...countertops].sort((a, b) => a.position[0] - b.position[0]);
+  const clusters: FurniturePart[][] = [];
+
+  for (const ct of sorted) {
+    const b = getPartWorldBox(ct);
+    let addedToCluster = false;
+    for (const cluster of clusters) {
+      const last = cluster[cluster.length - 1];
+      const lb = getPartWorldBox(last);
+      const sameY = Math.abs(ct.position[1] - last.position[1]) <= 12;
+      const sameZ = Math.abs(ct.position[2] - last.position[2]) <= 35;
+      const sameD = Math.abs(ct.depth - last.depth) <= 35;
+      const xGap = b.minX - lb.maxX;
+      if (sameY && sameZ && sameD && xGap >= -25 && xGap <= 45) {
+        cluster.push(ct);
+        addedToCluster = true;
+        break;
+      }
+    }
+    if (!addedToCluster) {
+      clusters.push([ct]);
+    }
+  }
+
+  const removeIds = new Set<string>();
+  const mergedParts: FurniturePart[] = [];
+  let mergedCount = 0;
+  let needsMiterJoint = false;
+
+  for (const cluster of clusters) {
+    if (cluster.length < 2) continue;
+    mergedCount += cluster.length;
+
+    let minX = Infinity;
+    let maxX = -Infinity;
+    let minZ = Infinity;
+    let maxZ = -Infinity;
+    let sumY = 0;
+    let maxH = 38;
+
+    for (const ct of cluster) {
+      const b = getPartWorldBox(ct);
+      minX = Math.min(minX, b.minX);
+      maxX = Math.max(maxX, b.maxX);
+      minZ = Math.min(minZ, b.minZ);
+      maxZ = Math.max(maxZ, b.maxZ);
+      sumY += ct.position[1];
+      maxH = Math.max(maxH, ct.height);
+      removeIds.add(ct.id);
+    }
+
+    const totalW = Math.round(maxX - minX);
+    const totalD = Math.round(maxZ - minZ);
+    const centerX = Math.round((minX + maxX) / 2);
+    const centerY = Math.round(sumY / cluster.length);
+    const centerZ = Math.round((minZ + maxZ) / 2);
+    const base = cluster[0];
+
+    if (totalW > 3050) needsMiterJoint = true;
+
+    // Preserve and re-center existing cutouts onto the shared countertop coordinate frame
+    const mergedCutouts: import('../types/furniture').PartCutout[] = [];
+    for (const ct of cluster) {
+      if (!ct.cutouts) continue;
+      for (const cut of ct.cutouts) {
+        mergedCutouts.push({
+          ...cut,
+          xMm: Math.round(cut.xMm + (ct.position[0] - centerX)),
+          yMm: Math.round(cut.yMm + (ct.position[2] - centerZ)),
+        });
+      }
+    }
+
+    mergedParts.push({
+      ...base,
+      id: `ct_shared_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+      name:
+        totalW > 3050
+          ? `Blat wspólny ${totalW} mm (łączenie na śruby rzymskie)`
+          : `Blat wspólny ciągu (${totalW}×${totalD} mm)`,
+      width: totalW,
+      height: maxH,
+      depth: totalD,
+      position: [centerX, centerY, centerZ],
+      rotation: [0, 0, 0],
+      cutouts: mergedCutouts.length > 0 ? mergedCutouts : undefined,
+      groupId: undefined,
+    });
+  }
+
+  if (mergedCount === 0) {
+    return { parts, mergedCount: 0, needsMiterJoint: false };
+  }
+
+  const nextParts = [
+    ...parts.filter((p) => !removeIds.has(p.id)),
+    ...mergedParts,
+  ];
+  return { parts: nextParts, mergedCount, needsMiterJoint };
+}
+
+/**
+ * Automatically creates or updates exact rectangular cutouts on countertops
+ * underneath placed kitchen sinks (`kitchen_sink`) and induction hobs (`induction_hob`).
+ */
+export function syncApplianceCutoutsOnCountertops(parts: FurniturePart[]): {
+  parts: FurniturePart[];
+  cutoutsSynced: number;
+} {
+  const appliances = parts.filter(
+    (p) =>
+      p.kind === 'appliance' &&
+      (p.applianceModel === 'kitchen_sink' || p.applianceModel === 'induction_hob')
+  );
+  if (appliances.length === 0) return { parts, cutoutsSynced: 0 };
+
+  let cutoutsSynced = 0;
+
+  const nextParts = parts.map((part) => {
+    if (part.kind !== 'countertop') return part;
+    const ctBox = getPartWorldBox(part);
+    const manualCutouts = (part.cutouts ?? []).filter((c) => !c.id.startsWith('auto_app_'));
+    const autoCutouts: import('../types/furniture').PartCutout[] = [];
+
+    for (const app of appliances) {
+      const ab = getPartWorldBox(app);
+      const xOverlap = Math.min(ctBox.maxX, ab.maxX) - Math.max(ctBox.minX, ab.minX);
+      const zOverlap = Math.min(ctBox.maxZ, ab.maxZ) - Math.max(ctBox.minZ, ab.minZ);
+      const yDist = Math.abs(ab.maxY - ctBox.maxY);
+      if (xOverlap < 120 || zOverlap < 120 || yDist > 360) continue;
+
+      const isHob = app.applianceModel === 'induction_hob';
+      const cutW = isHob ? Math.min(560, Math.round(app.width - 30)) : Math.round(app.width - 30);
+      const cutH = isHob ? Math.min(490, Math.round(app.depth - 30)) : Math.round(app.depth - 30);
+
+      const relX = Math.round(app.position[0] - part.position[0]);
+      const relY = Math.round(app.position[2] - part.position[2]);
+
+      autoCutouts.push({
+        id: `auto_app_${app.id}`,
+        shape: 'rect',
+        xMm: relX,
+        yMm: relY,
+        widthMm: Math.max(120, cutW),
+        heightMm: Math.max(120, cutH),
+        label: isHob ? 'Wycięcie pod płytę indukcyjną' : 'Wycięcie pod zlewozmywak',
+      });
+      cutoutsSynced += 1;
+    }
+
+    if (autoCutouts.length === 0 && manualCutouts.length === (part.cutouts?.length ?? 0)) {
+      return part;
+    }
+    const combined = [...manualCutouts, ...autoCutouts];
+    return {
+      ...part,
+      cutouts: combined.length > 0 ? combined : undefined,
+    };
+  });
+
+  return { parts: nextParts, cutoutsSynced };
+}
+
+/**
+ * Audits all countertop cutouts against the real-world carpentry minimum bridge rule
+ * (minimum 50 mm front and rear bridge so laminate/HPL countertops don't snap during transport/installation).
+ */
+export function analyzeCountertopCutouts(parts: FurniturePart[]): CountertopBridgeIssue[] {
+  const issues: CountertopBridgeIssue[] = [];
+  for (const part of parts) {
+    if (part.kind !== 'countertop' || !part.cutouts || part.cutouts.length === 0) continue;
+    const halfW = part.width / 2;
+    const halfD = part.depth / 2;
+    for (const cut of part.cutouts) {
+      const cw = cut.shape === 'circle' ? (cut.diameterMm ?? cut.widthMm) : cut.widthMm;
+      const ch = cut.shape === 'circle' ? (cut.diameterMm ?? cut.heightMm) : cut.heightMm;
+      const frontBridgeMm = Math.round(halfD - (cut.yMm + ch / 2));
+      const backBridgeMm = Math.round(halfD + (cut.yMm - ch / 2));
+      const leftBridgeMm = Math.round(halfW + (cut.xMm - cw / 2));
+      const rightBridgeMm = Math.round(halfW - (cut.xMm + cw / 2));
+      const sideBridgeMm = Math.min(leftBridgeMm, rightBridgeMm);
+      const minFB = Math.min(frontBridgeMm, backBridgeMm);
+
+      if (minFB < 35 || sideBridgeMm < 40) {
+        issues.push({
+          partId: part.id,
+          partName: part.name,
+          cutoutId: cut.id,
+          cutoutLabel: cut.label || 'Otwór w blacie',
+          frontBridgeMm,
+          backBridgeMm,
+          sideBridgeMm,
+          status: 'critical',
+          message: `Krytycznie cienki mostek blatu (${minFB} mm przód/tył, zalecane min. 50 mm) — ryzyko pęknięcia blatu przy montażu!`,
+        });
+      } else if (minFB < 50) {
+        issues.push({
+          partId: part.id,
+          partName: part.name,
+          cutoutId: cut.id,
+          cutoutLabel: cut.label || 'Otwór w blacie',
+          frontBridgeMm,
+          backBridgeMm,
+          sideBridgeMm,
+          status: 'warning',
+          message: `Wąski mostek blatu (przód: ${frontBridgeMm} mm, tył: ${backBridgeMm} mm — bezpieczne minimum to 50 mm).`,
+        });
+      }
+    }
+  }
+  return issues;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 3. PART & FURNITURE WEIGHT CALCULATOR + HARDWARE LOAD SIZING (FLAPS / HINGES / SLIDES)
+// ═══════════════════════════════════════════════════════════════════════════
+
+export function getMaterialDensityKgM3(materialId: string): number {
+  switch (materialId) {
+    case 'osb3':
+      return 640;
+    case 'birch_plywood':
+      return 680;
+    case 'hdf_white':
+    case 'hdf_black':
+      return 860;
+    case 'concrete_top':
+      return 760; // 38 mm laminated postforming particleboard core
+    case 'glass_clear':
+      return 2500;
+    case 'steel_black':
+    case 'steel_galv':
+      return 7850;
+    default:
+      // Standard 18 mm furniture particleboard / MDF laminated
+      return 690;
+  }
+}
+
+/**
+ * Computes realistic mass of a single part in kilograms (kg),
+ * accounting for hollow steel tube wall thickness (2 mm), sloped trapezoids, custom polygons, and cutouts.
+ */
+export function computePartWeightKg(part: FurniturePart): number {
+  if (part.kind === 'appliance') {
+    switch (part.applianceModel) {
+      case 'builtin_oven':
+        return 34;
+      case 'induction_hob':
+        return 11.5;
+      case 'kitchen_sink':
+        return 7.5;
+      case 'wire_cargo':
+        return 6.2;
+      case 'wardrobe_rod':
+        return 1.2;
+      default:
+        return 2;
+    }
+  }
+
+  const density = getMaterialDensityKgM3(part.materialId);
+
+  // Hollow rectangular steel tube (2 mm wall thickness) instead of solid steel bar!
+  if (part.kind === 'profile' && (part.materialId === 'steel_black' || part.materialId === 'steel_galv')) {
+    const dims = [part.width, part.height, part.depth].sort((a, b) => a - b);
+    const a = dims[0];
+    const b = dims[1];
+    const len = dims[2];
+    const wall = Math.min(2, a * 0.25);
+    const crossAreaMm2 = a * b - Math.max(0, a - 2 * wall) * Math.max(0, b - 2 * wall);
+    const volM3 = (crossAreaMm2 * len) / 1_000_000_000;
+    return Math.round(volM3 * density * 100) / 100;
+  }
+
+  let volMm3 = part.width * part.height * part.depth;
+
+  // Adjust for sloped trapezoid area
+  if (part.kind === 'sloped') {
+    const leftH = Math.max(10, part.height - (part.slopeTopLeft ?? 0) - (part.slopeBottomLeft ?? 0));
+    const rightH = Math.max(10, part.height - (part.slopeTopRight ?? 0) - (part.slopeBottomRight ?? 0));
+    volMm3 = ((leftH + rightH) / 2) * part.width * part.depth;
+  } else if (part.kind === 'custom' && part.customPolygon && part.customPolygon.length >= 3) {
+    let area2 = 0;
+    const pts = part.customPolygon;
+    for (let i = 0; i < pts.length; i++) {
+      const [x1, y1] = pts[i];
+      const [x2, y2] = pts[(i + 1) % pts.length];
+      area2 += x1 * y2 - x2 * y1;
+    }
+    volMm3 = Math.abs(area2 * 0.5) * part.depth;
+  }
+
+  // Subtract internal cutouts (sink, hob, cable grommet)
+  if (part.cutouts && part.cutouts.length > 0) {
+    const thickness = Math.min(part.width, part.height, part.depth);
+    for (const c of part.cutouts) {
+      const cutAreaMm2 =
+        c.shape === 'circle'
+          ? Math.PI * Math.pow((c.diameterMm ?? c.widthMm) / 2, 2)
+          : c.widthMm * c.heightMm;
+      volMm3 = Math.max(0, volMm3 - cutAreaMm2 * thickness);
+    }
+  }
+
+  // Gloss MDF fronts are ~10% denser than standard chipboard
+  const finishFactor = part.surfaceFinish === 'gloss' ? 1.09 : 1.0;
+  const kg = (volMm3 / 1_000_000_000) * density * finishFactor;
+  return Math.round(kg * 100) / 100;
+}
+
+export interface FlapHardwareRecommendation {
+  partId: string;
+  partName: string;
+  weightKg: number;
+  powerFactorLF: number;
+  recommendedLift: string;
+}
+
+export interface HingeWeightRecommendation {
+  partId: string;
+  partName: string;
+  weightKg: number;
+  currentHinges: number;
+  recommendedHinges: number;
+  needsMoreHinges: boolean;
+}
+
+export interface DrawerSlideLoadRecommendation {
+  partId: string;
+  partName: string;
+  widthMm: number;
+  recommendedLoadKg: 30 | 40 | 60;
+  note: string;
+}
+
+export interface ProjectWeightSummary {
+  totalWeightKg: number;
+  boardsWeightKg: number;
+  appliancesWeightKg: number;
+  heaviestPart: { id: string; name: string; weightKg: number } | null;
+  partWeights: Map<string, number>;
+  flapRecommendations: FlapHardwareRecommendation[];
+  hingeRecommendations: HingeWeightRecommendation[];
+  drawerRecommendations: DrawerSlideLoadRecommendation[];
+}
+
+/**
+ * Computes complete project mass breakdown (kg) and real carpentry hardware load recommendations
+ * (gas-strut/Aventos power factor LF, Ø35 hinge counts by weight, and drawer slide load classes 30/40/60 kg).
+ */
+export function computeProjectWeightSummary(parts: FurniturePart[]): ProjectWeightSummary {
+  const partWeights = new Map<string, number>();
+  let boardsWeightKg = 0;
+  let appliancesWeightKg = 0;
+  let heaviestPart: { id: string; name: string; weightKg: number } | null = null;
+  const flapRecommendations: FlapHardwareRecommendation[] = [];
+  const hingeRecommendations: HingeWeightRecommendation[] = [];
+  const drawerRecommendations: DrawerSlideLoadRecommendation[] = [];
+
+  for (const part of parts) {
+    const kg = computePartWeightKg(part);
+    partWeights.set(part.id, kg);
+    if (part.kind === 'appliance') {
+      appliancesWeightKg += kg;
+    } else {
+      boardsWeightKg += kg;
+    }
+    if (!heaviestPart || kg > heaviestPart.weightKg) {
+      heaviestPart = { id: part.id, name: part.name, weightKg: kg };
+    }
+
+    if (part.kind === 'door' && part.hingeSide === 'top') {
+      // Blum Aventos power factor LF = corpus/front height (mm) × front weight including handle (kg)
+      const weightWithHandle = kg + 0.35;
+      const lf = Math.round(part.height * weightWithHandle);
+      const recommendedLift =
+        lf <= 960
+          ? '2 × siłownik gazowy 60N (lub Aventos HK-XS)'
+          : lf <= 1800
+            ? '2 × siłownik gazowy 80N (lub Aventos HK-S)'
+            : lf <= 3200
+              ? '2 × siłownik gazowy 100N (lub Aventos HK top 22K2500)'
+              : 'Blum Aventos HK top 22K2700 / 2900 (ciężka klapa)';
+      flapRecommendations.push({
+        partId: part.id,
+        partName: part.name,
+        weightKg: kg,
+        powerFactorLF: lf,
+        recommendedLift,
+      });
+    } else if (
+      part.kind === 'door' &&
+      (part.hingeSide === 'left' || part.hingeSide === 'right')
+    ) {
+      const currentHinges =
+        part.hingeCount ?? (part.height > 1500 ? 4 : part.height > 950 ? 3 : 2);
+      const byWeight = kg > 19 ? 5 : kg > 14 ? 4 : kg > 9 ? 3 : 2;
+      const byHeight = part.height > 1900 ? 5 : part.height > 1500 ? 4 : part.height > 950 ? 3 : 2;
+      const recommendedHinges = Math.max(byWeight, byHeight);
+      hingeRecommendations.push({
+        partId: part.id,
+        partName: part.name,
+        weightKg: kg,
+        currentHinges,
+        recommendedHinges,
+        needsMoreHinges: currentHinges < recommendedHinges,
+      });
+    }
+
+    if (part.hardwareTag === 'drawer_front') {
+      const recommendedLoadKg: 30 | 40 | 60 =
+        part.width >= 900 ? 60 : part.width >= 650 ? 40 : 30;
+      drawerRecommendations.push({
+        partId: part.id,
+        partName: part.name,
+        widthMm: part.width,
+        recommendedLoadKg,
+        note:
+          recommendedLoadKg === 60
+            ? 'Szeroka szuflada ≥900 mm — wymagane prowadnice 60 kg (np. Blum Movento 60 / Tandembox)'
+            : recommendedLoadKg === 40
+              ? 'Zalecane prowadnice o udźwigu 40 kg (talerze / garnki)'
+              : 'Standardowe prowadnice 30 kg wystarczające',
+      });
+    }
+  }
+
+  return {
+    totalWeightKg: Math.round((boardsWeightKg + appliancesWeightKg) * 10) / 10,
+    boardsWeightKg: Math.round(boardsWeightKg * 10) / 10,
+    appliancesWeightKg: Math.round(appliancesWeightKg * 10) / 10,
+    heaviestPart,
+    partWeights,
+    flapRecommendations,
+    hingeRecommendations,
+    drawerRecommendations,
+  };
+}
+
 
 

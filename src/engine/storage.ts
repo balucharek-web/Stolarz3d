@@ -12,10 +12,13 @@ import {
   type FurnitureProject,
   type HandleSide,
   type HandleStyle,
+  type LedGrooveConfig,
   type MaterialId,
   type MaterialMeta,
   type MaterialsCatalogConfig,
   type MiterEdgesConfig,
+  type OffcutRemnant,
+  type ParametricCabinetConfig,
   type PartCutout,
   type PartKind,
   type QuoteSettings,
@@ -30,6 +33,7 @@ const LEGACY_STORAGE_KEY = 'stolarz3d_project_v1';
 const PROJECTS_STORAGE_KEY = 'stolarz3d_projects_v2';
 const QUOTE_SETTINGS_KEY = 'stolarz3d_quote_settings_v1';
 const MATERIALS_CATALOG_KEY = 'stolarz3d_materials_catalog_v1';
+const OFFCUTS_STORAGE_KEY = 'stolarz3d_offcuts_v1';
 
 const IDB_NAME = 'stolarz3d_assets_db';
 const IDB_VERSION = 1;
@@ -120,8 +124,24 @@ const VALID_HW_TAGS = new Set([
   'door_overlay',
   'door_inset',
   'sliding_door',
+  'flap_door',
   'wall_filler',
 ]);
+
+function sanitizeLedGroove(raw: unknown): LedGrooveConfig | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const g = raw as Record<string, unknown>;
+  if (!g.enabled) return undefined;
+  const edge =
+    g.edge === 'back' || g.edge === 'left' || g.edge === 'right' ? g.edge : 'front';
+  return {
+    enabled: true,
+    edge,
+    insetMm: toFiniteNumber(g.insetMm, 45, 10, 400),
+    widthMm: toFiniteNumber(g.widthMm, 10, 6, 30),
+    depthMm: toFiniteNumber(g.depthMm, 8, 3, 18),
+  };
+}
 const VALID_OBSTACLE_TYPES = new Set<RoomObstacleType>(['radiator', 'socket', 'pipe', 'window']);
 
 function sanitizeRoomConfig(raw: unknown): RoomConfig | undefined {
@@ -319,6 +339,7 @@ export function sanitizeImportedProject(
           : undefined,
       cutouts: sanitizeCutouts(p.cutouts),
       dadoGroove: sanitizeDadoGroove(p.dadoGroove),
+      ledGroove: sanitizeLedGroove(p.ledGroove),
       miter45: sanitizeMiter45(p.miter45),
       hingeSide:
         typeof p.hingeSide === 'string' && VALID_HANDLES.has(p.hingeSide as HandleSide)
@@ -400,6 +421,32 @@ export function sanitizeImportedProject(
     }
   }
 
+  const activeGroupIds = new Set(
+    sanitizedParts.map((p) => p.groupId).filter((g): g is string => Boolean(g))
+  );
+  let cabinetConfigs: Record<string, ParametricCabinetConfig> | undefined;
+  if (obj.cabinetConfigs && typeof obj.cabinetConfigs === 'object') {
+    const rawMap = obj.cabinetConfigs as Record<string, unknown>;
+    const cleaned: Record<string, ParametricCabinetConfig> = {};
+    for (const [gid, rawCfg] of Object.entries(rawMap)) {
+      if (!activeGroupIds.has(gid) || !rawCfg || typeof rawCfg !== 'object') continue;
+      const c = rawCfg as Partial<ParametricCabinetConfig>;
+      if (typeof c.preset === 'string' && typeof c.widthMm === 'number' && typeof c.heightMm === 'number') {
+        cleaned[gid] = {
+          ...(c as ParametricCabinetConfig),
+          name: typeof c.name === 'string' ? c.name.slice(0, 60) : gid,
+          widthMm: toFiniteNumber(c.widthMm, 800, 200, 4000),
+          heightMm: toFiniteNumber(c.heightMm, 820, 200, 3200),
+          depthMm: toFiniteNumber(c.depthMm, 560, 180, 1200),
+          boardThicknessMm: toFiniteNumber(c.boardThicknessMm, 18, 12, 38),
+        };
+      }
+    }
+    if (Object.keys(cleaned).length > 0) {
+      cabinetConfigs = cleaned;
+    }
+  }
+
   const project: FurnitureProject = {
     id:
       typeof obj.id === 'string' && obj.id.trim()
@@ -412,6 +459,7 @@ export function sanitizeImportedProject(
     parts: sanitizedParts,
     fasteners: sanitizedFasteners,
     room: sanitizeRoomConfig(obj.room),
+    cabinetConfigs,
     updatedAt: typeof obj.updatedAt === 'number' && Number.isFinite(obj.updatedAt) ? obj.updatedAt : Date.now(),
   };
 
@@ -700,4 +748,36 @@ export function saveMaterialsConfig(config: MaterialsCatalogConfig): void {
     // Ignore quota errors
   }
 }
+
+/** Loads persisted workshop offcut remnants (magazyn odpadów płytowych) */
+export function loadOffcuts(): OffcutRemnant[] {
+  try {
+    const raw = localStorage.getItem(OFFCUTS_STORAGE_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .filter((item): item is Record<string, unknown> => Boolean(item && typeof item === 'object'))
+      .map((item, idx) => ({
+        id: typeof item.id === 'string' && item.id.trim() ? item.id : `offcut_${idx}_${Date.now()}`,
+        materialId: (typeof item.materialId === 'string' ? item.materialId : 'white_matte') as MaterialId,
+        thicknessMm: Math.round(toFiniteNumber(item.thicknessMm, 18, 3, 60)),
+        lengthMm: Math.round(toFiniteNumber(item.lengthMm, 1000, 120, 6000)),
+        widthMm: Math.round(toFiniteNumber(item.widthMm, 600, 80, 3000)),
+        quantity: Math.round(toFiniteNumber(item.quantity, 1, 1, 50)),
+        label: typeof item.label === 'string' && item.label.trim() ? item.label.trim().slice(0, 40) : undefined,
+      }));
+  } catch {
+    return [];
+  }
+}
+
+export function saveOffcuts(offcuts: OffcutRemnant[]): void {
+  try {
+    localStorage.setItem(OFFCUTS_STORAGE_KEY, JSON.stringify(offcuts));
+  } catch {
+    // Ignore quota errors
+  }
+}
+
 

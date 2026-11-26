@@ -5,6 +5,7 @@ import {
   FlipHorizontal2,
   Focus,
   Group,
+  LayoutPanelTop,
   PenTool,
   Plus,
   RotateCw,
@@ -23,8 +24,10 @@ interface ContextMenuProps {
   menu: ContextMenuTarget | null;
   selectedCount: number;
   selectedCanUngroup: boolean;
+  canEditParametricCabinet?: boolean;
   onClose: () => void;
   onOpenInspector: (partId: string) => void;
+  onEditParametricCabinet?: (partId: string) => void;
   onEditShape2D: (partId: string) => void;
   onDuplicate: (partId: string) => void;
   onMirrorDuplicate: (partId: string) => void;
@@ -45,8 +48,10 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
   menu,
   selectedCount,
   selectedCanUngroup,
+  canEditParametricCabinet = false,
   onClose,
   onOpenInspector,
+  onEditParametricCabinet,
   onEditShape2D,
   onDuplicate,
   onMirrorDuplicate,
@@ -84,8 +89,15 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
 
   if (!menu) return null;
 
-  const menuW = 242;
-  const menuH = menu.kind === 'part' ? 320 : menu.kind === 'canvas' ? 190 : 88;
+  const menuW = 248;
+  const menuH =
+    menu.kind === 'part'
+      ? canEditParametricCabinet
+        ? 364
+        : 324
+      : menu.kind === 'canvas'
+        ? 190
+        : 88;
   const left = Math.max(8, Math.min(window.innerWidth - menuW - 8, menu.x));
   const top = Math.max(54, Math.min(window.innerHeight - menuH - 12, menu.y));
 
@@ -120,6 +132,21 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
               Właściwości i wymiary
             </span>
           </button>
+          {canEditParametricCabinet && onEditParametricCabinet && (
+            <button
+              type="button"
+              className={itemCls}
+              onClick={() => {
+                onEditParametricCabinet(menu.partId);
+                onClose();
+              }}
+            >
+              <span className="flex items-center gap-2 text-emerald-300">
+                <LayoutPanelTop className="h-3.5 w-3.5 text-emerald-400" />
+                Edytuj szafkę w kreatorze
+              </span>
+            </button>
+          )}
           <button
             type="button"
             className={itemCls}

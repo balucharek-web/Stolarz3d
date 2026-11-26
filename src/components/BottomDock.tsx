@@ -17,6 +17,7 @@ import {
   FolderOpen,
   Group,
   Layers,
+  LayoutPanelTop,
   Lightbulb,
   ListOrdered,
   Magnet,
@@ -85,12 +86,14 @@ interface BottomDockProps {
   selectedPartName: string | null;
   selectedCount: number;
   selectedCanUngroup: boolean;
+  canEditParametricCabinet?: boolean;
   selectedFastenerLabel: string | null;
   onAlignSelected: (mode: AlignMode) => void;
   onDistributeSelected: (axis: 'x' | 'y' | 'z') => void;
   onGroupSelected: () => void;
   onUngroupSelected: () => void;
   onOpenInspector: () => void;
+  onEditParametricCabinet?: () => void;
   onDeleteSelectedFastener: () => void;
   onOpenTemplates: () => void;
   onOpenPartsList: () => void;
@@ -145,12 +148,14 @@ export const BottomDock: React.FC<BottomDockProps> = ({
   selectedPartName,
   selectedCount,
   selectedCanUngroup,
+  canEditParametricCabinet = false,
   selectedFastenerLabel,
   onAlignSelected,
   onDistributeSelected,
   onGroupSelected,
   onUngroupSelected,
   onOpenInspector,
+  onEditParametricCabinet,
   onDeleteSelectedFastener,
   onOpenTemplates,
   onOpenPartsList,
@@ -256,13 +261,23 @@ export const BottomDock: React.FC<BottomDockProps> = ({
                     >
                       <Undo2 className="h-4 w-4" />
                     </button>
+                    {canEditParametricCabinet && onEditParametricCabinet && (
+                      <button
+                        type="button"
+                        onClick={onEditParametricCabinet}
+                        className="flex min-h-[36px] items-center gap-1 rounded-lg border border-emerald-500/50 bg-emerald-500/15 px-2.5 text-xs font-semibold text-emerald-200 active:bg-emerald-500/30 whitespace-nowrap"
+                      >
+                        <LayoutPanelTop className="h-3.5 w-3.5" />
+                        <span>Szafka</span>
+                      </button>
+                    )}
                     <button
                       type="button"
                       onClick={onOpenInspector}
                       className="flex min-h-[36px] items-center gap-1.5 rounded-lg bg-amber-500 px-3 text-xs font-semibold text-zinc-950 active:bg-amber-400 whitespace-nowrap"
                     >
                       <SlidersHorizontal className="h-3.5 w-3.5" />
-                      <span>Edytuj</span>
+                      <span>{selectedCount >= 2 ? `Edytuj (${selectedCount})` : 'Edytuj'}</span>
                     </button>
                   </div>
                 </>
@@ -752,6 +767,17 @@ export const BottomDock: React.FC<BottomDockProps> = ({
                         <span>Rozgrupuj</span>
                       </button>
                     )}
+                    {canEditParametricCabinet && onEditParametricCabinet && (
+                      <button
+                        type="button"
+                        onClick={onEditParametricCabinet}
+                        className="flex items-center gap-1 rounded-lg border border-emerald-500/50 bg-emerald-500/15 px-2.5 py-1 text-xs font-semibold text-emerald-300 hover:bg-emerald-500/25 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                        title="Otwórz tę szafkę ponownie w kreatorze parametrycznym"
+                      >
+                        <LayoutPanelTop className="h-3.5 w-3.5" />
+                        <span>Kreator szafki</span>
+                      </button>
+                    )}
                     {selectedPartName && (
                       <button
                         type="button"
@@ -759,7 +785,9 @@ export const BottomDock: React.FC<BottomDockProps> = ({
                         className="flex items-center gap-1.5 rounded-lg bg-amber-500 px-3 py-1 text-xs font-semibold text-zinc-950 hover:bg-amber-400 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
                       >
                         <SlidersHorizontal className="h-3.5 w-3.5" />
-                        <span>Właściwości</span>
+                        <span>
+                          {selectedCount >= 2 ? `Edytuj (${selectedCount})` : 'Właściwości'}
+                        </span>
                       </button>
                     )}
                   </>

@@ -7,7 +7,11 @@ import {
   type RoomObstacle,
   type RoomObstacleType,
 } from '../types/furniture';
-import { auditRoomClearances, type RoomClearanceIssue } from '../engine/carpentry';
+import {
+  analyzeDoorSwingCollisions,
+  auditRoomClearances,
+  type RoomClearanceIssue,
+} from '../engine/carpentry';
 
 interface RoomSettingsModalProps {
   open: boolean;
@@ -79,6 +83,11 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
   const liveIssues = useMemo(
     () => (open ? auditRoomClearances(parts, draft) : roomIssues),
     [open, parts, draft, roomIssues]
+  );
+
+  const liveSwingIssues = useMemo(
+    () => (open ? analyzeDoorSwingCollisions(parts, draft) : []),
+    [open, parts, draft]
   );
 
   if (!open) return null;
@@ -203,6 +212,23 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
               <ul className="space-y-0.5 text-[11px] text-red-200/90 pl-5 list-disc">
                 {liveIssues.slice(0, 6).map((iss, idx) => (
                   <li key={`${iss.partId}_${idx}`}>{iss.message}</li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {liveSwingIssues.length > 0 && (
+            <div className="rounded-xl border border-amber-500/45 bg-amber-950/35 px-3.5 py-2.5 space-y-1">
+              <div className="flex items-center gap-1.5 text-xs font-semibold text-amber-200">
+                <AlertTriangle className="h-4 w-4 text-amber-400 shrink-0" />
+                <span>Kolizje przy otwieraniu frontów 95°–105° ({liveSwingIssues.length}):</span>
+              </div>
+              <ul className="space-y-1 text-[11px] text-amber-100/90 pl-5 list-disc">
+                {liveSwingIssues.slice(0, 6).map((sw, idx) => (
+                  <li key={`${sw.doorId}_${idx}`}>
+                    <strong>{sw.doorName}</strong> uderza przy {sw.hitAngleDeg}° o{' '}
+                    <strong>{sw.hitLabel}</strong> — {sw.recommendation}
+                  </li>
                 ))}
               </ul>
             </div>

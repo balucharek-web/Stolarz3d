@@ -1,66 +1,20 @@
 import {
+  CabinetPlacementMode,
+  CabinetPresetId,
   DrawerSlideType,
   Fastener,
   FurniturePart,
   HandleStyle,
   MaterialId,
+  ParametricCabinetConfig,
+  RoomConfig,
   ScrewType,
   SurfaceFinish,
 } from '../types/furniture';
 import { autoDetectJointFasteners } from './geometry';
 import { getPartWorldBox, syncFastenersWithParts } from './carpentry';
 
-export type CabinetPresetId =
-  | 'base_kitchen'
-  | 'corner_l'
-  | 'drawer_chest'
-  | 'wall_cabinet'
-  | 'wardrobe'
-  | 'sliding_wardrobe'
-  | 'tv_console'
-  | 'steel_rack';
-
-export interface ParametricCabinetConfig {
-  name: string;
-  preset: CabinetPresetId;
-  widthMm: number;
-  heightMm: number;
-  depthMm: number;
-  boardThicknessMm: number;
-  /** Floor clearance / plinth height (0 = sitting flat on floor, e.g. 100mm for kitchen legs/plinth) */
-  plinthHeightMm: number;
-  /** Elevation from floor (e.g. 1400mm for hanging wall cabinet) */
-  elevationYmm: number;
-  plinthStyle: 'plinth_board' | 'legs' | 'none';
-  /** Full top deck vs 2 upper stretchers (trawersy) for kitchen base cabinets */
-  topType: 'full_panel' | 'stretchers';
-  /** Internal vertical dividers (0, 1, or 2 bays) */
-  verticalDividers: 0 | 1 | 2;
-  shelfCount: number;
-  drawerCount: number;
-  doorMode: 'none' | 'single_left' | 'single_right' | 'double';
-  frontType: 'overlay' | 'inset';
-  frontGapMm: number;
-  handleStyle: HandleStyle;
-  backType: 'hdf_grooved' | 'hdf_nailed' | 'none';
-  slideType: DrawerSlideType;
-  /** Optional wall filler strip (blenda przyścienna) for flush installation against uneven walls */
-  wallFillerSide: 'none' | 'left' | 'right' | 'both';
-  wallFillerWidthMm: number;
-  /** Enable System 32 shelf-pin Ø5 drilling rows on vertical walls */
-  system32Holes: boolean;
-  /** Blind panel width for L-corner blind kitchen cabinet */
-  cornerBlindWidthMm?: number;
-  /** Include oval chrome wardrobe hanging rod inside upper bay */
-  addWardrobeRod?: boolean;
-  corpusMaterialId: MaterialId;
-  frontMaterialId: MaterialId;
-  frontFinish: SurfaceFinish;
-  addCountertop: boolean;
-  countertopMaterialId: MaterialId;
-  autoFasteners: boolean;
-  fastenerType: ScrewType;
-}
+export type { CabinetPlacementMode, CabinetPresetId, ParametricCabinetConfig };
 
 export const CABINET_PRESETS: Record<
   CabinetPresetId,
@@ -202,6 +156,7 @@ export const CABINET_PRESETS: Record<
       wallFillerWidthMm: 45,
       system32Holes: true,
       addWardrobeRod: false,
+      addLedGroove: true,
       corpusMaterialId: 'white_matte',
       frontMaterialId: 'white_matte',
       frontFinish: 'gloss',
@@ -355,6 +310,114 @@ export const CABINET_PRESETS: Record<
       fastenerType: 'bolt_m8',
     },
   },
+  oven_tower: {
+    label: 'Słupek piekarnik AGD',
+    desc: '600 × 2100 × 580 mm · Piekarnik 60, komin wentylacyjny 50 mm, szafki',
+    config: {
+      name: 'Słupek piekarnik 60',
+      preset: 'oven_tower',
+      widthMm: 600,
+      heightMm: 2100,
+      depthMm: 580,
+      boardThicknessMm: 18,
+      plinthHeightMm: 100,
+      elevationYmm: 0,
+      plinthStyle: 'plinth_board',
+      topType: 'full_panel',
+      verticalDividers: 0,
+      shelfCount: 2,
+      drawerCount: 0,
+      doorMode: 'single_left',
+      frontType: 'overlay',
+      frontGapMm: 3,
+      handleStyle: 'bar',
+      backType: 'hdf_grooved',
+      slideType: 'none',
+      wallFillerSide: 'none',
+      wallFillerWidthMm: 45,
+      system32Holes: true,
+      addWardrobeRod: false,
+      corpusMaterialId: 'white_matte',
+      frontMaterialId: 'oak_craft',
+      frontFinish: 'satin',
+      addCountertop: false,
+      countertopMaterialId: 'concrete_top',
+      autoFasteners: true,
+      fastenerType: 'confirmat_7x50',
+    },
+  },
+  sink_cabinet: {
+    label: 'Szafka pod zlew',
+    desc: '800 × 820 × 560 mm · Pionowy trawers tylny, syfon, zlew + wycięcie',
+    config: {
+      name: 'Szafka pod zlew 80',
+      preset: 'sink_cabinet',
+      widthMm: 800,
+      heightMm: 820,
+      depthMm: 560,
+      boardThicknessMm: 18,
+      plinthHeightMm: 100,
+      elevationYmm: 0,
+      plinthStyle: 'plinth_board',
+      topType: 'stretchers',
+      verticalDividers: 0,
+      shelfCount: 0,
+      drawerCount: 0,
+      doorMode: 'double',
+      frontType: 'overlay',
+      frontGapMm: 3,
+      handleStyle: 'gola_j',
+      backType: 'none',
+      slideType: 'none',
+      wallFillerSide: 'none',
+      wallFillerWidthMm: 45,
+      system32Holes: false,
+      addWardrobeRod: false,
+      corpusMaterialId: 'white_matte',
+      frontMaterialId: 'oak_craft',
+      frontFinish: 'satin',
+      addCountertop: true,
+      countertopMaterialId: 'concrete_top',
+      autoFasteners: true,
+      fastenerType: 'confirmat_7x50',
+    },
+  },
+  dishwasher_bay: {
+    label: 'Zabudowa zmywarki',
+    desc: '600 × 820 × 560 mm · Front zmywarki, cofnięty cokół, blat i bok',
+    config: {
+      name: 'Zmywarka 60',
+      preset: 'dishwasher_bay',
+      widthMm: 600,
+      heightMm: 820,
+      depthMm: 560,
+      boardThicknessMm: 18,
+      plinthHeightMm: 100,
+      elevationYmm: 0,
+      plinthStyle: 'plinth_board',
+      topType: 'stretchers',
+      verticalDividers: 0,
+      shelfCount: 0,
+      drawerCount: 0,
+      doorMode: 'single_left',
+      frontType: 'overlay',
+      frontGapMm: 3,
+      handleStyle: 'gola_j',
+      backType: 'none',
+      slideType: 'none',
+      wallFillerSide: 'none',
+      wallFillerWidthMm: 45,
+      system32Holes: false,
+      addWardrobeRod: false,
+      corpusMaterialId: 'white_matte',
+      frontMaterialId: 'oak_craft',
+      frontFinish: 'satin',
+      addCountertop: true,
+      countertopMaterialId: 'concrete_top',
+      autoFasteners: true,
+      fastenerType: 'confirmat_7x50',
+    },
+  },
 };
 
 function uid(prefix: string): string {
@@ -376,7 +439,8 @@ function uid(prefix: string): string {
 export function buildParametricCabinet(
   cfg: ParametricCabinetConfig,
   offsetXmm = 0,
-  offsetZmm = 0
+  offsetZmm = 0,
+  existingGroupId?: string
 ): { parts: FurniturePart[]; fasteners: Fastener[]; groupId: string } {
   const parts: FurniturePart[] = [];
   const t = Math.max(12, Math.min(38, Math.round(cfg.boardThicknessMm)));
@@ -414,7 +478,8 @@ export function buildParametricCabinet(
       : t;
   const innerH = Math.max(100, bodyH - t - topDeckT);
 
-  const groupId = `${cfg.name.trim() || 'Szafka'} #${Math.floor(10 + Math.random() * 89)}`;
+  const groupId =
+    existingGroupId ?? `${cfg.name.trim() || 'Szafka'} #${Math.floor(10 + Math.random() * 89)}`;
 
   // Dedicated Industrial Steel-Frame + Wood/OSB Rack Generator
   if (cfg.preset === 'steel_rack') {
@@ -521,6 +586,601 @@ export function buildParametricCabinet(
     return { parts, fasteners: rackFasteners, groupId };
   }
 
+  // Dedicated Built-In Kitchen AGD Module 1: High Oven Tower with 50 mm rear ventilation chimney
+  if (cfg.preset === 'oven_tower') {
+    const bodyBottomY = baseY + plinthH;
+    const bodyCenterY = bodyBottomY + bodyH / 2;
+    const ventGapMm = 50; // Mandatory 50 mm rear air chimney behind built-in oven
+    const shelfDepth = Math.max(420, D - ventGapMm);
+    const shelfZ = Math.round(offsetZmm + ventGapMm / 2);
+    const frontEdge2 = { thicknessMm: 2 as const, top: true };
+    const allEdge08Oven = { thicknessMm: 0.8 as const, top: true, bottom: true, left: true, right: true };
+
+    // Sides, Bottom, Top (top also recessed 35 mm at rear or full depth with vent clearance behind oven)
+    parts.push(
+      {
+        id: uid('oven_side_l'),
+        name: `${cfg.name} — Bok lewy`,
+        kind: 'panel',
+        materialId: cfg.corpusMaterialId,
+        width: t,
+        height: bodyH,
+        depth: D,
+        position: [offsetXmm - W / 2 + t / 2, bodyCenterY, offsetZmm],
+        rotation: [0, 0, 0],
+        grainRotated: true,
+        edgeBanding: frontEdge2,
+        system32ShelfHoles: Boolean(cfg.system32Holes),
+        groupId,
+      },
+      {
+        id: uid('oven_side_r'),
+        name: `${cfg.name} — Bok prawy`,
+        kind: 'panel',
+        materialId: cfg.corpusMaterialId,
+        width: t,
+        height: bodyH,
+        depth: D,
+        position: [offsetXmm + W / 2 - t / 2, bodyCenterY, offsetZmm],
+        rotation: [0, 0, 0],
+        grainRotated: true,
+        edgeBanding: frontEdge2,
+        system32ShelfHoles: Boolean(cfg.system32Holes),
+        groupId,
+      },
+      {
+        id: uid('oven_btm'),
+        name: `${cfg.name} — Wieniec dolny`,
+        kind: 'panel',
+        materialId: cfg.corpusMaterialId,
+        width: innerW,
+        height: t,
+        depth: D,
+        position: [offsetXmm, bodyBottomY + t / 2, offsetZmm],
+        rotation: [0, 0, 0],
+        edgeBanding: frontEdge2,
+        groupId,
+      },
+      {
+        id: uid('oven_top'),
+        name: `${cfg.name} — Wieniec górny (szczelina went. 50mm)`,
+        kind: 'panel',
+        materialId: cfg.corpusMaterialId,
+        width: innerW,
+        height: t,
+        depth: shelfDepth,
+        position: [offsetXmm, bodyBottomY + bodyH - t / 2, shelfZ],
+        rotation: [0, 0, 0],
+        edgeBanding: frontEdge2,
+        groupId,
+      }
+    );
+
+    if (plinthH >= 20) {
+      parts.push(
+        {
+          id: uid('oven_plinth_f'),
+          name: `${cfg.name} — Cokół przedni (wentylacja dolna)`,
+          kind: 'panel',
+          materialId: cfg.corpusMaterialId,
+          width: innerW,
+          height: plinthH,
+          depth: t,
+          position: [offsetXmm, baseY + plinthH / 2, offsetZmm + D / 2 - 45 - t / 2],
+          rotation: [0, 0, 0],
+          edgeBanding: { thicknessMm: 0.8, top: true, bottom: true },
+          groupId,
+        },
+        {
+          id: uid('oven_plinth_b'),
+          name: `${cfg.name} — Cokół tylny`,
+          kind: 'panel',
+          materialId: cfg.corpusMaterialId,
+          width: innerW,
+          height: plinthH,
+          depth: t,
+          position: [offsetXmm, baseY + plinthH / 2, offsetZmm - D / 2 + 45 + t / 2],
+          rotation: [0, 0, 0],
+          groupId,
+        }
+      );
+    }
+
+    // Oven niche geometry (standard 600 mm oven: 595 mm tall, sits ~760-780 mm from floor)
+    const ovenShelfY = Math.round(bodyBottomY + Math.min(680, bodyH * 0.34));
+    const ovenNicheH = 600;
+    const aboveOvenShelfY = Math.round(ovenShelfY + t / 2 + ovenNicheH + t / 2);
+
+    parts.push(
+      {
+        id: uid('oven_shelf_btm'),
+        name: `${cfg.name} — Wieniec pod piekarnik (komin 50mm)`,
+        kind: 'panel',
+        materialId: cfg.corpusMaterialId,
+        width: innerW,
+        height: t,
+        depth: shelfDepth,
+        position: [offsetXmm, ovenShelfY, shelfZ],
+        rotation: [0, 0, 0],
+        edgeBanding: frontEdge2,
+        groupId,
+      },
+      {
+        id: uid('oven_shelf_top'),
+        name: `${cfg.name} — Wieniec nad piekarnikiem (komin 50mm)`,
+        kind: 'panel',
+        materialId: cfg.corpusMaterialId,
+        width: innerW,
+        height: t,
+        depth: shelfDepth,
+        position: [offsetXmm, aboveOvenShelfY, shelfZ],
+        rotation: [0, 0, 0],
+        edgeBanding: frontEdge2,
+        groupId,
+      },
+      // 3D Built-in Oven Appliance sitting cleanly inside the 564×600 mm niche
+      {
+        id: uid('oven_agd'),
+        name: `${cfg.name} — Piekarnik do zabudowy 60`,
+        kind: 'appliance',
+        applianceModel: 'builtin_oven',
+        appliancePricePln: 1850,
+        materialId: 'anthracite_matte',
+        width: Math.min(595, W - 4),
+        height: 595,
+        depth: Math.min(545, D - 35),
+        position: [
+          offsetXmm,
+          Math.round(ovenShelfY + t / 2 + 298),
+          Math.round(offsetZmm + D / 2 - Math.min(545, D - 35) / 2 + 12),
+        ],
+        rotation: [0, 0, 0],
+        groupId,
+      }
+    );
+
+    // Optional upper internal shelf inside top compartment
+    const upperClearBottom = aboveOvenShelfY + t / 2;
+    const upperClearTop = bodyBottomY + bodyH - t;
+    if (upperClearTop - upperClearBottom >= 380) {
+      parts.push({
+        id: uid('oven_upper_shelf'),
+        name: `${cfg.name} — Półka górna`,
+        kind: 'panel',
+        materialId: cfg.corpusMaterialId,
+        width: innerW,
+        height: t,
+        depth: shelfDepth - 10,
+        position: [offsetXmm, Math.round((upperClearBottom + upperClearTop) / 2), shelfZ],
+        rotation: [0, 0, 0],
+        edgeBanding: frontEdge2,
+        groupId,
+      });
+    }
+
+    // Partial HDF backs ONLY in bottom & top compartments (open behind oven for thermal airflow!)
+    const lowHdfH = Math.max(120, Math.round(ovenShelfY - t / 2 - (bodyBottomY + t) - 4));
+    const topHdfH = Math.max(120, Math.round(upperClearTop - upperClearBottom - 4));
+    parts.push(
+      {
+        id: uid('oven_hdf_low'),
+        name: `${cfg.name} — Plecy HDF 3mm (strefa dolna)`,
+        kind: 'panel',
+        materialId: 'hdf_white',
+        width: W - 6,
+        height: lowHdfH,
+        depth: 3,
+        position: [offsetXmm, Math.round(bodyBottomY + t + lowHdfH / 2 + 2), offsetZmm - D / 2 - 1.5],
+        rotation: [0, 0, 0],
+        groupId,
+      },
+      {
+        id: uid('oven_hdf_top'),
+        name: `${cfg.name} — Plecy HDF 3mm (strefa górna)`,
+        kind: 'panel',
+        materialId: 'hdf_white',
+        width: W - 6,
+        height: topHdfH,
+        depth: 3,
+        position: [offsetXmm, Math.round(upperClearBottom + topHdfH / 2 + 2), offsetZmm - D / 2 - 1.5],
+        rotation: [0, 0, 0],
+        groupId,
+      }
+    );
+
+    // Lower & Upper overlay doors cleanly framing the oven faceplate
+    const doorZ = offsetZmm + D / 2 + t / 2 + 1;
+    const doorW = W - gap;
+    const lowDoorBottom = bodyBottomY + gap / 2;
+    const lowDoorTop = ovenShelfY + t / 2 - gap;
+    const lowDoorH = Math.max(140, Math.round(lowDoorTop - lowDoorBottom));
+    const topDoorBottom = aboveOvenShelfY - t / 2 + gap;
+    const topDoorTop = bodyBottomY + bodyH - gap / 2;
+    const topDoorH = Math.max(140, Math.round(topDoorTop - topDoorBottom));
+    const isLeftHinged = cfg.doorMode !== 'single_right';
+
+    parts.push(
+      {
+        id: uid('oven_door_low'),
+        name: `${cfg.name} — Front dolny`,
+        kind: 'door',
+        materialId: cfg.frontMaterialId,
+        surfaceFinish: cfg.frontFinish,
+        width: doorW,
+        height: lowDoorH,
+        depth: t,
+        position: [offsetXmm, Math.round(lowDoorBottom + lowDoorH / 2), doorZ],
+        rotation: [0, 0, 0],
+        grainRotated: lowDoorH > doorW,
+        handleSide: isLeftHinged ? 'right' : 'left',
+        handleStyle,
+        hingeSide: isLeftHinged ? 'left' : 'right',
+        hingeCount: 2,
+        edgeBanding: allEdge08Oven,
+        hardwareTag: 'door_overlay',
+        groupId,
+      },
+      {
+        id: uid('oven_door_top'),
+        name: `${cfg.name} — Front górny`,
+        kind: 'door',
+        materialId: cfg.frontMaterialId,
+        surfaceFinish: cfg.frontFinish,
+        width: doorW,
+        height: topDoorH,
+        depth: t,
+        position: [offsetXmm, Math.round(topDoorBottom + topDoorH / 2), doorZ],
+        rotation: [0, 0, 0],
+        grainRotated: topDoorH > doorW,
+        handleSide: isLeftHinged ? 'right' : 'left',
+        handleStyle,
+        hingeSide: isLeftHinged ? 'left' : 'right',
+        hingeCount: topDoorH > 900 ? 3 : 2,
+        edgeBanding: allEdge08Oven,
+        hardwareTag: 'door_overlay',
+        groupId,
+      }
+    );
+
+    const ovenFasteners = cfg.autoFasteners
+      ? autoDetectJointFasteners(parts, [], cfg.fastenerType)
+      : [];
+    return { parts, fasteners: ovenFasteners, groupId };
+  }
+
+  // Dedicated Built-In Kitchen AGD Module 2: Sink Cabinet (vertical rear rail + open plumbing back + sink cutout)
+  if (cfg.preset === 'sink_cabinet') {
+    const bodyBottomY = baseY + plinthH;
+    const bodyCenterY = bodyBottomY + bodyH / 2;
+    const frontEdge2 = { thicknessMm: 2 as const, top: true };
+    const allEdge08Sink = { thicknessMm: 0.8 as const, top: true, bottom: true, left: true, right: true };
+
+    parts.push(
+      {
+        id: uid('sink_side_l'),
+        name: `${cfg.name} — Bok lewy`,
+        kind: 'panel',
+        materialId: cfg.corpusMaterialId,
+        width: t,
+        height: bodyH,
+        depth: D,
+        position: [offsetXmm - W / 2 + t / 2, bodyCenterY, offsetZmm],
+        rotation: [0, 0, 0],
+        grainRotated: true,
+        edgeBanding: frontEdge2,
+        groupId,
+      },
+      {
+        id: uid('sink_side_r'),
+        name: `${cfg.name} — Bok prawy`,
+        kind: 'panel',
+        materialId: cfg.corpusMaterialId,
+        width: t,
+        height: bodyH,
+        depth: D,
+        position: [offsetXmm + W / 2 - t / 2, bodyCenterY, offsetZmm],
+        rotation: [0, 0, 0],
+        grainRotated: true,
+        edgeBanding: frontEdge2,
+        groupId,
+      },
+      {
+        id: uid('sink_btm'),
+        name: `${cfg.name} — Wieniec dolny`,
+        kind: 'panel',
+        materialId: cfg.corpusMaterialId,
+        width: innerW,
+        height: t,
+        depth: D,
+        position: [offsetXmm, bodyBottomY + t / 2, offsetZmm],
+        rotation: [0, 0, 0],
+        edgeBanding: frontEdge2,
+        groupId,
+      },
+      // Front vertical/horizontal narrow stretcher (keeps sink bowl clear!)
+      {
+        id: uid('sink_rail_f'),
+        name: `${cfg.name} — Trawers przedni (pionowy pod zlew)`,
+        kind: 'panel',
+        materialId: cfg.corpusMaterialId,
+        width: innerW,
+        height: 75,
+        depth: t,
+        position: [offsetXmm, bodyBottomY + bodyH - 37.5, offsetZmm + D / 2 - t / 2],
+        rotation: [0, 0, 0],
+        edgeBanding: frontEdge2,
+        groupId,
+      },
+      // Rear vertical stiffening rail (leaves room for faucet hoses & syphon!)
+      {
+        id: uid('sink_rail_b'),
+        name: `${cfg.name} — Trawers tylny pionowy (miejsce na syfon)`,
+        kind: 'panel',
+        materialId: cfg.corpusMaterialId,
+        width: innerW,
+        height: 110,
+        depth: t,
+        position: [offsetXmm, bodyBottomY + bodyH - 55, offsetZmm - D / 2 + t / 2],
+        rotation: [0, 0, 0],
+        groupId,
+      }
+    );
+
+    if (plinthH >= 20) {
+      parts.push(
+        {
+          id: uid('sink_plinth_f'),
+          name: `${cfg.name} — Cokół przedni`,
+          kind: 'panel',
+          materialId: cfg.corpusMaterialId,
+          width: innerW,
+          height: plinthH,
+          depth: t,
+          position: [offsetXmm, baseY + plinthH / 2, offsetZmm + D / 2 - 45 - t / 2],
+          rotation: [0, 0, 0],
+          edgeBanding: { thicknessMm: 0.8, top: true, bottom: true },
+          groupId,
+        },
+        {
+          id: uid('sink_plinth_b'),
+          name: `${cfg.name} — Cokół tylny`,
+          kind: 'panel',
+          materialId: cfg.corpusMaterialId,
+          width: innerW,
+          height: plinthH,
+          depth: t,
+          position: [offsetXmm, baseY + plinthH / 2, offsetZmm - D / 2 + 45 + t / 2],
+          rotation: [0, 0, 0],
+          groupId,
+        }
+      );
+    }
+
+    // Double doors (or single if narrow <= 550 mm)
+    const doorZ = offsetZmm + D / 2 + t / 2 + 1;
+    const doorH = bodyH - gap;
+    const useTopPull = handleStyle === 'gola_j' || handleStyle === 'chamfer_45';
+    if (W <= 550) {
+      parts.push({
+        id: uid('sink_door'),
+        name: `${cfg.name} — Front pod zlew`,
+        kind: 'door',
+        materialId: cfg.frontMaterialId,
+        surfaceFinish: cfg.frontFinish,
+        width: W - gap,
+        height: doorH,
+        depth: t,
+        position: [offsetXmm, bodyCenterY, doorZ],
+        rotation: [0, 0, 0],
+        grainRotated: doorH > W - gap,
+        handleSide: useTopPull ? 'top' : 'right',
+        handleStyle,
+        hingeSide: 'left',
+        hingeCount: 2,
+        edgeBanding: allEdge08Sink,
+        hardwareTag: 'door_overlay',
+        groupId,
+      });
+    } else {
+      const doorW = Math.floor((W - gap * 2) / 2);
+      const dx = doorW / 2 + gap / 2;
+      parts.push(
+        {
+          id: uid('sink_door_l'),
+          name: `${cfg.name} — Front lewy`,
+          kind: 'door',
+          materialId: cfg.frontMaterialId,
+          surfaceFinish: cfg.frontFinish,
+          width: doorW,
+          height: doorH,
+          depth: t,
+          position: [offsetXmm - dx, bodyCenterY, doorZ],
+          rotation: [0, 0, 0],
+          grainRotated: doorH > doorW,
+          handleSide: useTopPull ? 'top' : 'right',
+          handleStyle,
+          hingeSide: 'left',
+          hingeCount: 2,
+          edgeBanding: allEdge08Sink,
+          hardwareTag: 'door_overlay',
+          groupId,
+        },
+        {
+          id: uid('sink_door_r'),
+          name: `${cfg.name} — Front prawy`,
+          kind: 'door',
+          materialId: cfg.frontMaterialId,
+          surfaceFinish: cfg.frontFinish,
+          width: doorW,
+          height: doorH,
+          depth: t,
+          position: [offsetXmm + dx, bodyCenterY, doorZ],
+          rotation: [0, 0, 0],
+          grainRotated: doorH > doorW,
+          handleSide: useTopPull ? 'top' : 'left',
+          handleStyle,
+          hingeSide: 'right',
+          hingeCount: 2,
+          edgeBanding: allEdge08Sink,
+          hardwareTag: 'door_overlay',
+          groupId,
+        }
+      );
+    }
+
+    // Countertop with pre-cut sink hole (>= 55 mm front & rear bridges!) + 3D Kitchen Sink
+    if (cfg.addCountertop) {
+      const topH = 38;
+      const overhangFront = 25;
+      const topDepth = D + overhangFront;
+      const sinkW = Math.min(580, Math.max(420, W - 160));
+      const sinkD = Math.min(460, topDepth - 125);
+      const cutW = sinkW - 30;
+      const cutD = sinkD - 30;
+      const topY = bodyBottomY + bodyH + topH / 2;
+      const topZ = offsetZmm + overhangFront / 2;
+
+      parts.push(
+        {
+          id: uid('sink_countertop'),
+          name: `${cfg.name} — Blat 38 mm (z wycięciem pod zlew)`,
+          kind: 'countertop',
+          materialId: cfg.countertopMaterialId,
+          width: W + 4,
+          height: topH,
+          depth: topDepth,
+          position: [offsetXmm, topY, topZ],
+          rotation: [0, 0, 0],
+          edgeBanding: { thicknessMm: 2, top: true, left: true, right: true },
+          cutouts: [
+            {
+              id: 'auto_app_sink_init',
+              shape: 'rect',
+              xMm: 0,
+              yMm: 0,
+              widthMm: cutW,
+              heightMm: cutD,
+              label: 'Wycięcie pod zlewozmywak',
+            },
+          ],
+          groupId,
+        },
+        {
+          id: uid('sink_agd'),
+          name: `${cfg.name} — Zlewozmywak z baterią`,
+          kind: 'appliance',
+          applianceModel: 'kitchen_sink',
+          appliancePricePln: 890,
+          materialId: 'steel_galv',
+          width: sinkW,
+          height: 210,
+          depth: sinkD,
+          position: [offsetXmm, Math.round(topY - 40), topZ],
+          rotation: [0, 0, 0],
+          groupId,
+        }
+      );
+    }
+
+    const sinkFasteners = cfg.autoFasteners
+      ? autoDetectJointFasteners(parts, [], cfg.fastenerType)
+      : [];
+    return { parts, fasteners: sinkFasteners, groupId };
+  }
+
+  // Dedicated Built-In Kitchen AGD Module 3: Dishwasher Bay (450/600 mm open niche + overlay front + recessed kickplate)
+  if (cfg.preset === 'dishwasher_bay') {
+    const bodyBottomY = baseY + plinthH;
+    const bodyCenterY = bodyBottomY + bodyH / 2;
+    const allEdge08Dw = { thicknessMm: 0.8 as const, top: true, bottom: true, left: true, right: true };
+    const frontEdge2 = { thicknessMm: 2 as const, top: true };
+    const dwFrontW = W - gap;
+    const dwFrontH = bodyH - gap;
+    const doorZ = offsetZmm + D / 2 + t / 2 + 1;
+
+    // Standalone overlay dishwasher front (opens downward in real life; mounted to dishwasher door)
+    parts.push({
+      id: uid('dw_front'),
+      name: `${cfg.name} — Front zmywarki ${W} mm`,
+      kind: 'door',
+      materialId: cfg.frontMaterialId,
+      surfaceFinish: cfg.frontFinish,
+      width: dwFrontW,
+      height: dwFrontH,
+      depth: t,
+      position: [offsetXmm, bodyCenterY, doorZ],
+      rotation: [0, 0, 0],
+      grainRotated: dwFrontH > dwFrontW,
+      handleSide: 'top',
+      handleStyle,
+      edgeBanding: allEdge08Dw,
+      hardwareTag: 'door_overlay',
+      groupId,
+    });
+
+    // Recessed kickplate plinth (cofnięty o 65 mm i obniżony o 8 mm pod zawias zmywarki!)
+    if (plinthH >= 20) {
+      const kickH = Math.max(40, plinthH - 8);
+      parts.push({
+        id: uid('dw_plinth'),
+        name: `${cfg.name} — Cokół podcięty pod zmywarkę`,
+        kind: 'panel',
+        materialId: cfg.corpusMaterialId,
+        width: W,
+        height: kickH,
+        depth: t,
+        position: [offsetXmm, baseY + kickH / 2, offsetZmm + D / 2 - 65 - t / 2],
+        rotation: [0, 0, 0],
+        edgeBanding: { thicknessMm: 0.8, top: true, bottom: true },
+        groupId,
+      });
+    }
+
+    // End support gable panel supporting the countertop next to the open dishwasher bay
+    parts.push({
+      id: uid('dw_gable'),
+      name: `${cfg.name} — Bok końcowy podpierający blat`,
+      kind: 'panel',
+      materialId: cfg.frontMaterialId,
+      surfaceFinish: cfg.frontFinish,
+      width: t,
+      height: H,
+      depth: D,
+      position: [offsetXmm + W / 2 + t / 2, baseY + H / 2, offsetZmm],
+      rotation: [0, 0, 0],
+      grainRotated: true,
+      edgeBanding: frontEdge2,
+      groupId,
+    });
+
+    if (cfg.addCountertop) {
+      const topH = 38;
+      const overhangFront = 25;
+      parts.push({
+        id: uid('dw_countertop'),
+        name: `${cfg.name} — Blat 38 mm nad zmywarką`,
+        kind: 'countertop',
+        materialId: cfg.countertopMaterialId,
+        width: W + t + 4,
+        height: topH,
+        depth: D + overhangFront,
+        position: [
+          offsetXmm + t / 2,
+          bodyBottomY + bodyH + topH / 2,
+          offsetZmm + overhangFront / 2,
+        ],
+        rotation: [0, 0, 0],
+        edgeBanding: { thicknessMm: 2, top: true, left: true, right: true },
+        groupId,
+      });
+    }
+
+    const dwFasteners = cfg.autoFasteners
+      ? autoDetectJointFasteners(parts, [], cfg.fastenerType)
+      : [];
+    return { parts, fasteners: dwFasteners, groupId };
+  }
+
   const bodyBottomY = baseY + plinthH;
   const bodyCenterY = bodyBottomY + bodyH / 2;
 
@@ -528,6 +1188,9 @@ export function buildParametricCabinet(
     cfg.backType === 'hdf_grooved'
       ? { enabled: true, edge: 'back' as const, insetMm: 16, widthMm: 4, depthMm: 8 }
       : undefined;
+  const bottomLedGroove = cfg.addLedGroove
+    ? { enabled: true, edge: 'front' as const, insetMm: 45, widthMm: 10, depthMm: 8 }
+    : undefined;
 
   const frontEdge2mm = { thicknessMm: 2 as const, top: true };
   const allEdge08 = {
@@ -589,6 +1252,7 @@ export function buildParametricCabinet(
     rotation: [0, 0, 0],
     edgeBanding: frontEdge2mm,
     dadoGroove: backGroove,
+    ledGroove: bottomLedGroove,
     groupId,
   });
 
@@ -1475,6 +2139,40 @@ export function buildParametricCabinet(
         hardwareTag: hwTag,
         groupId,
       });
+    } else if (cfg.doorMode === 'flap_up') {
+      // Upward-opening flap door (klapa na siłownikach gazowych / Blum Aventos)
+      // Tall wall cabinets (>= 640 mm) split into 2 stacked flap doors; shorter cabinets use 1 full flap
+      const flapW = cfg.frontType === 'overlay' ? W - gap : innerW - gap * 2;
+      const flapCount = !isHybridCabinet && doorH >= 640 ? 2 : 1;
+      const eachFlapH = Math.floor((doorH - (flapCount - 1) * gap) / flapCount);
+      const startBottomY = doorCenterY - doorH / 2;
+      const flapHinges = flapW >= 800 ? 3 : 2;
+      for (let fi = 0; fi < flapCount; fi++) {
+        const cy = Math.round(startBottomY + eachFlapH / 2 + fi * (eachFlapH + gap));
+        parts.push({
+          id: uid(`cab_flap_${fi + 1}`),
+          name:
+            flapCount > 1
+              ? `${cfg.name} — Klapa uchylna ${fi === 0 ? 'dolna' : 'górna'}`
+              : `${cfg.name} — Klapa uchylna (do góry)`,
+          kind: 'door',
+          materialId: cfg.frontMaterialId,
+          surfaceFinish: cfg.frontFinish,
+          width: flapW,
+          height: eachFlapH,
+          depth: t,
+          position: [offsetXmm, cy, doorZ],
+          rotation: [0, 0, 0],
+          grainRotated: false,
+          handleSide: 'none',
+          handleStyle,
+          hingeSide: 'top',
+          hingeCount: flapHinges,
+          edgeBanding: allEdge08,
+          hardwareTag: 'flap_door',
+          groupId,
+        });
+      }
     }
   }
 
@@ -1687,4 +2385,225 @@ export function smartResizeGroup(
 
   const synced = syncFastenersWithParts(parts, nextParts, fasteners, changedIds);
   return { parts: nextParts, fasteners: synced.fasteners };
+}
+
+/**
+ * Computes corpus-only bounding box (excluding countertop 2mm side overhang and 3D appliances)
+ * so adjacent kitchen/wardrobe modules snap side-by-side flush without collisions.
+ */
+function getCorpusBounds(parts: FurniturePart[]): {
+  minX: number;
+  maxX: number;
+  minY: number;
+  maxY: number;
+  minZ: number;
+  maxZ: number;
+} | null {
+  const structural = parts.filter(
+    (p) => p.kind !== 'countertop' && p.kind !== 'appliance'
+  );
+  const list = structural.length > 0 ? structural : parts;
+  if (list.length === 0) return null;
+
+  let minX = Infinity,
+    maxX = -Infinity,
+    minY = Infinity,
+    maxY = -Infinity,
+    minZ = Infinity,
+    maxZ = -Infinity;
+  for (const p of list) {
+    const b = getPartWorldBox(p);
+    minX = Math.min(minX, b.minX);
+    maxX = Math.max(maxX, b.maxX);
+    minY = Math.min(minY, b.minY);
+    maxY = Math.max(maxY, b.maxY);
+    minZ = Math.min(minZ, b.minZ);
+    maxZ = Math.max(maxZ, b.maxZ);
+  }
+  return { minX, maxX, minY, maxY, minZ, maxZ };
+}
+
+/**
+ * PRO100 / KD Max style smart placement for new parametric cabinets:
+ * Automatically aligns a newly inserted module flush next to the selected cabinet
+ * (or the rightmost compatible-elevation cabinet in a row), or against the alcove walls.
+ */
+export function computeSmartCabinetPlacement(
+  cfg: ParametricCabinetConfig,
+  existingParts: FurniturePart[],
+  selectedPartId: string | null,
+  room: RoomConfig | undefined,
+  mode: CabinetPlacementMode = 'auto'
+): { offsetXmm: number; offsetZmm: number; label: string } {
+  // Measure new cabinet footprint at origin (including optional wall fillers or dishwasher end gable)
+  const preview = buildParametricCabinet({ ...cfg, autoFasteners: false }, 0, 0);
+  const newBounds = getCorpusBounds(preview.parts);
+  const newMinX = newBounds ? newBounds.minX : -cfg.widthMm / 2;
+  const newMaxX = newBounds ? newBounds.maxX : cfg.widthMm / 2;
+  const newMinZ = newBounds ? newBounds.minZ : -cfg.depthMm / 2;
+
+  if (mode === 'center') {
+    return { offsetXmm: 0, offsetZmm: 0, label: 'Środek sceny (0, 0)' };
+  }
+
+  const isWallHanging = cfg.elevationYmm >= 900;
+  const backWallZ = room?.enabled && room.showBackWall ? room.backWallZMm : null;
+
+  if (mode === 'back_wall') {
+    const targetZ = backWallZ !== null ? Math.round(backWallZ - newMinZ) : 0;
+    return {
+      offsetXmm: 0,
+      offsetZmm: targetZ,
+      label: backWallZ !== null ? 'Wyśrodkowana przy ścianie tylnej' : 'Wyśrodkowana (X: 0)',
+    };
+  }
+
+  // Find anchor assembly (selected group/part first, else rightmost/leftmost compatible row)
+  const findAnchor = (preferLeftmost: boolean): { bounds: NonNullable<ReturnType<typeof getCorpusBounds>>; name: string } | null => {
+    if (existingParts.length === 0) return null;
+
+    if (selectedPartId) {
+      const sel = existingParts.find((p) => p.id === selectedPartId);
+      if (sel) {
+        const members = sel.groupId
+          ? existingParts.filter((p) => p.groupId === sel.groupId)
+          : [sel];
+        const b = getCorpusBounds(members);
+        if (b) {
+          const anchorIsWall = b.minY >= 900;
+          if (anchorIsWall === isWallHanging || mode === 'right' || mode === 'left') {
+            return { bounds: b, name: sel.groupId ?? sel.name };
+          }
+        }
+      }
+    }
+
+    // Group existing parts into logical assemblies (by groupId, or standalone)
+    const buckets = new Map<string, FurniturePart[]>();
+    for (const p of existingParts) {
+      const key = p.groupId ?? `__all__`;
+      const list = buckets.get(key) ?? [];
+      list.push(p);
+      buckets.set(key, list);
+    }
+
+    let best: { bounds: NonNullable<ReturnType<typeof getCorpusBounds>>; name: string } | null = null;
+    for (const [key, list] of buckets.entries()) {
+      const b = getCorpusBounds(list);
+      if (!b) continue;
+      const bucketIsWall = b.minY >= 900;
+      if (bucketIsWall !== isWallHanging) continue;
+      if (!best) {
+        best = { bounds: b, name: key === '__all__' ? 'istniejącej zabudowy' : key };
+      } else if (preferLeftmost ? b.minX < best.bounds.minX : b.maxX > best.bounds.maxX) {
+        best = { bounds: b, name: key === '__all__' ? 'istniejącej zabudowy' : key };
+      }
+    }
+    return best;
+  };
+
+  if (mode === 'left') {
+    const anchor = findAnchor(true);
+    if (anchor) {
+      const offsetXmm = Math.round(anchor.bounds.minX - newMaxX);
+      const offsetZmm = Math.round(anchor.bounds.minZ - newMinZ);
+      return {
+        offsetXmm,
+        offsetZmm,
+        label: `Obok z lewej: ${anchor.name}`,
+      };
+    }
+  }
+
+  // 'auto' or 'right'
+  const anchor = findAnchor(false);
+  if (anchor) {
+    // Check if placing on the right would exceed the enabled room right wall; if so, try left side in 'auto'
+    const rightOffsetX = Math.round(anchor.bounds.maxX - newMinX);
+    const alignedZ = Math.round(anchor.bounds.minZ - newMinZ);
+    if (
+      mode === 'auto' &&
+      room?.enabled &&
+      room.showRightWall &&
+      rightOffsetX + newMaxX > room.widthMm / 2 + 2
+    ) {
+      const leftAnchor = findAnchor(true);
+      if (leftAnchor) {
+        const leftOffsetX = Math.round(leftAnchor.bounds.minX - newMaxX);
+        if (leftOffsetX + newMinX >= -room.widthMm / 2 - 2) {
+          return {
+            offsetXmm: leftOffsetX,
+            offsetZmm: Math.round(leftAnchor.bounds.minZ - newMinZ),
+            label: `Obok z lewej: ${leftAnchor.name} (prawa ściana pełna)`,
+          };
+        }
+      }
+    }
+    return {
+      offsetXmm: rightOffsetX,
+      offsetZmm: alignedZ,
+      label: `W ciągu z prawej: ${anchor.name}`,
+    };
+  }
+
+  // No compatible existing cabinets yet — snap cleanly to room alcove walls if enabled
+  if (room?.enabled) {
+    const offsetZmm = backWallZ !== null ? Math.round(backWallZ - newMinZ) : 0;
+    if (room.showLeftWall) {
+      const offsetXmm = Math.round(-room.widthMm / 2 - newMinX);
+      return {
+        offsetXmm,
+        offsetZmm,
+        label: 'Przy lewej i tylnej ścianie wnęki',
+      };
+    }
+    return {
+      offsetXmm: 0,
+      offsetZmm,
+      label: 'Przy tylnej ścianie wnęki',
+    };
+  }
+
+  return { offsetXmm: 0, offsetZmm: 0, label: 'Środek sceny (0, 0)' };
+}
+
+/**
+ * Rebuilds an existing parametric cabinet group in place after the user re-opens
+ * it in CabinetBuilderModal (preserving its world X center and rear Z alignment!).
+ */
+export function rebuildParametricCabinetInPlace(
+  existingParts: FurniturePart[],
+  existingFasteners: Fastener[],
+  groupId: string,
+  nextCfg: ParametricCabinetConfig
+): { parts: FurniturePart[]; fasteners: Fastener[]; newPartIds: string[] } {
+  const oldMembers = existingParts.filter((p) => p.groupId === groupId);
+  const oldMemberIds = new Set(oldMembers.map((p) => p.id));
+  const oldBounds = getCorpusBounds(oldMembers);
+
+  const preview = buildParametricCabinet({ ...nextCfg, autoFasteners: false }, 0, 0, groupId);
+  const newBounds = getCorpusBounds(preview.parts);
+
+  let offsetXmm = 0;
+  let offsetZmm = 0;
+  if (oldBounds && newBounds) {
+    const oldCenterX = (oldBounds.minX + oldBounds.maxX) / 2;
+    const newCenterX = (newBounds.minX + newBounds.maxX) / 2;
+    offsetXmm = Math.round(oldCenterX - newCenterX);
+    // Anchor rear face so depth changes grow forward cleanly away from the wall
+    offsetZmm = Math.round(oldBounds.minZ - newBounds.minZ);
+  }
+
+  const rebuilt = buildParametricCabinet(nextCfg, offsetXmm, offsetZmm, groupId);
+
+  const keptParts = existingParts.filter((p) => !oldMemberIds.has(p.id));
+  const keptFasteners = existingFasteners.filter(
+    (f) => !oldMemberIds.has(f.partId) && !(f.targetPartId && oldMemberIds.has(f.targetPartId))
+  );
+
+  return {
+    parts: [...keptParts, ...rebuilt.parts],
+    fasteners: [...keptFasteners, ...rebuilt.fasteners],
+    newPartIds: rebuilt.parts.map((p) => p.id),
+  };
 }

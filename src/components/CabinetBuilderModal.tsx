@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { Check, X } from 'lucide-react';
 import {
   DrawerSlideType,
@@ -7,6 +7,7 @@ import {
   HandleStyle,
   MATERIAL_CATALOG,
   MaterialId,
+  RoomConfig,
   SCREW_CATALOG,
   ScrewType,
   SurfaceFinish,
@@ -14,18 +15,34 @@ import {
 import {
   buildParametricCabinet,
   CABINET_PRESETS,
+  computeSmartCabinetPlacement,
+  type CabinetPlacementMode,
   type CabinetPresetId,
   type ParametricCabinetConfig,
 } from '../engine/parametric';
+import { computeProjectWeightSummary } from '../engine/carpentry';
 
 interface CabinetBuilderModalProps {
   open: boolean;
+  existingParts: FurniturePart[];
+  selectedPartId: string | null;
+  room?: RoomConfig;
+  editingCabinet?: { groupId: string; config: ParametricCabinetConfig } | null;
   onClose: () => void;
-  onInsertCabinet: (parts: FurniturePart[], fasteners: Fastener[], groupName: string) => void;
+  onInsertCabinet: (
+    parts: FurniturePart[],
+    fasteners: Fastener[],
+    groupName: string,
+    config: ParametricCabinetConfig
+  ) => void;
+  onUpdateCabinet?: (groupId: string, config: ParametricCabinetConfig) => void;
 }
 
 const PRESET_ORDER: CabinetPresetId[] = [
   'base_kitchen',
+  'sink_cabinet',
+  'oven_tower',
+  'dishwasher_bay',
   'corner_l',
   'drawer_chest',
   'wall_cabinet',
@@ -35,13 +52,50 @@ const PRESET_ORDER: CabinetPresetId[] = [
   'steel_rack',
 ];
 
+const PLACEMENT_OPTIONS: Array<{ id: CabinetPlacementMode; label: string }> = [
+  { id: 'auto', label: 'Auto (w ciągu)' },
+  { id: 'right', label: 'Z prawej' },
+  { id: 'left', label: 'Z lewej' },
+  { id: 'back_wall', label: 'Ściana tylna' },
+  { id: 'center', label: 'Środek (0,0)' },
+];
+
 export const CabinetBuilderModal: React.FC<CabinetBuilderModalProps> = ({
   open,
+  existingParts,
+  selectedPartId,
+  room,
+  editingCabinet,
   onClose,
   onInsertCabinet,
+  onUpdateCabinet,
 }) => {
   const [cfg, setCfg] = useState<ParametricCabinetConfig>(() =>
     structuredClone(CABINET_PRESETS.base_kitchen.config)
+  );
+  const [placementMode, setPlacementMode] = useState<CabinetPlacementMode>('auto');
+
+  useEffect(() => {
+    if (!open) return;
+    if (editingCabinet) {
+      setCfg(structuredClone(editingCabinet.config));
+    } else {
+      setPlacementMode('auto');
+    }
+  }, [open, editingCabinet]);
+
+  const placementPreview = useMemo(
+    () =>
+      editingCabinet
+        ? null
+        : computeSmartCabinetPlacement(
+            cfg,
+            existingParts,
+            selectedPartId,
+            room,
+            placementMode
+          ),
+    [cfg, existingParts, selectedPartId, room, placementMode, editingCabinet]
   );
 
   const previewSummary = useMemo(() => {
@@ -57,13 +111,27 @@ export const CabinetBuilderModal: React.FC<CabinetBuilderModalProps> = ({
     const isHybrid =
       cfg.preset !== 'sliding_wardrobe' &&
       cfg.preset !== 'corner_l' &&
+      cfg.preset !== 'oven_tower' &&
+      cfg.preset !== 'sink_cabinet' &&
+      cfg.preset !== 'dishwasher_bay' &&
       cfg.drawerCount > 0 &&
       (cfg.shelfCount > 0 || Boolean(cfg.addWardrobeRod) || cfg.doorMode !== 'none') &&
       bodyH >= 900;
-    return { innerW, bodyH, drawerBoxW, isHybrid };
+    const builtPreview = buildParametricCabinet({ ...cfg, autoFasteners: false }, 0, 0);
+    const weight = computeProjectWeightSummary(builtPreview.parts);
+    return {
+      innerW,
+      bodyH,
+      drawerBoxW,
+      isHybrid,
+      totalWeightKg: weight.totalWeightKg,
+      flapRec: weight.flapRecommendations[0]?.recommendedLift ?? null,
+    };
   }, [cfg]);
 
   if (!open) return null;
+
+  const isEditing = Boolean(editingCabinet && onUpdateCabinet);
 
   const selectPreset = (presetId: CabinetPresetId) => {
     setCfg(structuredClone(CABINET_PRESETS[presetId].config));
@@ -72,15 +140,27 @@ export const CabinetBuilderModal: React.FC<CabinetBuilderModalProps> = ({
   const patch = (next: Partial<ParametricCabinetConfig>) =>
     setCfg((prev) => ({ ...prev, ...next }));
 
-  const handleInsert = () => {
-    const { parts, fasteners, groupId } = buildParametricCabinet(cfg, 0, 0);
-    onInsertCabinet(parts, fasteners, groupId);
+  const handleSubmit = () => {
+    const snapshot = structuredClone(cfg);
+    if (isEditing && editingCabinet && onUpdateCabinet) {
+      onUpdateCabinet(editingCabinet.groupId, snapshot);
+      onClose();
+      return;
+    }
+    const offX = placementPreview?.offsetXmm ?? 0;
+    const offZ = placementPreview?.offsetZmm ?? 0;
+    const { parts, fasteners, groupId } = buildParametricCabinet(snapshot, offX, offZ);
+    onInsertCabinet(parts, fasteners, groupId, snapshot);
     onClose();
   };
 
   const isSliding = cfg.preset === 'sliding_wardrobe';
   const isCorner = cfg.preset === 'corner_l';
   const isSteelRack = cfg.preset === 'steel_rack';
+  const isOvenTower = cfg.preset === 'oven_tower';
+  const isSinkCabinet = cfg.preset === 'sink_cabinet';
+  const isDishwasher = cfg.preset === 'dishwasher_bay';
+  const isAgdPreset = isOvenTower || isSinkCabinet || isDishwasher;
 
   // Live 2D SVG schematic dimensions
   const totalDrawH = cfg.heightMm + (cfg.addCountertop ? 38 : 0);
@@ -101,10 +181,14 @@ export const CabinetBuilderModal: React.FC<CabinetBuilderModalProps> = ({
         <div className="flex items-center justify-between gap-3 border-b border-zinc-800 px-5 py-3.5">
           <div className="min-w-0">
             <h2 className="text-base font-semibold text-white truncate">
-              Kreator parametrycznych szafek, szaf przesuwnych i regałów
+              {isEditing
+                ? `Edycja parametryczna: ${editingCabinet?.config.name ?? cfg.name}`
+                : 'Kreator parametrycznych szafek, szaf przesuwnych i regałów'}
             </h2>
             <p className="mt-0.5 text-xs text-zinc-400">
-              Trawersy, przegrody, strefy hybrydowe, dno Blum −13 mm, blendy, regały stal+OSB i System 32
+              {isEditing
+                ? 'Zmień liczbę szuflad, półek, frontów, cokołu lub materiały — szafka przebuduje się w miejscu z zachowaniem pozycji.'
+                : 'Auto-dostawianie w ciągu zabudowy, trawersy, strefy hybrydowe, dno Blum −13 mm, regały stal+OSB i System 32'}
             </p>
           </div>
           <button
@@ -354,9 +438,118 @@ export const CabinetBuilderModal: React.FC<CabinetBuilderModalProps> = ({
                     </>
                   )}
 
-                  {/* Standard Hinged Doors (Full or Upper Hybrid Zone) */}
+                  {/* Special AGD Presets Front Schematics */}
+                  {isOvenTower && (
+                    <>
+                      <rect
+                        x={pad + cfg.boardThicknessMm}
+                        y={pad + topOffset + bodyH * 0.34}
+                        width={cfg.widthMm - cfg.boardThicknessMm * 2}
+                        height={Math.min(595, bodyH * 0.32)}
+                        fill="#18181B"
+                        stroke="#F59E0B"
+                        strokeWidth={6}
+                      />
+                      <rect
+                        x={pad + cfg.boardThicknessMm + 48}
+                        y={pad + topOffset + bodyH * 0.34 + 90}
+                        width={cfg.widthMm - cfg.boardThicknessMm * 2 - 96}
+                        height={Math.min(360, bodyH * 0.19)}
+                        fill="#09090B"
+                        stroke="#71717A"
+                        strokeWidth={4}
+                      />
+                      <text
+                        x={pad + cfg.widthMm / 2}
+                        y={pad + topOffset + bodyH * 0.34 + 62}
+                        textAnchor="middle"
+                        fill="#FBBF24"
+                        fontSize={Math.max(34, cfg.widthMm * 0.06)}
+                        fontFamily="JetBrains Mono, monospace"
+                        fontWeight={700}
+                      >
+                        PIEKARNIK 600
+                      </text>
+                    </>
+                  )}
+                  {isSinkCabinet && (
+                    <rect
+                      x={pad + cfg.widthMm * 0.12}
+                      y={pad + Math.max(4, topOffset * 0.25)}
+                      width={cfg.widthMm * 0.76}
+                      height={Math.max(24, topOffset * 0.7)}
+                      fill="#0EA5E9"
+                      fillOpacity={0.35}
+                      stroke="#38BDF8"
+                      strokeWidth={5}
+                    />
+                  )}
+                  {isDishwasher && (
+                    <>
+                      <rect
+                        x={pad + cfg.frontGapMm}
+                        y={pad + topOffset + cfg.frontGapMm}
+                        width={cfg.widthMm - cfg.frontGapMm * 2}
+                        height={bodyH - cfg.frontGapMm * 2}
+                        fill="#0284C7"
+                        fillOpacity={0.14}
+                        stroke="#38BDF8"
+                        strokeWidth={5}
+                      />
+                      <text
+                        x={pad + cfg.widthMm / 2}
+                        y={pad + topOffset + bodyH * 0.5}
+                        textAnchor="middle"
+                        fill="#7DD3FC"
+                        fontSize={Math.max(36, cfg.widthMm * 0.06)}
+                        fontFamily="JetBrains Mono, monospace"
+                        fontWeight={700}
+                      >
+                        ZMYWARKA {cfg.widthMm}
+                      </text>
+                    </>
+                  )}
+
+                  {/* Standard Hinged Doors & Upward Flaps (Full or Upper Hybrid Zone) */}
                   {!isSliding &&
                     !isCorner &&
+                    !isOvenTower &&
+                    !isDishwasher &&
+                    (cfg.drawerCount === 0 || previewSummary.isHybrid) &&
+                    cfg.doorMode === 'flap_up' && (
+                      <>
+                        {Array.from({ length: upperZoneH >= 640 ? 2 : 1 }).map((_, idx, arr) => {
+                          const gap = cfg.frontGapMm;
+                          const eachH = (upperZoneH - gap * (arr.length + 1)) / arr.length;
+                          const y = pad + topOffset + gap + idx * (eachH + gap);
+                          return (
+                            <g key={`flap_${idx}`}>
+                              <rect
+                                x={pad + gap}
+                                y={y}
+                                width={cfg.widthMm - gap * 2}
+                                height={Math.max(20, eachH)}
+                                fill="#A78BFA"
+                                fillOpacity={0.14}
+                                stroke="#A78BFA"
+                                strokeWidth={5}
+                              />
+                              <polyline
+                                points={`${pad + cfg.widthMm * 0.15},${y + eachH - 18} ${pad + cfg.widthMm * 0.5},${y + 18} ${pad + cfg.widthMm * 0.85},${y + eachH - 18}`}
+                                fill="none"
+                                stroke="#C4B5FD"
+                                strokeWidth={5}
+                                strokeDasharray="16 10"
+                              />
+                            </g>
+                          );
+                        })}
+                      </>
+                    )}
+                  {!isSliding &&
+                    !isCorner &&
+                    !isOvenTower &&
+                    !isDishwasher &&
                     (cfg.drawerCount === 0 || previewSummary.isHybrid) &&
                     cfg.doorMode === 'double' && (
                       <>
@@ -384,6 +577,8 @@ export const CabinetBuilderModal: React.FC<CabinetBuilderModalProps> = ({
                     )}
                   {!isSliding &&
                     !isCorner &&
+                    !isOvenTower &&
+                    !isDishwasher &&
                     (cfg.drawerCount === 0 || previewSummary.isHybrid) &&
                     (cfg.doorMode === 'single_left' || cfg.doorMode === 'single_right') && (
                       <rect
@@ -397,6 +592,17 @@ export const CabinetBuilderModal: React.FC<CabinetBuilderModalProps> = ({
                         strokeWidth={5}
                       />
                     )}
+                  {/* Recessed LED Groove Indicator on Bottom Deck */}
+                  {cfg.addLedGroove && !isSteelRack && (
+                    <line
+                      x1={pad + cfg.boardThicknessMm}
+                      y1={pad + topOffset + bodyH + 6}
+                      x2={pad + cfg.widthMm - cfg.boardThicknessMm}
+                      y2={pad + topOffset + bodyH + 6}
+                      stroke="#FDE047"
+                      strokeWidth={10}
+                    />
+                  )}
 
                   {/* Plinth / Legs */}
                   {plinthH > 0 && cfg.plinthStyle === 'plinth_board' && (
@@ -458,16 +664,32 @@ export const CabinetBuilderModal: React.FC<CabinetBuilderModalProps> = ({
                 <div className="mt-2.5 flex flex-wrap gap-x-2.5 gap-y-1 text-[11px] text-zinc-400 font-mono-num">
                   <span>Płyta: {cfg.boardThicknessMm} mm</span>
                   <span>·</span>
+                  <span className="text-sky-300">Masa: ~{previewSummary.totalWeightKg} kg</span>
+                  <span>·</span>
                   <span>
-                    {cfg.topType === 'stretchers' && !isSliding ? '2 trawersy' : 'Pełny wieniec'}
+                    {isOvenTower
+                      ? 'Komin went. 50 mm'
+                      : isSinkCabinet
+                        ? 'Trawers pionowy + zlew'
+                        : isDishwasher
+                          ? 'Podcięty cokół AGD'
+                          : cfg.topType === 'stretchers' && !isSliding
+                            ? '2 trawersy'
+                            : 'Pełny wieniec'}
                   </span>
+                  {previewSummary.flapRec && (
+                    <>
+                      <span>·</span>
+                      <span className="text-violet-300">{previewSummary.flapRec}</span>
+                    </>
+                  )}
                   {previewSummary.isHybrid && (
                     <>
                       <span>·</span>
                       <span className="text-emerald-300">Hybryda (szuflady + góra)</span>
                     </>
                   )}
-                  {cfg.drawerCount > 0 && !isSliding && !isCorner && (
+                  {cfg.drawerCount > 0 && !isSliding && !isCorner && !isAgdPreset && (
                     <>
                       <span>·</span>
                       <span className="text-amber-300">
@@ -625,9 +847,9 @@ export const CabinetBuilderModal: React.FC<CabinetBuilderModalProps> = ({
                   />
                 </label>
                 <label className="block">
-                  <span className="text-[11px] text-zinc-400">Drzwiczki</span>
+                  <span className="text-[11px] text-zinc-400">Drzwiczki / Klapy</span>
                   <select
-                    disabled={isSliding || isCorner}
+                    disabled={isSliding || isCorner || isOvenTower || isDishwasher}
                     value={isSliding ? 'double' : isCorner ? 'single_right' : cfg.doorMode}
                     onChange={(e) =>
                       patch({ doorMode: e.target.value as ParametricCabinetConfig['doorMode'] })
@@ -638,6 +860,7 @@ export const CabinetBuilderModal: React.FC<CabinetBuilderModalProps> = ({
                     <option value="single_left">1-skrz. L</option>
                     <option value="single_right">1-skrz. P</option>
                     <option value="double">2-skrzydłowe</option>
+                    <option value="flap_up">Klapa uchylna ↑</option>
                   </select>
                 </label>
                 <label className="block">
@@ -793,6 +1016,15 @@ export const CabinetBuilderModal: React.FC<CabinetBuilderModalProps> = ({
                     />
                     <span>System 32 (Ø5)</span>
                   </label>
+                  <label className="flex items-center gap-1.5 text-xs text-zinc-200 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={Boolean(cfg.addLedGroove)}
+                      onChange={(e) => patch({ addLedGroove: e.target.checked })}
+                      className="h-4 w-4 accent-amber-500"
+                    />
+                    <span>Frez LED 10×8</span>
+                  </label>
                 </div>
 
                 <div className="flex items-center gap-2">
@@ -819,6 +1051,37 @@ export const CabinetBuilderModal: React.FC<CabinetBuilderModalProps> = ({
                   </select>
                 </div>
               </div>
+
+              {/* Smart Auto-Placement Row (Only when inserting a new cabinet) */}
+              {!isEditing && placementPreview && (
+                <div className="rounded-xl border border-zinc-800 bg-zinc-900/70 p-2.5 space-y-2">
+                  <div className="flex flex-wrap items-center justify-between gap-2 text-[11px]">
+                    <span className="font-semibold text-zinc-200">
+                      Ustawienie w 3D (auto-dostawianie)
+                    </span>
+                    <span className="font-mono-num text-emerald-300 truncate">
+                      {placementPreview.label} · X {Math.round(placementPreview.offsetXmm)} / Z{' '}
+                      {Math.round(placementPreview.offsetZmm)} mm
+                    </span>
+                  </div>
+                  <div className="flex flex-wrap gap-1">
+                    {PLACEMENT_OPTIONS.map((opt) => (
+                      <button
+                        key={opt.id}
+                        type="button"
+                        onClick={() => setPlacementMode(opt.id)}
+                        className={`rounded-lg border px-2.5 py-1.5 text-[11px] font-medium transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                          placementMode === opt.id
+                            ? 'border-emerald-500 bg-emerald-500/20 text-emerald-200 font-semibold'
+                            : 'border-zinc-800 bg-zinc-950 text-zinc-300 hover:border-zinc-700 hover:text-white'
+                        }`}
+                      >
+                        {opt.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
           </div>
         </div>
@@ -826,23 +1089,25 @@ export const CabinetBuilderModal: React.FC<CabinetBuilderModalProps> = ({
         {/* Footer */}
         <div className="flex items-center justify-between gap-3 border-t border-zinc-800 px-5 pt-3 pb-[max(0.85rem,env(safe-area-inset-bottom))]">
           <span className="text-xs text-zinc-400">
-            Cała szafka zostanie zgrupowana — w każdej chwili przeskalujesz ją jednym wymiarem (Smart Resize).
+            {isEditing
+              ? 'Przebudowa zachowa środek X i wyrównanie tyłu Z modułu w istniejącej zabudowie.'
+              : 'Cała szafka zostanie zgrupowana — w każdej chwili wrócisz do tego kreatora lub użyjesz Smart Resize.'}
           </span>
           <div className="flex items-center gap-2 shrink-0">
             <button
               type="button"
               onClick={onClose}
-              className="min-h-[40px] rounded-xl border border-zinc-700 bg-zinc-900 px-4 text-xs font-medium text-zinc-200 hover:bg-zinc-800 cursor-pointer"
+              className="min-h-[40px] rounded-xl border border-zinc-700 bg-zinc-900 px-4 text-xs font-medium text-zinc-200 hover:bg-zinc-800 whitespace-nowrap shrink-0 cursor-pointer"
             >
               Anuluj
             </button>
             <button
               type="button"
-              onClick={handleInsert}
-              className="flex min-h-[40px] items-center gap-1.5 rounded-xl bg-amber-500 px-4 text-xs font-semibold text-zinc-950 hover:bg-amber-400 cursor-pointer"
+              onClick={handleSubmit}
+              className="flex min-h-[40px] items-center gap-1.5 rounded-xl bg-amber-500 px-4 text-xs font-semibold text-zinc-950 hover:bg-amber-400 whitespace-nowrap shrink-0 cursor-pointer"
             >
               <Check className="h-4 w-4" />
-              <span>Wstaw szafkę do 3D</span>
+              <span>{isEditing ? 'Zaktualizuj szafkę w 3D' : 'Wstaw szafkę do 3D'}</span>
             </button>
           </div>
         </div>

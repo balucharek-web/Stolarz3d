@@ -8,7 +8,13 @@ import {
   QuoteSettings,
   SCREW_MAP,
 } from '../types/furniture';
-import { computeSawCutAngles, getPartQuaternion, getPartWorldBox } from './carpentry';
+import {
+  computePartWeightKg,
+  computeProjectWeightSummary,
+  computeSawCutAngles,
+  getPartQuaternion,
+  getPartWorldBox,
+} from './carpentry';
 import { getProjectDimensionsMm } from './geometry';
 import {
   nestLinearProfiles,
@@ -50,6 +56,7 @@ export interface BoardDrillingMap {
 
 export interface HardwareBomSummary {
   hingeCupsCount: number;
+  flapLiftsCount: number;
   drawerSlidePairs: number;
   ballSlidePairs: number;
   undermountSlidePairs: number;
@@ -188,6 +195,42 @@ export function getDadoGrooveLine2D(
     return { x1: 0, y1: y, x2: faceW, y2: y, widthMm, depthMm };
   }
   return { x1: 0, y1: ins, x2: faceW, y2: ins, widthMm, depthMm };
+}
+
+/**
+ * Returns the exact 2D recessed LED channel segment in bottom-left board coordinates (X in [0..faceW], Y in [0..faceH]).
+ */
+export function getLedGrooveLine2D(
+  part: FurniturePart,
+  thinAxis: 'x' | 'y' | 'z',
+  faceW: number,
+  faceH: number
+): { x1: number; y1: number; x2: number; y2: number; widthMm: number; depthMm: number } | null {
+  if (!part.ledGroove?.enabled) return null;
+  const ins = Math.max(10, part.ledGroove.insetMm);
+  const edge = part.ledGroove.edge;
+  const widthMm = part.ledGroove.widthMm;
+  const depthMm = part.ledGroove.depthMm;
+
+  if (thinAxis === 'x') {
+    // Vertical side wall: X=0 is back (-Z), X=faceW is front (+Z), Y=0..faceH is bottom..top
+    const x = edge === 'back' ? ins : Math.max(10, faceW - ins);
+    return { x1: x, y1: 8, x2: x, y2: Math.max(16, faceH - 8), widthMm, depthMm };
+  }
+  if (thinAxis === 'y') {
+    // Horizontal bottom deck / shelf: X=width, Y=0 is back (-Z), Y=faceH is front (+Z)
+    if (edge === 'left') {
+      return { x1: ins, y1: 8, x2: ins, y2: Math.max(16, faceH - 8), widthMm, depthMm };
+    }
+    if (edge === 'right') {
+      const x = Math.max(10, faceW - ins);
+      return { x1: x, y1: 8, x2: x, y2: Math.max(16, faceH - 8), widthMm, depthMm };
+    }
+    const y = edge === 'back' ? ins : Math.max(10, faceH - ins);
+    return { x1: 8, y1: y, x2: Math.max(16, faceW - 8), y2: y, widthMm, depthMm };
+  }
+  const y = edge === 'back' ? ins : Math.max(10, faceH - ins);
+  return { x1: 8, y1: y, x2: Math.max(16, faceW - 8), y2: y, widthMm, depthMm };
 }
 
 function localPointToBoard2D(
@@ -430,6 +473,85 @@ export function extractBoardDrillingMap(
         }
       }
     }
+
+    // 4. Flap Lift / Gas-Strut (Aventos) Side Wall Mounting Bracket Holes (for top-hinged flap doors)
+    for (const other of allParts) {
+      if (other.id === part.id || other.kind !== 'door' || other.hingeSide !== 'top') continue;
+      const ob = getPartWorldBox(other);
+      if (Math.abs(ob.minZ - sideBox.maxZ) > 35 && Math.abs(ob.maxZ - sideBox.maxZ) > 35) continue;
+      const flanksLeft = Math.abs(ob.minX - sideBox.minX) <= 32 || Math.abs(ob.minX - sideBox.maxX) <= 32;
+      const flanksRight = Math.abs(ob.maxX - sideBox.maxX) <= 32 || Math.abs(ob.maxX - sideBox.minX) <= 32;
+      if (!flanksLeft && !flanksRight) continue;
+      const bracketY = Math.round((ob.maxY - 85 - sideBox.minY) * 10) / 10;
+      if (bracketY < 28 || bracketY > faceH - 28) continue;
+      const bx1 = Math.max(20, Math.round((frontEdgeX - 37) * 10) / 10);
+      const bx2 = Math.max(20, Math.round((frontEdgeX - 101) * 10) / 10);
+      holes.push(
+        {
+          id: `${part.id}_flaplift_${other.id}_a`,
+          xMm: bx1,
+          yMm: bracketY,
+          diameterMm: 5,
+          depthMm: 12,
+          face: 'Tył/Wnętrze',
+          kind: 'hinge_plate',
+          label: 'Mocowanie siłownika / Aventos #1',
+        },
+        {
+          id: `${part.id}_flaplift_${other.id}_b`,
+          xMm: bx2,
+          yMm: bracketY,
+          diameterMm: 5,
+          depthMm: 12,
+          face: 'Tył/Wnętrze',
+          kind: 'hinge_plate',
+          label: 'Mocowanie siłownika / Aventos #2',
+        }
+      );
+    }
+  }
+
+  // Top-mounted hinge mounting plates on horizontal top decks (`thinAxis === 'y'`) for upward-opening flap doors
+  if (thinAxis === 'y' && part.kind === 'panel' && faceW >= 200 && faceH >= 180) {
+    const deckBox = getPartWorldBox(part);
+    const frontEdgeY = faceH; // local +Z maps to Y = faceH on horizontal boards
+    for (const other of allParts) {
+      if (other.id === part.id || other.kind !== 'door' || other.hingeSide !== 'top') continue;
+      const ob = getPartWorldBox(other);
+      if (Math.abs(ob.minZ - deckBox.maxZ) > 35 && Math.abs(ob.maxZ - deckBox.maxZ) > 35) continue;
+      if (Math.abs(ob.maxY - deckBox.maxY) > 35 && Math.abs(ob.maxY - deckBox.minY) > 35) continue;
+      const count = Math.max(2, Math.min(4, other.hingeCount ?? (other.width >= 800 ? 3 : 2)));
+      const margin = Math.min(100, other.width * 0.2);
+      const py = Math.max(15, Math.round((frontEdgeY - 37) * 10) / 10);
+      for (let i = 0; i < count; i++) {
+        const frac = count === 1 ? 0.5 : i / (count - 1);
+        const hingeWorldX = ob.minX + margin + frac * Math.max(40, other.width - margin * 2);
+        const localX = hingeWorldX - deckBox.minX;
+        if (localX < 24 || localX > faceW - 24) continue;
+        holes.push(
+          {
+            id: `${part.id}_topplate_${other.id}_${i}_a`,
+            xMm: Math.round((localX - 16) * 10) / 10,
+            yMm: py,
+            diameterMm: 5,
+            depthMm: 12,
+            face: 'Tył/Wnętrze',
+            kind: 'hinge_plate',
+            label: `Prowadnik klapy S32 (37mm) #${i + 1}A`,
+          },
+          {
+            id: `${part.id}_topplate_${other.id}_${i}_b`,
+            xMm: Math.round((localX + 16) * 10) / 10,
+            yMm: py,
+            diameterMm: 5,
+            depthMm: 12,
+            face: 'Tył/Wnętrze',
+            kind: 'hinge_plate',
+            label: `Prowadnik klapy S32 (37mm) #${i + 1}B`,
+          }
+        );
+      }
+    }
   }
 
   return {
@@ -465,6 +587,7 @@ export function computeCommercialQuote(
   let cuttingLinearM = 0;
   let edgeBandingLinearM = 0;
   let hingeCupsCount = 0;
+  let flapLiftsCount = 0;
   let ballSlidePairs = 0;
   let undermountSlidePairs = 0;
   let handlesCount = 0;
@@ -500,6 +623,9 @@ export function computeCommercialQuote(
       if (p.hingeSide && p.hingeSide !== 'none') {
         hingeCupsCount += p.hingeCount ?? (p.height > 1500 ? 4 : p.height > 950 ? 3 : 2);
       }
+      if (p.hingeSide === 'top' || p.hardwareTag === 'flap_door') {
+        flapLiftsCount += 1;
+      }
       if (p.hardwareTag === 'sliding_door') {
         slidingDoorsCount += 1;
       }
@@ -513,11 +639,13 @@ export function computeCommercialQuote(
   const drawerSlidePairs = ballSlidePairs + undermountSlidePairs;
   const fastenersTotal = project.fasteners.length;
   const golaLinearM = Math.round((golaLinearMm / 1000) * 100) / 100;
+  const flapLiftPrice = settings.flapLiftPricePln ?? 145;
 
   const cuttingCostPln = Math.round(cuttingLinearM * settings.cuttingPricePerMbPln);
   const edgeBandingCostPln = Math.round(edgeBandingLinearM * settings.edgeBandingPricePerMbPln);
   const hardwareCostPln = Math.round(
     hingeCupsCount * settings.hingePricePln +
+      flapLiftsCount * flapLiftPrice +
       drawerSlidePairs * settings.slidePairPricePln +
       handlesCount * settings.handlePricePln +
       tipOnCount * 22 +
@@ -543,6 +671,7 @@ export function computeCommercialQuote(
   return {
     hardware: {
       hingeCupsCount,
+      flapLiftsCount,
       drawerSlidePairs,
       ballSlidePairs,
       undermountSlidePairs,
@@ -684,6 +813,12 @@ export function generateProjectDxf(
     const groove = getDadoGrooveLine2D(part, map.thinAxis, w, h);
     if (groove) {
       addLine('GROOVE', ox + groove.x1, oy + groove.y1, ox + groove.x2, oy + groove.y2);
+    }
+
+    // 4b. Recessed LED channel on layer LED_GROOVE
+    const led = getLedGrooveLine2D(part, map.thinAxis, w, h);
+    if (led) {
+      addLine('LED_GROOVE', ox + led.x1, oy + led.y1, ox + led.x2, oy + led.y2);
     }
 
     // 5. Part label on layer TEXT
@@ -906,7 +1041,7 @@ function buildPdfNestingSectionHtml(
 
           return `<div class="nest-card">
             <div class="nest-head">
-              <strong>${escapeHtml(meta.name)} (${nr.thicknessMm} mm) — Arkusz #${sheet.sheetIndex}</strong>
+              <strong>${escapeHtml(meta.name)} (${nr.thicknessMm} mm) — ${sheet.isOffcut ? `<span style="background:#059669;color:#fff;padding:1px 5px;border-radius:3px;font-size:10px;margin-right:4px;">ODPAD</span>${escapeHtml(sheet.offcutLabel || 'Resztka z magazynu')}` : `Arkusz #${sheet.sheetIndex}`}</strong>
               <span>${w} × ${h} mm · ${sheet.placements.length} szt. · Odpad ${sheet.wastePercent}%${nr.grainLocked ? ' · Słój →' : ''}</span>
             </div>
             <svg viewBox="0 0 ${w} ${h}" xmlns="http://www.w3.org/2000/svg" style="width:100%;height:auto;max-height:200px;background:#FAFAFA;border:1px solid #D4D4D8;border-radius:4px;">
@@ -986,7 +1121,15 @@ export function printTechnicalDocumentation(params: {
   const boardParts = project.parts.filter((p) => p.kind !== 'appliance');
   const drillingMaps = boardParts
     .map((p, idx) => ({ idx: idx + 1, map: extractBoardDrillingMap(p, project.parts, project.fasteners) }))
-    .filter((item) => item.map.holes.length > 0 || item.map.cutouts.length > 0 || item.map.part.dadoGroove?.enabled);
+    .filter(
+      (item) =>
+        item.map.holes.length > 0 ||
+        item.map.cutouts.length > 0 ||
+        item.map.part.dadoGroove?.enabled ||
+        item.map.part.ledGroove?.enabled
+    );
+
+  const weightSummary = computeProjectWeightSummary(project.parts);
 
   const cutRowsHtml = boardParts
     .map((p, i) => {
@@ -1001,6 +1144,7 @@ export function printTechnicalDocumentation(params: {
       if (p.cornerRadiusMm) machiningNotes.push(`R${p.cornerRadiusMm}`);
       if (p.cutouts?.length) machiningNotes.push(`${p.cutouts.length} wyc.`);
       if (p.dadoGroove?.enabled) machiningNotes.push(`Nut ${p.dadoGroove.widthMm}×${p.dadoGroove.depthMm}`);
+      if (p.ledGroove?.enabled) machiningNotes.push(`Frez LED ${p.ledGroove.widthMm}×${p.ledGroove.depthMm}`);
       if (p.hingeSide && p.hingeSide !== 'none') machiningNotes.push(`Zawias Ø35 (${p.hingeCount ?? 2} szt)`);
       const finishedDim = isProfile && sortedProfileDims
         ? `Profil ${sortedProfileDims[0]}×${sortedProfileDims[1]} × ${sortedProfileDims[2]}`
@@ -1012,6 +1156,7 @@ export function printTechnicalDocumentation(params: {
         : spec
           ? `${spec.sawLenMm} × ${spec.sawWidMm}`
           : '-';
+      const kg = computePartWeightKg(p);
       return `<tr>
         <td>${i + 1}</td>
         <td><strong>${escapeHtml(p.name)}</strong></td>
@@ -1019,6 +1164,7 @@ export function printTechnicalDocumentation(params: {
         <td class="num">${finishedDim}</td>
         <td class="num">${sawDim}</td>
         <td class="num">${isProfile ? '—' : spec ? escapeHtml(spec.edgeBandingLabel) : 'Brak'}</td>
+        <td class="num">${kg.toFixed(1)} kg</td>
         <td>${escapeHtml(machiningNotes.join(', ') || '—')}</td>
       </tr>`;
     })
@@ -1038,6 +1184,10 @@ export function printTechnicalDocumentation(params: {
       const groove = getDadoGrooveLine2D(map.part, map.thinAxis, map.faceWidthMm, map.faceHeightMm);
       const grooveSvg = groove
         ? `<line x1="${(pad + groove.x1).toFixed(1)}" y1="${(pad + map.faceHeightMm - groove.y1).toFixed(1)}" x2="${(pad + groove.x2).toFixed(1)}" y2="${(pad + map.faceHeightMm - groove.y2).toFixed(1)}" stroke="#0284C7" stroke-width="${Math.max(4, groove.widthMm)}" stroke-dasharray="14 8" />`
+        : '';
+      const led = getLedGrooveLine2D(map.part, map.thinAxis, map.faceWidthMm, map.faceHeightMm);
+      const ledSvg = led
+        ? `<line x1="${(pad + led.x1).toFixed(1)}" y1="${(pad + map.faceHeightMm - led.y1).toFixed(1)}" x2="${(pad + led.x2).toFixed(1)}" y2="${(pad + map.faceHeightMm - led.y2).toFixed(1)}" stroke="#F59E0B" stroke-width="${Math.max(6, led.widthMm)}" stroke-linecap="butt" opacity="0.85" />`
         : '';
       const cutoutsSvg = map.cutouts
         .map((c) => {
@@ -1086,6 +1236,7 @@ export function printTechnicalDocumentation(params: {
           <svg viewBox="0 0 ${vw} ${vh}" style="width:100%;max-height:190px;background:#FAFAFA;border:1px solid #E4E4E7;border-radius:6px;">
             <polygon points="${outlinePts}" fill="#FFFFFF" stroke="#18181B" stroke-width="4" stroke-linejoin="round" />
             ${grooveSvg}
+            ${ledSvg}
             ${cutoutsSvg}
             ${holesSvg}
             <text x="${pad + map.faceWidthMm / 2}" y="${pad - 18}" text-anchor="middle" font-size="${fs.toFixed(0)}" fill="#18181B" font-family="monospace">${map.faceWidthMm} mm</text>
@@ -1161,7 +1312,7 @@ export function printTechnicalDocumentation(params: {
     <div style="text-align:right;">
       <div style="font-size:11px;color:#52525B;">Gabaryt całkowity (S × W × G)</div>
       <div style="font-size:16px;font-weight:700;font-family:monospace;">${overall.width} × ${overall.height} × ${overall.depth} mm</div>
-      <div style="font-size:11px;color:#52525B;margin-top:4px;">${boardParts.length} elementów · ${project.fasteners.length} łączników · ${nestingResults.reduce((s, n) => s + n.totalSheets, 0)} arkuszy${quote.linearBarsCount > 0 ? ` · ${quote.linearBarsCount} sztang 1D` : ''}</div>
+      <div style="font-size:11px;color:#52525B;margin-top:4px;">${boardParts.length} elementów · ${project.fasteners.length} łączników · ${nestingResults.reduce((s, n) => s + n.totalSheets, 0)} arkuszy${quote.linearBarsCount > 0 ? ` · ${quote.linearBarsCount} sztang 1D` : ''} · Masa: <strong>${weightSummary.totalWeightKg} kg</strong></div>
     </div>
   </div>
 
@@ -1182,7 +1333,7 @@ export function printTechnicalDocumentation(params: {
       ${quote.linearBarsCount > 0 ? `<tr><td>Profile liniowe / sztangi 1D</td><td>${quote.linearBarsCount} sztang</td><td class="num">${quote.linearProfilesCostPln} zł</td></tr>` : ''}
       <tr><td>Usługa rozkroju na pile formatowej</td><td>${quote.cuttingLinearM} mb × ${quoteSettings.cuttingPricePerMbPln} zł</td><td class="num">${quote.cuttingCostPln} zł</td></tr>
       <tr><td>Okleinowanie krawędzi ABS/PCV</td><td>${quote.edgeBandingLinearM} mb × ${quoteSettings.edgeBandingPricePerMbPln} zł</td><td class="num">${quote.edgeBandingCostPln} zł</td></tr>
-      <tr><td>Okucia i akcesoria meblowe</td><td>Zawiasy: ${quote.hardware.hingeCupsCount} · Prowadnice: ${quote.hardware.drawerSlidePairs} kpl · Uchwyty: ${quote.hardware.handlesCount}${quote.hardware.tipOnCount > 0 ? ` · Tip-On: ${quote.hardware.tipOnCount} szt.` : ''}${quote.hardware.golaLinearM > 0 ? ` · Gola J: ${quote.hardware.golaLinearM} mb` : ''}${quote.hardware.slidingDoorsCount > 0 ? ` · System przesuwny: ${quote.hardware.slidingDoorsCount} skrz.` : ''} · Nóżki: ${quote.hardware.legsCount} · Wkręty: ${quote.hardware.fastenersTotal}</td><td class="num">${quote.hardwareCostPln} zł</td></tr>
+      <tr><td>Okucia i akcesoria meblowe</td><td>Zawiasy: ${quote.hardware.hingeCupsCount} · Prowadnice: ${quote.hardware.drawerSlidePairs} kpl${quote.hardware.flapLiftsCount > 0 ? ` · Podnośniki klap: ${quote.hardware.flapLiftsCount} kpl.` : ''} · Uchwyty: ${quote.hardware.handlesCount}${quote.hardware.tipOnCount > 0 ? ` · Tip-On: ${quote.hardware.tipOnCount} szt.` : ''}${quote.hardware.golaLinearM > 0 ? ` · Gola J: ${quote.hardware.golaLinearM} mb` : ''}${quote.hardware.slidingDoorsCount > 0 ? ` · System przesuwny: ${quote.hardware.slidingDoorsCount} skrz.` : ''} · Nóżki: ${quote.hardware.legsCount} · Wkręty: ${quote.hardware.fastenersTotal}</td><td class="num">${quote.hardwareCostPln} zł</td></tr>
       <tr><td>Robocizna i montaż warsztatowy</td><td>${quoteSettings.laborHours} h × ${quoteSettings.laborRatePln} zł/h</td><td class="num">${quote.laborCostPln} zł</td></tr>
       <tr><td>Marża pracowni (${quoteSettings.marginPercent}%)</td><td></td><td class="num">${quote.marginPln} zł</td></tr>
       <tr><td><strong>RAZEM NETTO</strong></td><td></td><td class="num"><strong>${quote.netTotalPln} zł</strong></td></tr>
@@ -1196,7 +1347,7 @@ export function printTechnicalDocumentation(params: {
   <h2>3. Lista rozkroju na piłę formatową i cięcie profili 1D</h2>
   <table>
     <thead>
-      <tr><th>#</th><th>Element</th><th>Materiał</th><th class="num">Gotowy [mm]</th><th class="num">Cięcie piłą</th><th class="num">Okleina</th><th>Obróbki</th></tr>
+      <tr><th>#</th><th>Element</th><th>Materiał</th><th class="num">Gotowy [mm]</th><th class="num">Cięcie piłą</th><th class="num">Okleina</th><th class="num">Waga</th><th>Obróbki</th></tr>
     </thead>
     <tbody>${cutRowsHtml}</tbody>
   </table>
@@ -1357,6 +1508,7 @@ export function printBoardLabels(
       if (p.cornerRadiusMm) cncTags.push(`R${p.cornerRadiusMm}`);
       if (p.cutouts?.length) cncTags.push(`${p.cutouts.length} wyc.`);
       if (p.dadoGroove?.enabled) cncTags.push(`Nut ${p.dadoGroove.widthMm}×${p.dadoGroove.depthMm}`);
+      if (p.ledGroove?.enabled) cncTags.push(`Frez LED ${p.ledGroove.widthMm}×${p.ledGroove.depthMm}`);
       if (p.hingeSide && p.hingeSide !== 'none') cncTags.push(`Ø35 ×${p.hingeCount ?? 2}`);
       if (p.system32ShelfHoles) cncTags.push('Sys32 Ø5');
       if (p.kind === 'door' && p.handleStyle === 'gola_j') cncTags.push('Gola J');
