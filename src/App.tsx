@@ -90,22 +90,56 @@ import { RoomSettingsModal } from './components/RoomSettingsModal';
 import { ContextMenu, type ContextMenuTarget } from './components/ContextMenu';
 import { ViewCube } from './components/ViewCube';
 import { PWAInstallButton, PWAStatusOverlays } from './components/PWAControls';
+import { StartWorkspaceModal } from './components/StartWorkspaceModal';
 import { usePWAUpdate } from './hooks/usePWAUpdate';
 
 const SNAP_STEPS = [10, 5, 25, 0];
 const LIGHTING_ORDER: StudioLighting[] = ['daylight', 'studio', 'warm', 'photoreal'];
+const SKIP_START_MODAL_KEY = 'stolarz3d_skip_start_modal';
 
 function createDefaultProject(): FurnitureProject {
-  return structuredClone(FURNITURE_TEMPLATES[0].project);
+  return {
+    id: 'proj_initial',
+    name: 'Nowy projekt',
+    parts: [],
+    fasteners: [],
+    updatedAt: Date.now(),
+  };
 }
 
 export default function App() {
   const viewportRef = useRef<Viewport3DHandle | null>(null);
   const pwa = usePWAUpdate();
 
-  const [projectStore, setProjectStore] = useState<ProjectStoreState>(() =>
-    loadProjectStore(createDefaultProject)
-  );
+  const [projectStore, setProjectStore] = useState<ProjectStoreState>(() => {
+    const loaded = loadProjectStore(createDefaultProject);
+    let showStart = true;
+    try {
+      showStart = window.localStorage.getItem(SKIP_START_MODAL_KEY) !== '1';
+    } catch {
+      showStart = true;
+    }
+    if (!showStart) return loaded;
+
+    // Keep the 3D canvas completely clean behind the startup modal until the user picks an action
+    const existingBlank = loaded.projects.find(
+      (p) => p.parts.length === 0 && !p.room?.enabled
+    );
+    if (existingBlank) {
+      return { ...loaded, activeProjectId: existingBlank.id };
+    }
+    const freshBlank: FurnitureProject = {
+      id: `proj_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+      name: 'Nowy projekt',
+      parts: [],
+      fasteners: [],
+      updatedAt: Date.now(),
+    };
+    return {
+      activeProjectId: freshBlank.id,
+      projects: [freshBlank, ...loaded.projects],
+    };
+  });
   const [historyPast, setHistoryPast] = useState<FurnitureProject[]>([]);
   const [historyFuture, setHistoryFuture] = useState<FurnitureProject[]>([]);
 
@@ -149,6 +183,20 @@ export default function App() {
   const [sketchEditingPart, setSketchEditingPart] = useState<FurniturePart | null>(null);
   const [leftDrawerMode, setLeftDrawerMode] = useState<LeftDrawerMode>(null);
   const [cutListOpen, setCutListOpen] = useState<boolean>(false);
+  const [skipStartModal, setSkipStartModal] = useState<boolean>(() => {
+    try {
+      return window.localStorage.getItem(SKIP_START_MODAL_KEY) === '1';
+    } catch {
+      return false;
+    }
+  });
+  const [startModalOpen, setStartModalOpen] = useState<boolean>(() => {
+    try {
+      return window.localStorage.getItem(SKIP_START_MODAL_KEY) !== '1';
+    } catch {
+      return true;
+    }
+  });
   const [contextMenu, setContextMenu] = useState<ContextMenuTarget | null>(null);
   const [toastMsg, setToastMsg] = useState<string | null>(null);
 
@@ -282,6 +330,45 @@ export default function App() {
     setLeftDrawerMode(null);
     showToast(`Utworzono: ${newProj.name}`);
   }, [projectStore.projects.length, showToast]);
+
+  // Ensures a clean empty project when starting a new workflow from the startup launcher
+  const ensureCleanProjectForStart = useCallback(
+    (defaultName: string) => {
+      const hasExistingContent = project.parts.length > 0 || Boolean(project.room?.enabled);
+      if (hasExistingContent) {
+        const newProj: FurnitureProject = {
+          id: `proj_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+          name: `${defaultName} #${projectStore.projects.length + 1}`,
+          parts: [],
+          fasteners: [],
+          updatedAt: Date.now(),
+        };
+        setProjectStore((store) => ({
+          activeProjectId: newProj.id,
+          projects: [newProj, ...store.projects],
+        }));
+      }
+      setHistoryPast([]);
+      setHistoryFuture([]);
+      setSelectedPartId(null);
+      setSelectedPartIds([]);
+      setSelectedFastenerId(null);
+      setContextMenu(null);
+      setInspectorOpen(false);
+      setExplodedAmount(0);
+      setLeftDrawerMode(null);
+    },
+    [project.parts.length, project.room?.enabled, projectStore.projects.length]
+  );
+
+  const handleToggleSkipStartModal = useCallback((skip: boolean) => {
+    setSkipStartModal(skip);
+    try {
+      window.localStorage.setItem(SKIP_START_MODAL_KEY, skip ? '1' : '0');
+    } catch {
+      // Ignore private browsing storage errors
+    }
+  }, []);
 
   const handleDuplicateProject = useCallback(
     (id: string) => {
@@ -1430,10 +1517,15 @@ export default function App() {
     <div className="relative h-[100dvh] w-screen overflow-hidden bg-[#EAECEF]">
       {/* Minimal 3-Zone Top Bar (Height 48px — stays slim on mobile & desktop) */}
       <header className="fixed top-0 inset-x-0 z-30 flex h-12 items-center justify-between gap-3 sm:gap-6 border-b border-zinc-800 bg-[#141518] px-3.5 sm:px-5 text-zinc-100">
-        {/* Zone 1: Single-line Brand Wordmark */}
-        <span className="text-sm sm:text-base font-bold tracking-tight text-white whitespace-nowrap shrink-0">
+        {/* Zone 1: Single-line Brand Wordmark (opens Start Launcher) */}
+        <button
+          type="button"
+          onClick={() => setStartModalOpen(true)}
+          className="text-sm sm:text-base font-bold tracking-tight text-white hover:text-amber-300 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+          title="Ekran startowy — pomieszczenie, nowy mebel, szkic lub szablon"
+        >
           Stolarz 3D
-        </span>
+        </button>
 
         {/* Zone 2: Clean Single-Line Nav Actions (Desktop) */}
         <nav className="hidden md:flex items-center gap-5 text-xs font-medium text-zinc-300">
@@ -1509,10 +1601,10 @@ export default function App() {
                 ? 'border-sky-500/60 bg-sky-500/15 text-sky-300 hover:bg-sky-500/25'
                 : 'border-zinc-700 bg-zinc-900 text-zinc-200 hover:border-sky-500/50 hover:text-sky-300'
             }`}
-            title="Wnęka, ściany pokoju, skos poddasza i przeszkody (grzejniki, rury, gniazdka)"
+            title="Konfigurator pomieszczenia 2D/3D: rysowanie ścian, drzwi, okien, skosu i przeszkód"
           >
             <Home className="h-3.5 w-3.5 shrink-0" />
-            <span className="hidden lg:inline">Wnęka</span>
+            <span className="hidden lg:inline">Pomieszczenie</span>
           </button>
           <button
             type="button"
@@ -2104,8 +2196,8 @@ export default function App() {
           }));
           showToast(
             nextRoom.enabled
-              ? `Zapisano wnękę ${nextRoom.widthMm}×${nextRoom.heightMm}×${nextRoom.depthMm} mm`
-              : 'Wyłączono podgląd wnęki'
+              ? `Zapisano pomieszczenie ${nextRoom.widthMm}×${nextRoom.depthMm} mm (wys. ${nextRoom.heightMm} mm)`
+              : 'Wyłączono podgląd pomieszczenia 3D'
           );
         }}
       />
@@ -2145,6 +2237,71 @@ export default function App() {
           showToast(`Zaimportowano jako nowy projekt: ${importedCopy.name}`);
         }}
         onImportError={(msg) => showToast(msg)}
+      />
+
+      <StartWorkspaceModal
+        open={startModalOpen}
+        projects={projectStore.projects}
+        activeProjectId={projectStore.activeProjectId}
+        skipOnStartup={skipStartModal}
+        onToggleSkipOnStartup={handleToggleSkipStartModal}
+        onClose={() => setStartModalOpen(false)}
+        onStartRoom={() => {
+          ensureCleanProjectForStart('Projekt pomieszczenia');
+          setStartModalOpen(false);
+          setRoomModalOpen(true);
+        }}
+        onStartCabinet={() => {
+          ensureCleanProjectForStart('Projekt mebla');
+          setStartModalOpen(false);
+          setEditingCabinetGroupId(null);
+          setCabinetBuilderOpen(true);
+        }}
+        onStartSketch={() => {
+          ensureCleanProjectForStart('Projekt ze szkicu');
+          setStartModalOpen(false);
+          setSketchEditingPart(null);
+          setSketchOpen(true);
+        }}
+        onStartAddPart={() => {
+          ensureCleanProjectForStart('Własny mebel');
+          setStartModalOpen(false);
+          setAddPartOpen(true);
+        }}
+        onStartBlank={() => {
+          ensureCleanProjectForStart('Nowy projekt');
+          setStartModalOpen(false);
+        }}
+        onSelectTemplate={(tpl) => {
+          setStartModalOpen(false);
+          if (project.parts.length > 0 || project.room?.enabled) {
+            const tplCopy: FurnitureProject = {
+              ...structuredClone(tpl.project),
+              id: `proj_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+              updatedAt: Date.now(),
+            };
+            setProjectStore((store) => ({
+              activeProjectId: tplCopy.id,
+              projects: [tplCopy, ...store.projects],
+            }));
+            setHistoryPast([]);
+            setHistoryFuture([]);
+            setSelectedPartId(null);
+            setSelectedPartIds([]);
+            setSelectedFastenerId(null);
+            setContextMenu(null);
+            setInspectorOpen(false);
+            setExplodedAmount(0);
+            setTimeout(() => viewportRef.current?.focusAll(), 40);
+            showToast(`Wczytano szablon: ${tpl.project.name}`);
+          } else {
+            handleLoadTemplate(tpl.project);
+          }
+        }}
+        onResumeProject={(id) => {
+          setStartModalOpen(false);
+          handleSwitchProject(id);
+        }}
       />
 
       <PWAStatusOverlays

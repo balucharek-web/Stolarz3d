@@ -36,13 +36,13 @@ import {
   evaluateScrewPlacement,
   getPartQuaternion,
   getPartWorldBox,
-  getRoomObstacleWorldBox,
   snapPartToNeighbors,
   type ClearanceGuide,
   type FastenerAudit,
   type JointZone,
   type ScrewHoverFeedback,
 } from '../engine/carpentry';
+import { buildArchitecturalRoom3D } from '../engine/roomMesh3D';
 import type { ContextMenuTarget } from './ContextMenu';
 
 export interface Viewport3DHandle {
@@ -2229,169 +2229,7 @@ export const Viewport3D = forwardRef<Viewport3DHandle, Viewport3DProps>(
         return;
       }
 
-      const wM = room.widthMm * MM_TO_M;
-      const hM = room.heightMm * MM_TO_M;
-      const dM = room.depthMm * MM_TO_M;
-      const wallT = 0.04;
-      const minX = -wM / 2;
-      const maxX = wM / 2;
-      const minZ = room.backWallZMm * MM_TO_M;
-      const centerZ = minZ + dM / 2;
-
-      const addWallBox = (
-        sx: number,
-        sy: number,
-        sz: number,
-        px: number,
-        py: number,
-        pz: number,
-        opacity = 0.24
-      ) => {
-        const geo = new THREE.BoxGeometry(sx, sy, sz);
-        const mat = new THREE.MeshStandardMaterial({
-          color: '#CBD5E1',
-          roughness: 0.9,
-          metalness: 0.02,
-          transparent: true,
-          opacity,
-          depthWrite: false,
-        });
-        const mesh = new THREE.Mesh(geo, mat);
-        mesh.position.set(px, py, pz);
-        mesh.userData.disposeMaterial = true;
-        rt.roomRoot.add(mesh);
-
-        const edgesGeo = new THREE.EdgesGeometry(geo);
-        const edgesMat = new THREE.LineBasicMaterial({
-          color: '#64748B',
-          transparent: true,
-          opacity: 0.55,
-        });
-        const edges = new THREE.LineSegments(edgesGeo, edgesMat);
-        edges.position.copy(mesh.position);
-        edges.userData.disposeMaterial = true;
-        rt.roomRoot.add(edges);
-      };
-
-      // Alcove floor footprint outline
-      const floorLineGeo = new THREE.BufferGeometry().setFromPoints([
-        new THREE.Vector3(minX, 0.003, minZ),
-        new THREE.Vector3(maxX, 0.003, minZ),
-        new THREE.Vector3(maxX, 0.003, minZ + dM),
-        new THREE.Vector3(minX, 0.003, minZ + dM),
-        new THREE.Vector3(minX, 0.003, minZ),
-      ]);
-      const floorLineMat = new THREE.LineBasicMaterial({ color: '#0EA5E9' });
-      const floorLine = new THREE.Line(floorLineGeo, floorLineMat);
-      floorLine.userData.disposeMaterial = true;
-      rt.roomRoot.add(floorLine);
-
-      if (room.showBackWall) {
-        addWallBox(wM + wallT * 2, hM, wallT, 0, hM / 2, minZ - wallT / 2, 0.34);
-      }
-      if (room.showLeftWall) {
-        addWallBox(wallT, hM, dM, minX - wallT / 2, hM / 2, centerZ, 0.2);
-      }
-      if (room.showRightWall) {
-        addWallBox(wallT, hM, dM, maxX + wallT / 2, hM / 2, centerZ, 0.2);
-      }
-      if (room.showCeiling) {
-        if (room.slopedCeiling?.enabled) {
-          const slopeW = Math.min(room.widthMm, Math.max(200, room.slopedCeiling.slopeWidthMm)) * MM_TO_M;
-          const flatW = Math.max(0.05, wM - slopeW);
-          if (flatW > 0.08) {
-            const isRight = room.slopedCeiling.side === 'right';
-            const flatCx = isRight ? minX + flatW / 2 : maxX - flatW / 2;
-            addWallBox(flatW, wallT, dM, flatCx, hM + wallT / 2, centerZ, 0.16);
-          }
-        } else {
-          addWallBox(wM, wallT, dM, 0, hM + wallT / 2, centerZ, 0.16);
-        }
-      }
-
-      // Sloped attic ceiling plane
-      if (room.slopedCeiling?.enabled) {
-        const kneeH = Math.min(room.heightMm, Math.max(150, room.slopedCeiling.kneeWallHeightMm)) * MM_TO_M;
-        const slopeW = Math.min(room.widthMm, Math.max(200, room.slopedCeiling.slopeWidthMm)) * MM_TO_M;
-        const rise = Math.max(0.05, hM - kneeH);
-        const slopeLen = Math.hypot(slopeW, rise);
-        const angle = Math.atan2(rise, slopeW);
-
-        const slopeGeo = new THREE.BoxGeometry(slopeLen, 0.035, dM);
-        const slopeMat = new THREE.MeshStandardMaterial({
-          color: '#F59E0B',
-          roughness: 0.75,
-          transparent: true,
-          opacity: 0.22,
-          depthWrite: false,
-        });
-        const slopeMesh = new THREE.Mesh(slopeGeo, slopeMat);
-        const isRight = room.slopedCeiling.side === 'right';
-        slopeMesh.position.set(
-          isRight ? maxX - slopeW / 2 : minX + slopeW / 2,
-          kneeH + rise / 2,
-          centerZ
-        );
-        slopeMesh.rotation.z = isRight ? -angle : angle;
-        slopeMesh.userData.disposeMaterial = true;
-        rt.roomRoot.add(slopeMesh);
-
-        const slopeEdgesGeo = new THREE.EdgesGeometry(slopeGeo);
-        const slopeEdgesMat = new THREE.LineBasicMaterial({ color: '#D97706' });
-        const slopeEdges = new THREE.LineSegments(slopeEdgesGeo, slopeEdgesMat);
-        slopeEdges.position.copy(slopeMesh.position);
-        slopeEdges.rotation.copy(slopeMesh.rotation);
-        slopeEdges.userData.disposeMaterial = true;
-        rt.roomRoot.add(slopeEdges);
-      }
-
-      // Wall Obstacles (Radiator, Socket, Pipe, Window)
-      for (const obs of room.obstacles) {
-        const box = getRoomObstacleWorldBox(obs, room);
-        const sx = Math.max(0.02, (box.maxX - box.minX) * MM_TO_M);
-        const sy = Math.max(0.02, (box.maxY - box.minY) * MM_TO_M);
-        const sz = Math.max(0.02, (box.maxZ - box.minZ) * MM_TO_M);
-        const cx = ((box.minX + box.maxX) / 2) * MM_TO_M;
-        const cy = ((box.minY + box.maxY) / 2) * MM_TO_M;
-        const cz = ((box.minZ + box.maxZ) / 2) * MM_TO_M;
-
-        const colorMap: Record<typeof obs.type, string> = {
-          radiator: '#E2E8F0',
-          socket: '#FACC15',
-          pipe: '#94A3B8',
-          window: '#38BDF8',
-        };
-        const edgeColorMap: Record<typeof obs.type, string> = {
-          radiator: '#475569',
-          socket: '#CA8A04',
-          pipe: '#334155',
-          window: '#0284C7',
-        };
-
-        const geo =
-          obs.type === 'pipe'
-            ? new THREE.CylinderGeometry(Math.min(sx, sz) / 2, Math.min(sx, sz) / 2, sy, 18)
-            : new THREE.BoxGeometry(sx, sy, sz);
-        const mat = new THREE.MeshStandardMaterial({
-          color: colorMap[obs.type],
-          roughness: obs.type === 'window' ? 0.15 : 0.45,
-          metalness: obs.type === 'pipe' || obs.type === 'radiator' ? 0.45 : 0.05,
-          transparent: obs.type === 'window',
-          opacity: obs.type === 'window' ? 0.35 : 0.92,
-        });
-        const mesh = new THREE.Mesh(geo, mat);
-        mesh.position.set(cx, cy, cz);
-        mesh.userData.disposeMaterial = true;
-        rt.roomRoot.add(mesh);
-
-        const edgesGeo = new THREE.EdgesGeometry(geo, 24);
-        const edgesMat = new THREE.LineBasicMaterial({ color: edgeColorMap[obs.type] });
-        const edges = new THREE.LineSegments(edgesGeo, edgesMat);
-        edges.position.copy(mesh.position);
-        edges.userData.disposeMaterial = true;
-        rt.roomRoot.add(edges);
-      }
-
+      buildArchitecturalRoom3D(rt.roomRoot, room);
       rt.requestRender();
     }, [props.room]);
 

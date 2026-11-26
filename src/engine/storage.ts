@@ -22,9 +22,19 @@ import {
   type PartCutout,
   type PartKind,
   type QuoteSettings,
+  DEFAULT_ROOM_STYLE,
   type RoomConfig,
+  type RoomCutawayMode,
+  type RoomFloorFinish,
   type RoomObstacle,
   type RoomObstacleType,
+  type RoomOpening,
+  type RoomOpeningType,
+  type RoomStyle,
+  type RoomVertex,
+  type RoomWallFinish,
+  type RoomWallObstacle,
+  type RoomWallObstacleType,
   type ScrewType,
   type SurfaceFinish,
 } from '../types/furniture';
@@ -143,6 +153,40 @@ function sanitizeLedGroove(raw: unknown): LedGrooveConfig | undefined {
   };
 }
 const VALID_OBSTACLE_TYPES = new Set<RoomObstacleType>(['radiator', 'socket', 'pipe', 'window']);
+const VALID_OPENING_TYPES = new Set<RoomOpeningType>([
+  'door_single',
+  'door_double',
+  'window',
+  'window_balcony',
+  'arch',
+]);
+const VALID_WALL_OBSTACLE_TYPES = new Set<RoomWallObstacleType>([
+  'socket',
+  'switch',
+  'radiator',
+  'pipe',
+  'vent',
+]);
+const VALID_WALL_FINISHES = new Set<RoomWallFinish>([
+  'white_plaster',
+  'warm_alabaster',
+  'warm_greige',
+  'light_concrete',
+  'sage_plaster',
+  'anthracite_accent',
+]);
+const VALID_FLOOR_FINISHES = new Set<RoomFloorFinish>([
+  'oak_parquet',
+  'herringbone_oak',
+  'concrete_screed',
+  'ceramic_tile',
+  'dark_walnut',
+]);
+const VALID_CUTAWAY_MODES = new Set<RoomCutawayMode>([
+  'smart_cutaway',
+  'solid',
+  'translucent',
+]);
 
 function sanitizeRoomConfig(raw: unknown): RoomConfig | undefined {
   if (!raw || typeof raw !== 'object') return undefined;
@@ -180,18 +224,130 @@ function sanitizeRoomConfig(raw: unknown): RoomConfig | undefined {
     kneeWallHeightMm: toFiniteNumber(sc?.kneeWallHeightMm, 1350, 200, 3500),
     slopeWidthMm: toFiniteNumber(sc?.slopeWidthMm, 1600, 200, 6000),
   };
+
+  let floorPoints: RoomVertex[] | undefined;
+  if (Array.isArray(r.floorPoints) && r.floorPoints.length >= 3) {
+    const pts: RoomVertex[] = [];
+    for (let i = 0; i < Math.min(r.floorPoints.length, 32); i++) {
+      const v = r.floorPoints[i];
+      if (!v || typeof v !== 'object') continue;
+      const vo = v as Record<string, unknown>;
+      pts.push({
+        id: typeof vo.id === 'string' && vo.id.trim() ? vo.id.trim() : `v_${i}`,
+        xMm: toFiniteNumber(vo.xMm, 0, -20000, 20000),
+        zMm: toFiniteNumber(vo.zMm, 0, -20000, 20000),
+      });
+    }
+    if (pts.length >= 3) floorPoints = pts;
+  }
+
+  const maxWalls = floorPoints ? floorPoints.length : 4;
+
+  const openings: RoomOpening[] = [];
+  if (Array.isArray(r.openings)) {
+    for (let i = 0; i < Math.min(r.openings.length, 40); i++) {
+      const item = r.openings[i];
+      if (!item || typeof item !== 'object') continue;
+      const o = item as Record<string, unknown>;
+      const type: RoomOpeningType =
+        typeof o.type === 'string' && VALID_OPENING_TYPES.has(o.type as RoomOpeningType)
+          ? (o.type as RoomOpeningType)
+          : 'window';
+      const wallIndex = Math.round(toFiniteNumber(o.wallIndex, 0, 0, Math.max(0, maxWalls - 1)));
+      openings.push({
+        id: typeof o.id === 'string' && o.id.trim() ? o.id.trim() : `op_${i}`,
+        type,
+        label: typeof o.label === 'string' && o.label.trim() ? o.label.trim().slice(0, 40) : type,
+        wallIndex,
+        offsetMm: toFiniteNumber(o.offsetMm, 200, 0, 20000),
+        widthMm: toFiniteNumber(o.widthMm, 900, 300, 6000),
+        heightMm: toFiniteNumber(o.heightMm, 2050, 300, 4000),
+        sillHeightMm: toFiniteNumber(o.sillHeightMm, type === 'window' ? 880 : 0, 0, 3500),
+        swingInward: o.swingInward !== false,
+        hingeSide: o.hingeSide === 'right' ? 'right' : 'left',
+      });
+    }
+  }
+
+  const wallObstacles: RoomWallObstacle[] = [];
+  if (Array.isArray(r.wallObstacles)) {
+    for (let i = 0; i < Math.min(r.wallObstacles.length, 60); i++) {
+      const item = r.wallObstacles[i];
+      if (!item || typeof item !== 'object') continue;
+      const o = item as Record<string, unknown>;
+      const type: RoomWallObstacleType =
+        typeof o.type === 'string' && VALID_WALL_OBSTACLE_TYPES.has(o.type as RoomWallObstacleType)
+          ? (o.type as RoomWallObstacleType)
+          : 'socket';
+      const wallIndex = Math.round(toFiniteNumber(o.wallIndex, 0, 0, Math.max(0, maxWalls - 1)));
+      wallObstacles.push({
+        id: typeof o.id === 'string' && o.id.trim() ? o.id.trim() : `wobs_${i}`,
+        type,
+        label: typeof o.label === 'string' && o.label.trim() ? o.label.trim().slice(0, 40) : type,
+        wallIndex,
+        offsetMm: toFiniteNumber(o.offsetMm, 200, 0, 20000),
+        elevationMm: toFiniteNumber(o.elevationMm, 300, 0, 4000),
+        widthMm: toFiniteNumber(o.widthMm, 160, 30, 4000),
+        heightMm: toFiniteNumber(o.heightMm, 90, 30, 4000),
+        depthMm: toFiniteNumber(o.depthMm, 30, 10, 600),
+      });
+    }
+  }
+
+  const hiddenWallIndices = Array.isArray(r.hiddenWallIndices)
+    ? r.hiddenWallIndices
+        .map((n) => Math.round(Number(n)))
+        .filter((n) => Number.isFinite(n) && n >= 0 && n < maxWalls)
+    : [];
+
+  const rawStyle =
+    r.style && typeof r.style === 'object' ? (r.style as Record<string, unknown>) : null;
+  const style: RoomStyle = {
+    wallFinish:
+      typeof rawStyle?.wallFinish === 'string' &&
+      VALID_WALL_FINISHES.has(rawStyle.wallFinish as RoomWallFinish)
+        ? (rawStyle.wallFinish as RoomWallFinish)
+        : DEFAULT_ROOM_STYLE.wallFinish,
+    floorFinish:
+      typeof rawStyle?.floorFinish === 'string' &&
+      VALID_FLOOR_FINISHES.has(rawStyle.floorFinish as RoomFloorFinish)
+        ? (rawStyle.floorFinish as RoomFloorFinish)
+        : DEFAULT_ROOM_STYLE.floorFinish,
+    showBaseboards:
+      rawStyle?.showBaseboards !== undefined
+        ? Boolean(rawStyle.showBaseboards)
+        : DEFAULT_ROOM_STYLE.showBaseboards,
+    baseboardHeightMm: toFiniteNumber(
+      rawStyle?.baseboardHeightMm,
+      DEFAULT_ROOM_STYLE.baseboardHeightMm,
+      30,
+      200
+    ),
+    wallCutawayMode:
+      typeof rawStyle?.wallCutawayMode === 'string' &&
+      VALID_CUTAWAY_MODES.has(rawStyle.wallCutawayMode as RoomCutawayMode)
+        ? (rawStyle.wallCutawayMode as RoomCutawayMode)
+        : DEFAULT_ROOM_STYLE.wallCutawayMode,
+  };
+
   return {
     enabled: Boolean(r.enabled),
-    widthMm: toFiniteNumber(r.widthMm, 2600, 600, 10000),
-    heightMm: toFiniteNumber(r.heightMm, 2500, 1200, 5000),
-    depthMm: toFiniteNumber(r.depthMm, 1600, 400, 10000),
-    backWallZMm: toFiniteNumber(r.backWallZMm, -340, -5000, 5000),
+    widthMm: toFiniteNumber(r.widthMm, 3400, 600, 20000),
+    heightMm: toFiniteNumber(r.heightMm, 2600, 1200, 5000),
+    depthMm: toFiniteNumber(r.depthMm, 2800, 400, 20000),
+    backWallZMm: toFiniteNumber(r.backWallZMm, -340, -15000, 15000),
     showLeftWall: r.showLeftWall !== false,
     showRightWall: r.showRightWall !== false,
     showBackWall: r.showBackWall !== false,
     showCeiling: Boolean(r.showCeiling),
     slopedCeiling,
     obstacles,
+    floorPoints,
+    wallThicknessMm: toFiniteNumber(r.wallThicknessMm, 120, 50, 400),
+    hiddenWallIndices,
+    openings,
+    wallObstacles,
+    style,
   };
 }
 
@@ -466,12 +622,10 @@ export function sanitizeImportedProject(
   return { project };
 }
 
-function isLegacyBrokenWarehouseStarter(project: FurnitureProject): boolean {
+function isAutoSeededWarehouseStarter(project: FurnitureProject): boolean {
   if (project.id !== 'proj_warehouse_sloped') return false;
-  const hasOldPosts = project.parts.some((p) => p.id === 'p_post_fm');
-  const hasFixedSplitShelves = project.parts.some((p) => p.id === 'p_shelf_1_l');
-  // Old broken default template had 16 parts with full-width shelves colliding through center posts
-  return hasOldPosts && !hasFixedSplitShelves && project.parts.length <= 17;
+  if (project.room?.enabled) return false;
+  return project.name === 'Regał magazynowy ze skosem OSB';
 }
 
 export function loadProjectStore(defaultFactory: () => FurnitureProject): ProjectStoreState {
@@ -484,18 +638,15 @@ export function loadProjectStore(defaultFactory: () => FurnitureProject): Projec
       };
       if (Array.isArray(parsed.projects) && parsed.projects.length > 0) {
         const cleanProjects: FurnitureProject[] = [];
-        let upgradedLegacyStarter = false;
+        let cleanedLegacyStarter = false;
         for (const item of parsed.projects) {
           const { project } = sanitizeImportedProject(item);
           if (!project) continue;
-          if (isLegacyBrokenWarehouseStarter(project)) {
-            const fresh = defaultFactory();
-            fresh.updatedAt = Date.now();
-            cleanProjects.push(fresh);
-            upgradedLegacyStarter = true;
-          } else {
-            cleanProjects.push(project);
+          if (isAutoSeededWarehouseStarter(project)) {
+            cleanedLegacyStarter = true;
+            continue;
           }
+          cleanProjects.push(project);
         }
         if (cleanProjects.length > 0) {
           const activeId =
@@ -504,10 +655,20 @@ export function loadProjectStore(defaultFactory: () => FurnitureProject): Projec
               ? parsed.activeProjectId
               : cleanProjects[0].id;
           const store: ProjectStoreState = { activeProjectId: activeId, projects: cleanProjects };
-          if (upgradedLegacyStarter) {
+          if (cleanedLegacyStarter) {
             saveProjectStore(store);
           }
           return store;
+        }
+        if (cleanedLegacyStarter) {
+          const blank = defaultFactory();
+          blank.updatedAt = Date.now();
+          const blankStore: ProjectStoreState = {
+            activeProjectId: blank.id,
+            projects: [blank],
+          };
+          saveProjectStore(blankStore);
+          return blankStore;
         }
       }
     }
@@ -517,7 +678,7 @@ export function loadProjectStore(defaultFactory: () => FurnitureProject): Projec
     if (rawV1) {
       const { project } = sanitizeImportedProject(JSON.parse(rawV1));
       if (project) {
-        const finalProject = isLegacyBrokenWarehouseStarter(project)
+        const finalProject = isAutoSeededWarehouseStarter(project)
           ? { ...defaultFactory(), updatedAt: Date.now() }
           : project;
         const migrated: ProjectStoreState = {

@@ -321,6 +321,97 @@ export interface RoomObstacle {
   depthMm: number;
 }
 
+export interface RoomVertex {
+  id: string;
+  /** World X coordinate in mm */
+  xMm: number;
+  /** World Z coordinate in mm */
+  zMm: number;
+}
+
+export type RoomOpeningType =
+  | 'door_single'
+  | 'door_double'
+  | 'window'
+  | 'window_balcony'
+  | 'arch';
+
+export interface RoomOpening {
+  id: string;
+  type: RoomOpeningType;
+  label: string;
+  /** Index of wall segment floorPoints[wallIndex] -> floorPoints[(wallIndex+1)%n] */
+  wallIndex: number;
+  /** Distance along wall from start vertex to opening start edge (mm) */
+  offsetMm: number;
+  /** Opening clear width (mm) */
+  widthMm: number;
+  /** Opening clear height (mm) */
+  heightMm: number;
+  /** Sill height from floor (mm): 0 for doors/balcony/arch, ~850-900 for windows */
+  sillHeightMm: number;
+  /** For hinged doors: opens into the room (true) or outward (false) */
+  swingInward?: boolean;
+  /** For single doors: hinge side looking from inside the room */
+  hingeSide?: 'left' | 'right';
+}
+
+export type RoomWallObstacleType =
+  | 'socket'
+  | 'switch'
+  | 'radiator'
+  | 'pipe'
+  | 'vent';
+
+export interface RoomWallObstacle {
+  id: string;
+  type: RoomWallObstacleType;
+  label: string;
+  /** Index of wall segment floorPoints[wallIndex] -> floorPoints[(wallIndex+1)%n] */
+  wallIndex: number;
+  /** Distance along wall from start vertex to obstacle left edge (mm) */
+  offsetMm: number;
+  /** Height of obstacle bottom from floor (mm) */
+  elevationMm: number;
+  widthMm: number;
+  heightMm: number;
+  /** Protrusion into room from inner wall surface (mm) */
+  depthMm: number;
+}
+
+export type RoomWallFinish =
+  | 'white_plaster'
+  | 'warm_alabaster'
+  | 'warm_greige'
+  | 'light_concrete'
+  | 'sage_plaster'
+  | 'anthracite_accent';
+
+export type RoomFloorFinish =
+  | 'oak_parquet'
+  | 'herringbone_oak'
+  | 'concrete_screed'
+  | 'ceramic_tile'
+  | 'dark_walnut';
+
+export type RoomCutawayMode = 'smart_cutaway' | 'solid' | 'translucent';
+
+export interface RoomStyle {
+  wallFinish: RoomWallFinish;
+  floorFinish: RoomFloorFinish;
+  showBaseboards: boolean;
+  baseboardHeightMm: number;
+  wallCutawayMode: RoomCutawayMode;
+}
+
+export const DEFAULT_ROOM_STYLE: RoomStyle = {
+  wallFinish: 'warm_alabaster',
+  floorFinish: 'oak_parquet',
+  showBaseboards: true,
+  baseboardHeightMm: 80,
+  wallCutawayMode: 'smart_cutaway',
+};
+
 export interface RoomSlopedCeiling {
   enabled: boolean;
   side: 'left' | 'right';
@@ -332,11 +423,11 @@ export interface RoomSlopedCeiling {
 
 export interface RoomConfig {
   enabled: boolean;
-  /** Total room / alcove width (X, centered around 0, mm) */
+  /** Total room / alcove width (X, centered around 0, mm) — synced with polygon bounds */
   widthMm: number;
   /** Ceiling height (Y from floor, mm) */
   heightMm: number;
-  /** Distance from back wall to front of alcove (mm); back wall sits at Z = backWallZMm */
+  /** Distance from back wall to front of room (mm) — synced with polygon bounds */
   depthMm: number;
   /** World Z coordinate of the inner face of the back wall (mm), default -320 */
   backWallZMm: number;
@@ -345,15 +436,28 @@ export interface RoomConfig {
   showRightWall: boolean;
   showCeiling: boolean;
   slopedCeiling: RoomSlopedCeiling;
+  /** Legacy rectangular wall obstacles (kept for backward compatibility) */
   obstacles: RoomObstacle[];
+  /** Custom 2D architectural floorplan polygon vertices in world (xMm, zMm) */
+  floorPoints?: RoomVertex[];
+  /** Architectural wall thickness (mm), default 120 */
+  wallThicknessMm?: number;
+  /** Optional wall segment indices manually hidden in 3D */
+  hiddenWallIndices?: number[];
+  /** Doors, windows, balcony doors, and open passages placed on polygon walls */
+  openings?: RoomOpening[];
+  /** Radiators, sockets, pipes, switches, vents mounted on polygon walls */
+  wallObstacles?: RoomWallObstacle[];
+  /** Visual architectural finish & 3D cutaway display style */
+  style?: RoomStyle;
 }
 
 export const DEFAULT_ROOM_CONFIG: RoomConfig = {
   enabled: false,
-  widthMm: 2200,
-  heightMm: 2500,
-  depthMm: 1000,
-  backWallZMm: -310,
+  widthMm: 3400,
+  heightMm: 2600,
+  depthMm: 2800,
+  backWallZMm: -340,
   showBackWall: true,
   showLeftWall: true,
   showRightWall: true,
@@ -365,6 +469,17 @@ export const DEFAULT_ROOM_CONFIG: RoomConfig = {
     slopeWidthMm: 1600,
   },
   obstacles: [],
+  floorPoints: [
+    { id: 'v_0', xMm: -1700, zMm: -340 },
+    { id: 'v_1', xMm: 1700, zMm: -340 },
+    { id: 'v_2', xMm: 1700, zMm: 2460 },
+    { id: 'v_3', xMm: -1700, zMm: 2460 },
+  ],
+  wallThicknessMm: 120,
+  hiddenWallIndices: [],
+  openings: [],
+  wallObstacles: [],
+  style: { ...DEFAULT_ROOM_STYLE },
 };
 
 export type CabinetPresetId =

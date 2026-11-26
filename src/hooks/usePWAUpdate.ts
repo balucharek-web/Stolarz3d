@@ -26,6 +26,33 @@ export function usePWAUpdate() {
     window.addEventListener('online', handleOnline);
     window.addEventListener('offline', handleOffline);
 
+    if (import.meta.env.DEV) {
+      // Clean up any stale dev-sw.js left over from earlier VitePWA dev sessions
+      if (typeof navigator !== 'undefined' && 'serviceWorker' in navigator) {
+        navigator.serviceWorker
+          .getRegistrations()
+          .then((regs) => {
+            regs.forEach((reg) => {
+              const url =
+                reg.active?.scriptURL ||
+                reg.waiting?.scriptURL ||
+                reg.installing?.scriptURL ||
+                '';
+              if (url.includes('dev-sw.js')) {
+                reg.unregister().catch(() => {});
+              }
+            });
+          })
+          .catch(() => {});
+      }
+      return () => {
+        window.removeEventListener('online', handleOnline);
+        window.removeEventListener('offline', handleOffline);
+        if (checkTimerRef.current) window.clearTimeout(checkTimerRef.current);
+      };
+    }
+
+    let intervalId: number | null = null;
     const updateSW = registerSW({
       immediate: true,
       onNeedRefresh() {
@@ -43,7 +70,7 @@ export function usePWAUpdate() {
         registration.update().catch(() => {});
 
         // Periodic background check every 30 minutes
-        window.setInterval(() => {
+        intervalId = window.setInterval(() => {
           if (navigator.onLine) {
             registration.update().catch(() => {});
           }
@@ -64,6 +91,7 @@ export function usePWAUpdate() {
       window.removeEventListener('online', handleOnline);
       window.removeEventListener('offline', handleOffline);
       document.removeEventListener('visibilitychange', handleVisibilityChange);
+      if (intervalId !== null) window.clearInterval(intervalId);
       if (checkTimerRef.current) window.clearTimeout(checkTimerRef.current);
     };
   }, []);

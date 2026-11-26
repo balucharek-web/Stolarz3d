@@ -6,6 +6,14 @@ import {
   type HandleSide,
   type RoomConfig,
 } from '../types/furniture';
+import {
+  computeWallSegments,
+  findNearestWallSegment,
+  getRoomDoorSwingBox,
+  getRoomPolygonPoints,
+  getWallObstacleWorldBox,
+  pointInPolygonXZ,
+} from './roomGeometry';
 
 export interface WorldBox {
   minX: number;
@@ -2265,41 +2273,89 @@ export function auditRoomClearances(
 ): RoomClearanceIssue[] {
   if (!room || !room.enabled) return [];
   const issues: RoomClearanceIssue[] = [];
-  const halfW = room.widthMm / 2;
   const tol = 3; // 3 mm tolerance
 
-  const obstacleBoxes = room.obstacles.map((o) => ({
-    obs: o,
-    box: getRoomObstacleWorldBox(o, room),
-  }));
+  const hasCustomPolygon = Boolean(room.floorPoints && room.floorPoints.length >= 3);
+  const polyPts = getRoomPolygonPoints(room);
+  const wallSegments = computeWallSegments(polyPts);
+  const hiddenSet = new Set<number>(room.hiddenWallIndices ?? []);
+  const halfW = room.widthMm / 2;
+
+  const obstacleBoxes: Array<{ label: string; box: WorldBox }> = [
+    ...room.obstacles.map((o) => ({
+      label: o.label,
+      box: getRoomObstacleWorldBox(o, room),
+    })),
+  ];
+
+  for (const wobs of room.wallObstacles ?? []) {
+    const wb = getWallObstacleWorldBox(wobs, wallSegments);
+    if (wb) obstacleBoxes.push({ label: wobs.label, box: wb });
+  }
+
+  const roomDoorZones = (room.openings ?? [])
+    .map((op) => ({ op, box: getRoomDoorSwingBox(op, wallSegments) }))
+    .filter((entry): entry is { op: NonNullable<RoomConfig['openings']>[number]; box: WorldBox } => entry.box !== null);
 
   for (const p of parts) {
     const b = getPartWorldBox(p);
 
-    if (room.showLeftWall && b.minX < -halfW - tol) {
-      issues.push({
-        partId: p.id,
-        partName: p.name,
-        kind: 'wall_out',
-        message: `„${p.name}” wchodzi w lewą ścianę wnęki o ${Math.round(-halfW - b.minX)} mm.`,
-      });
+    if (hasCustomPolygon) {
+      // Check all 4 XZ footprint corners of part against exact room polygon
+      const corners: Array<[number, number]> = [
+        [b.minX, b.minZ],
+        [b.maxX, b.minZ],
+        [b.maxX, b.maxZ],
+        [b.minX, b.maxZ],
+      ];
+      let worstDist = 0;
+      let worstWallLabel = '';
+      let worstWallIdx = -1;
+      for (const [cx, cz] of corners) {
+        if (!pointInPolygonXZ(cx, cz, polyPts, tol)) {
+          const nearest = findNearestWallSegment(cx, cz, wallSegments);
+          if (nearest && nearest.distanceMm > worstDist) {
+            worstDist = nearest.distanceMm;
+            worstWallLabel = nearest.segment.label;
+            worstWallIdx = nearest.segment.index;
+          }
+        }
+      }
+      if (worstDist > tol && !hiddenSet.has(worstWallIdx)) {
+        issues.push({
+          partId: p.id,
+          partName: p.name,
+          kind: 'wall_out',
+          message: `„${p.name}” wchodzi w ścianę (${worstWallLabel}) o ${Math.round(worstDist)} mm.`,
+        });
+      }
+    } else {
+      if (room.showLeftWall && b.minX < -halfW - tol) {
+        issues.push({
+          partId: p.id,
+          partName: p.name,
+          kind: 'wall_out',
+          message: `„${p.name}” wchodzi w lewą ścianę wnęki o ${Math.round(-halfW - b.minX)} mm.`,
+        });
+      }
+      if (room.showRightWall && b.maxX > halfW + tol) {
+        issues.push({
+          partId: p.id,
+          partName: p.name,
+          kind: 'wall_out',
+          message: `„${p.name}” wchodzi w prawą ścianę wnęki o ${Math.round(b.maxX - halfW)} mm.`,
+        });
+      }
+      if (room.showBackWall && b.minZ < room.backWallZMm - tol) {
+        issues.push({
+          partId: p.id,
+          partName: p.name,
+          kind: 'wall_out',
+          message: `„${p.name}” przekracza tylną ścianę o ${Math.round(room.backWallZMm - b.minZ)} mm.`,
+        });
+      }
     }
-    if (room.showRightWall && b.maxX > halfW + tol) {
-      issues.push({
-        partId: p.id,
-        partName: p.name,
-        kind: 'wall_out',
-        message: `„${p.name}” wchodzi w prawą ścianę wnęki o ${Math.round(b.maxX - halfW)} mm.`,
-      });
-    }
-    if (room.showBackWall && b.minZ < room.backWallZMm - tol) {
-      issues.push({
-        partId: p.id,
-        partName: p.name,
-        kind: 'wall_out',
-        message: `„${p.name}” przekracza tylną ścianę o ${Math.round(room.backWallZMm - b.minZ)} mm.`,
-      });
-    }
+
     if (b.maxY > room.heightMm + tol) {
       issues.push({
         partId: p.id,
@@ -2314,7 +2370,6 @@ export function auditRoomClearances(
       const checkXs = [b.minX, (b.minX + b.maxX) / 2, b.maxX];
       for (const cx of checkXs) {
         const ceilAtX = getRoomCeilingHeightAtX(cx, room);
-        // For sloped/rotated parts verify actual solid top point at cx rather than raw AABB corner
         const testY = b.maxY;
         if (testY > ceilAtX + tol) {
           const probe = new THREE.Vector3(cx, ceilAtX + tol + 2, (b.minZ + b.maxZ) / 2);
@@ -2331,7 +2386,7 @@ export function auditRoomClearances(
       }
     }
 
-    for (const { obs, box: ob } of obstacleBoxes) {
+    for (const { label, box: ob } of obstacleBoxes) {
       const ox = Math.min(b.maxX, ob.maxX) - Math.max(b.minX, ob.minX);
       const oy = Math.min(b.maxY, ob.maxY) - Math.max(b.minY, ob.minY);
       const oz = Math.min(b.maxZ, ob.maxZ) - Math.max(b.minZ, ob.minZ);
@@ -2340,7 +2395,21 @@ export function auditRoomClearances(
           partId: p.id,
           partName: p.name,
           kind: 'obstacle_hit',
-          message: `„${p.name}” zasłania / koliduje z przeszkodą: ${obs.label}.`,
+          message: `„${p.name}” zasłania / koliduje z przeszkodą: ${label}.`,
+        });
+      }
+    }
+
+    for (const { op, box: db } of roomDoorZones) {
+      const ox = Math.min(b.maxX, db.maxX) - Math.max(b.minX, db.minX);
+      const oy = Math.min(b.maxY, db.maxY) - Math.max(b.minY, db.minY);
+      const oz = Math.min(b.maxZ, db.maxZ) - Math.max(b.minZ, db.minZ);
+      if (ox > 15 && oy > 15 && oz > 15) {
+        issues.push({
+          partId: p.id,
+          partName: p.name,
+          kind: 'obstacle_hit',
+          message: `„${p.name}” wchodzi w strefę otwierania drzwi pomieszczenia (${op.label}).`,
         });
       }
     }
@@ -2377,12 +2446,24 @@ export function analyzeDoorSwingCollisions(
     boxMap.set(p.id, getPartWorldBox(p));
   }
 
-  const obstacleBoxes =
+  const hasCustomPolygon = Boolean(room?.enabled && room.floorPoints && room.floorPoints.length >= 3);
+  const polyPts = room && room.enabled ? getRoomPolygonPoints(room) : [];
+  const wallSegments = room && room.enabled ? computeWallSegments(polyPts) : [];
+
+  const obstacleBoxes: Array<{ label: string; box: WorldBox }> =
     room && room.enabled
-      ? room.obstacles.map((obs) => ({
-          obs,
-          box: getRoomObstacleWorldBox(obs, room),
-        }))
+      ? [
+          ...room.obstacles.map((obs) => ({
+            label: obs.label,
+            box: getRoomObstacleWorldBox(obs, room),
+          })),
+          ...(room.wallObstacles ?? [])
+            .map((wobs) => ({
+              label: wobs.label,
+              box: getWallObstacleWorldBox(wobs, wallSegments),
+            }))
+            .filter((x): x is { label: string; box: WorldBox } => x.box !== null),
+        ]
       : [];
 
   for (const door of parts) {
@@ -2452,28 +2533,44 @@ export function analyzeDoorSwingCollisions(
 
         // 1. Check Room Walls & Ceiling / Attic Slope
         if (room && room.enabled) {
-          const halfRoomW = room.widthMm / 2;
-          if (room.showLeftWall && worldPt.x < -halfRoomW + 4) {
-            foundHit = {
-              doorId: door.id,
-              doorName: door.name,
-              hitAngleDeg: deg,
-              hitKind: 'wall',
-              hitLabel: 'Lewa ściana wnęki',
-              recommendation: `Front uderza w lewą ścianę przy ~${deg}° — dodaj blendę przyścienną min. 45 mm lub ogranicznik kąta 86°.`,
-            };
-            break;
-          }
-          if (room.showRightWall && worldPt.x > halfRoomW - 4) {
-            foundHit = {
-              doorId: door.id,
-              doorName: door.name,
-              hitAngleDeg: deg,
-              hitKind: 'wall',
-              hitLabel: 'Prawa ściana wnęki',
-              recommendation: `Front uderza w prawą ścianę przy ~${deg}° — dodaj blendę przyścienną min. 45 mm lub ogranicznik kąta 86°.`,
-            };
-            break;
+          if (hasCustomPolygon) {
+            if (!pointInPolygonXZ(worldPt.x, worldPt.z, polyPts, 0)) {
+              const nearest = findNearestWallSegment(worldPt.x, worldPt.z, wallSegments);
+              const wallName = nearest ? nearest.segment.label : 'Ściana pomieszczenia';
+              foundHit = {
+                doorId: door.id,
+                doorName: door.name,
+                hitAngleDeg: deg,
+                hitKind: 'wall',
+                hitLabel: wallName,
+                recommendation: `Front uderza w ścianę (${wallName}) przy ~${deg}° — dodaj blendę przyścienną min. 45 mm lub ogranicznik kąta 86°.`,
+              };
+              break;
+            }
+          } else {
+            const halfRoomW = room.widthMm / 2;
+            if (room.showLeftWall && worldPt.x < -halfRoomW + 4) {
+              foundHit = {
+                doorId: door.id,
+                doorName: door.name,
+                hitAngleDeg: deg,
+                hitKind: 'wall',
+                hitLabel: 'Lewa ściana wnęki',
+                recommendation: `Front uderza w lewą ścianę przy ~${deg}° — dodaj blendę przyścienną min. 45 mm lub ogranicznik kąta 86°.`,
+              };
+              break;
+            }
+            if (room.showRightWall && worldPt.x > halfRoomW - 4) {
+              foundHit = {
+                doorId: door.id,
+                doorName: door.name,
+                hitAngleDeg: deg,
+                hitKind: 'wall',
+                hitLabel: 'Prawa ściana wnęki',
+                recommendation: `Front uderza w prawą ścianę przy ~${deg}° — dodaj blendę przyścienną min. 45 mm lub ogranicznik kąta 86°.`,
+              };
+              break;
+            }
           }
           const ceilY = getRoomCeilingHeightAtX(worldPt.x, room);
           if (worldPt.y > ceilY - 5) {
@@ -2488,8 +2585,8 @@ export function analyzeDoorSwingCollisions(
             break;
           }
 
-          // 2. Check Room Obstacles (radiator, window, pipe)
-          for (const { obs, box: ob } of obstacleBoxes) {
+          // 2. Check Room Obstacles (radiator, window, pipe, wallObstacles)
+          for (const { label, box: ob } of obstacleBoxes) {
             if (
               worldPt.x >= ob.minX - 4 &&
               worldPt.x <= ob.maxX + 4 &&
@@ -2503,8 +2600,8 @@ export function analyzeDoorSwingCollisions(
                 doorName: door.name,
                 hitAngleDeg: deg,
                 hitKind: 'obstacle',
-                hitLabel: obs.label,
-                recommendation: `Front koliduje przy ~${deg}° z „${obs.label}” — zastosuj blendę dystansową, odwróć stronę zawiasów lub ogranicznik kąta.`,
+                hitLabel: label,
+                recommendation: `Front koliduje przy ~${deg}° z „${label}” — zastosuj blendę dystansową, odwróć stronę zawiasów lub ogranicznik kąta.`,
               };
               break;
             }

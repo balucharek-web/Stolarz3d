@@ -9,6 +9,40 @@ export default defineConfig(({command}) => {
   return {
     base: command === 'build' ? './' : '/',
     plugins: [
+      {
+        name: 'cleanup-stale-dev-pwa-sw',
+        apply: 'serve',
+        configureServer(server) {
+          server.middlewares.use((req, res, next) => {
+            const rawUrl = req.url ?? '';
+            const pathname = rawUrl.split('?')[0];
+            if (pathname === '/@vite-plugin-pwa/pwa-entry-point-loaded') {
+              res.statusCode = 200;
+              res.setHeader('Content-Type', 'application/javascript; charset=utf-8');
+              res.setHeader('Cache-Control', 'no-store');
+              res.end('export default function registerDevSW() {}\n');
+              return;
+            }
+            if (pathname === '/dev-sw.js') {
+              res.statusCode = 200;
+              res.setHeader('Content-Type', 'application/javascript; charset=utf-8');
+              res.setHeader('Cache-Control', 'no-store');
+              res.end(
+                `self.addEventListener('install', () => self.skipWaiting());\n` +
+                  `self.addEventListener('activate', (event) => {\n` +
+                  `  event.waitUntil((async () => {\n` +
+                  `    const keys = await caches.keys();\n` +
+                  `    await Promise.all(keys.map((k) => caches.delete(k)));\n` +
+                  `    await self.registration.unregister();\n` +
+                  `  })());\n` +
+                  `});\n`
+              );
+              return;
+            }
+            next();
+          });
+        },
+      },
       react(),
       tailwindcss(),
       VitePWA({
@@ -93,7 +127,10 @@ export default defineConfig(({command}) => {
           ],
         },
         devOptions: {
-          enabled: process.env.DISABLE_HMR !== 'true',
+          // Disabled in Vite 8 dev server to prevent SendBeforeConnectError from
+          // vite-plugin-pwa's registerDevSW calling import.meta.hot.send before WS connect.
+          // Production builds (npm run build) generate full manifest.webmanifest & sw.js.
+          enabled: false,
           type: 'module',
         },
       }),
