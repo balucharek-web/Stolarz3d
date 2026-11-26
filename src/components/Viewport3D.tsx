@@ -462,7 +462,7 @@ export const Viewport3D = forwardRef<Viewport3DHandle, Viewport3DProps>(
       partExplodeDir: Map<string, THREE.Vector3>;
       partOpenMeta: Map<
         string,
-        | { kind: 'door'; localPivot: THREE.Vector3; maxAngleRad: number }
+        | { kind: 'door'; axis: 'x' | 'y'; localPivot: THREE.Vector3; maxAngleRad: number }
         | { kind: 'drawer'; slideDistM: number }
         | { kind: 'sliding'; slideDistM: number }
       >;
@@ -854,7 +854,7 @@ export const Viewport3D = forwardRef<Viewport3DHandle, Viewport3DProps>(
       const partBaseQuat = new Map<string, THREE.Quaternion>();
       const partOpenMeta = new Map<
         string,
-        | { kind: 'door'; localPivot: THREE.Vector3; maxAngleRad: number }
+        | { kind: 'door'; axis: 'x' | 'y'; localPivot: THREE.Vector3; maxAngleRad: number }
         | { kind: 'drawer'; slideDistM: number }
         | { kind: 'sliding'; slideDistM: number }
       >();
@@ -900,7 +900,8 @@ export const Viewport3D = forwardRef<Viewport3DHandle, Viewport3DProps>(
           if (meta && opnAmt > 0.0005) {
             if (meta.kind === 'door') {
               const angle = meta.maxAngleRad * opnAmt;
-              const worldAxis = _vec3B.copy(_upVec).applyQuaternion(baseQ).normalize();
+              const localAxis = meta.axis === 'x' ? _vec3B.set(1, 0, 0) : _vec3B.copy(_upVec);
+              const worldAxis = localAxis.applyQuaternion(baseQ).normalize();
               _quatA.setFromAxisAngle(worldAxis, angle);
               const worldPivot = _vec3C.copy(meta.localPivot).applyQuaternion(baseQ).add(_vec3A);
               node.position.copy(_vec3A).sub(worldPivot).applyQuaternion(_quatA).add(worldPivot);
@@ -2207,7 +2208,17 @@ export const Viewport3D = forwardRef<Viewport3DHandle, Viewport3DProps>(
         addWallBox(wallT, hM, dM, maxX + wallT / 2, hM / 2, centerZ, 0.2);
       }
       if (room.showCeiling) {
-        addWallBox(wM, wallT, dM, 0, hM + wallT / 2, centerZ, 0.16);
+        if (room.slopedCeiling?.enabled) {
+          const slopeW = Math.min(room.widthMm, Math.max(200, room.slopedCeiling.slopeWidthMm)) * MM_TO_M;
+          const flatW = Math.max(0.05, wM - slopeW);
+          if (flatW > 0.08) {
+            const isRight = room.slopedCeiling.side === 'right';
+            const flatCx = isRight ? minX + flatW / 2 : maxX - flatW / 2;
+            addWallBox(flatW, wallT, dM, flatCx, hM + wallT / 2, centerZ, 0.16);
+          }
+        } else {
+          addWallBox(wM, wallT, dM, 0, hM + wallT / 2, centerZ, 0.16);
+        }
       }
 
       // Sloped attic ceiling plane
@@ -2390,19 +2401,31 @@ export const Viewport3D = forwardRef<Viewport3DHandle, Viewport3DProps>(
             slideDistM: 0.34,
           });
         } else if (part.kind === 'door') {
-          const hingeSide =
-            part.hingeSide === 'left' || part.hingeSide === 'right'
-              ? part.hingeSide
-              : part.handleSide === 'left'
-                ? 'right'
-                : 'left';
-          const pivotX = (hingeSide === 'left' ? -part.width * 0.5 : part.width * 0.5) * MM_TO_M;
-          const pivotZ = -part.depth * 0.5 * MM_TO_M;
-          rt.partOpenMeta.set(part.id, {
-            kind: 'door',
-            localPivot: new THREE.Vector3(pivotX, 0, pivotZ),
-            maxAngleRad: hingeSide === 'left' ? -THREE.MathUtils.degToRad(102) : THREE.MathUtils.degToRad(102),
-          });
+          if (part.hingeSide === 'top') {
+            const pivotY = part.height * 0.5 * MM_TO_M;
+            const pivotZ = -part.depth * 0.5 * MM_TO_M;
+            rt.partOpenMeta.set(part.id, {
+              kind: 'door',
+              axis: 'x',
+              localPivot: new THREE.Vector3(0, pivotY, pivotZ),
+              maxAngleRad: -THREE.MathUtils.degToRad(88),
+            });
+          } else {
+            const hingeSide =
+              part.hingeSide === 'left' || part.hingeSide === 'right'
+                ? part.hingeSide
+                : part.handleSide === 'left'
+                  ? 'right'
+                  : 'left';
+            const pivotX = (hingeSide === 'left' ? -part.width * 0.5 : part.width * 0.5) * MM_TO_M;
+            const pivotZ = -part.depth * 0.5 * MM_TO_M;
+            rt.partOpenMeta.set(part.id, {
+              kind: 'door',
+              axis: 'y',
+              localPivot: new THREE.Vector3(pivotX, 0, pivotZ),
+              maxAngleRad: hingeSide === 'left' ? -THREE.MathUtils.degToRad(102) : THREE.MathUtils.degToRad(102),
+            });
+          }
         }
 
         group.position.copy(basePos);

@@ -1814,6 +1814,7 @@ export default function App() {
 
       <RoomSettingsModal
         open={roomModalOpen}
+        parts={project.parts}
         room={project.room}
         roomIssues={roomIssues}
         onClose={() => setRoomModalOpen(false)}

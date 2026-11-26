@@ -143,18 +143,24 @@ export function getCarpentryCutSpec(part: FurniturePart): CarpentryCutSpec {
     facePrimary = Math.round(part.width);
     faceSecondary = Math.round(part.height);
   } else {
-    // Pick thinnest dimension as board thickness
+    // Pick thinnest dimension as board thickness — MUST match applyBoxPlanarUVs in geometry.ts!
     const sorted = [...dims].sort((a, b) => a.val - b.val);
+    const thinAxis = sorted[0].axis;
     thicknessMm = sorted[0].val;
-    const faceAxes = dims.filter((d) => d.axis !== sorted[0].axis);
-    // Natural UV U-direction runs along X (if present), else Z (for side panels where X is thickness)
-    const firstFace = faceAxes[0];
-    const secondFace = faceAxes[1];
-    // For horizontal boards (thickness = Y): faceAxes = [X, Z] -> grain runs along X
-    // For front/back panels (thickness = Z): faceAxes = [X, Y] -> grain runs along X
-    // For vertical side panels (thickness = X): faceAxes = [Y, Z] -> grain runs vertically along Y
-    facePrimary = firstFace.val;
-    faceSecondary = secondFace.val;
+    if (thinAxis === 'x') {
+      // Vertical side panels (thickness = X): in 3D UV mapping u = Z (depth), v = Y (height).
+      // So natural grain (grainRotated = false) runs along Z, and grainRotated = true rotates grain vertically along Y!
+      facePrimary = Math.round(part.depth);
+      faceSecondary = Math.round(part.height);
+    } else if (thinAxis === 'y') {
+      // Horizontal boards (thickness = Y): u = X (width), v = Z (depth)
+      facePrimary = Math.round(part.width);
+      faceSecondary = Math.round(part.depth);
+    } else {
+      // Front/back panels (thickness = Z): u = X (width), v = Y (height)
+      facePrimary = Math.round(part.width);
+      faceSecondary = Math.round(part.height);
+    }
   }
 
   const grainLenMm = part.grainRotated ? faceSecondary : facePrimary;
@@ -242,15 +248,16 @@ interface SheetBuilder {
 function createSheetBuilder(
   sheetWidthMm: number,
   sheetHeightMm: number,
-  trimMm: number
+  trimXMm: number,
+  trimYMm: number = trimXMm
 ): SheetBuilder {
-  const usableW = Math.max(100, sheetWidthMm - trimMm * 2);
-  const usableH = Math.max(100, sheetHeightMm - trimMm * 2);
+  const usableW = Math.max(100, sheetWidthMm - trimXMm * 2);
+  const usableH = Math.max(100, sheetHeightMm - trimYMm * 2);
   return {
     sheetWidthMm,
     sheetHeightMm,
-    trimMm,
-    freeRects: [{ x: trimMm, y: trimMm, w: usableW, h: usableH }],
+    trimMm: trimXMm,
+    freeRects: [{ x: trimXMm, y: trimYMm, w: usableW, h: usableH }],
     placements: [],
   };
 }
@@ -359,6 +366,15 @@ export function nestMaterialSheets(
   kerfMm = 4,
   trimMm = 10
 ): MaterialNestingResult[] {
+  // Global 1-based part index matching CutListModal, PDF, DXF, and Board Labels
+  const globalIndexByPartId = new Map<string, number>();
+  let runningIdx = 0;
+  for (const p of parts) {
+    if (p.kind === 'appliance') continue;
+    runningIdx += 1;
+    globalIndexByPartId.set(p.id, runningIdx);
+  }
+
   const byGroup = new Map<
     string,
     { materialId: MaterialId; thicknessMm: number; specs: CarpentryCutSpec[] }
@@ -386,10 +402,17 @@ export function nestMaterialSheets(
     const sheetH = meta.sheetHeightMm;
     const grainLocked = isMaterialGrainDirectional(materialId);
     const allowRotation = !grainLocked;
+    // Factory postformed countertops (600 mm standard depth) are only trimmed along length, never depth
+    const isCountertopStock = meta.category === 'Blaty';
+    const trimXMm = trimMm;
+    const trimYMm = isCountertopStock ? 0 : trimMm;
 
     // Sort largest side first, then area descending for tightest guillotine packing
     const sorted = specs
-      .map((s, idx) => ({ spec: s, labelIndex: idx + 1 }))
+      .map((s, idx) => ({
+        spec: s,
+        labelIndex: globalIndexByPartId.get(s.partId) ?? idx + 1,
+      }))
       .sort((a, b) => {
         const maxA = Math.max(a.spec.sawLenMm, a.spec.sawWidMm);
         const maxB = Math.max(b.spec.sawLenMm, b.spec.sawWidMm);
@@ -398,8 +421,8 @@ export function nestMaterialSheets(
       });
 
     const builders: SheetBuilder[] = [];
-    const usableW = Math.max(100, sheetW - trimMm * 2);
-    const usableH = Math.max(100, sheetH - trimMm * 2);
+    const usableW = Math.max(100, sheetW - trimXMm * 2);
+    const usableH = Math.max(100, sheetH - trimYMm * 2);
 
     for (const item of sorted) {
       const { spec, labelIndex } = item;
@@ -429,7 +452,7 @@ export function nestMaterialSheets(
       }
 
       if (!placed) {
-        const fresh = createSheetBuilder(sheetW, sheetH, trimMm);
+        const fresh = createSheetBuilder(sheetW, sheetH, trimXMm, trimYMm);
         const frBefore = [...fresh.freeRects];
         const hit = tryPlaceOnSheet(fresh, w, h, allowRotation, kerfMm);
         if (hit) {
@@ -451,8 +474,8 @@ export function nestMaterialSheets(
             partId: spec.partId,
             partName: spec.partName,
             labelIndex,
-            xMm: trimMm,
-            yMm: trimMm,
+            xMm: trimXMm,
+            yMm: trimYMm,
             wMm: Math.min(w, usableW),
             hMm: Math.min(h, usableH),
             rotated: false,
@@ -527,13 +550,21 @@ export function nestLinearProfiles(
   kerfMm = 3,
   endTrimMm = 20
 ): MaterialLinearResult[] {
+  const globalIndexByPartId = new Map<string, number>();
+  let runningIdx = 0;
+  for (const p of parts) {
+    if (p.kind === 'appliance') continue;
+    runningIdx += 1;
+    globalIndexByPartId.set(p.id, runningIdx);
+  }
+
   const groups = new Map<
     string,
     {
       materialId: MaterialId;
       secW: number;
       secD: number;
-      items: Array<{ partId: string; partName: string; lengthMm: number }>;
+      items: Array<{ partId: string; partName: string; lengthMm: number; labelIndex: number }>;
     }
   >();
 
@@ -552,7 +583,12 @@ export function nestLinearProfiles(
       secD,
       items: [],
     };
-    bucket.items.push({ partId: p.id, partName: p.name, lengthMm });
+    bucket.items.push({
+      partId: p.id,
+      partName: p.name,
+      lengthMm,
+      labelIndex: globalIndexByPartId.get(p.id) ?? bucket.items.length + 1,
+    });
     groups.set(key, bucket);
   }
 
@@ -571,9 +607,7 @@ export function nestLinearProfiles(
     const usableLen = Math.max(200, stockLengthMm - endTrimMm * 2);
 
     // Sort longest pieces first for Best-Fit-Decreasing 1D bin packing
-    const sorted = g.items
-      .map((it, idx) => ({ ...it, labelIndex: idx + 1 }))
-      .sort((a, b) => b.lengthMm - a.lengthMm);
+    const sorted = [...g.items].sort((a, b) => b.lengthMm - a.lengthMm);
 
     const openBars: Array<{
       cursorMm: number;

@@ -17,7 +17,8 @@ export type CabinetPresetId =
   | 'wall_cabinet'
   | 'wardrobe'
   | 'sliding_wardrobe'
-  | 'tv_console';
+  | 'tv_console'
+  | 'steel_rack';
 
 export interface ParametricCabinetConfig {
   name: string;
@@ -188,7 +189,7 @@ export const CABINET_PRESETS: Record<
       elevationYmm: 1420,
       plinthStyle: 'none',
       topType: 'full_panel',
-      verticalDividers: 0,
+      verticalDividers: 1,
       shelfCount: 2,
       drawerCount: 0,
       doorMode: 'double',
@@ -260,7 +261,7 @@ export const CABINET_PRESETS: Record<
       elevationYmm: 0,
       plinthStyle: 'plinth_board',
       topType: 'full_panel',
-      verticalDividers: 1,
+      verticalDividers: 2,
       shelfCount: 4,
       drawerCount: 0,
       doorMode: 'double',
@@ -296,7 +297,7 @@ export const CABINET_PRESETS: Record<
       elevationYmm: 0,
       plinthStyle: 'legs',
       topType: 'full_panel',
-      verticalDividers: 0,
+      verticalDividers: 1,
       shelfCount: 0,
       drawerCount: 2,
       doorMode: 'none',
@@ -316,6 +317,42 @@ export const CABINET_PRESETS: Record<
       countertopMaterialId: 'walnut',
       autoFasteners: true,
       fastenerType: 'minifix_15',
+    },
+  },
+  steel_rack: {
+    label: 'Regał stal + OSB/drewno',
+    desc: '1500 × 1900 × 500 mm · Profile stalowe 40×40, półki 22 mm, śruby M8',
+    config: {
+      name: 'Regał stalowy 150',
+      preset: 'steel_rack',
+      widthMm: 1500,
+      heightMm: 1900,
+      depthMm: 500,
+      boardThicknessMm: 22,
+      plinthHeightMm: 100,
+      elevationYmm: 0,
+      plinthStyle: 'none',
+      topType: 'full_panel',
+      verticalDividers: 1,
+      shelfCount: 4,
+      drawerCount: 0,
+      doorMode: 'none',
+      frontType: 'overlay',
+      frontGapMm: 3,
+      handleStyle: 'bar',
+      backType: 'none',
+      slideType: 'none',
+      wallFillerSide: 'none',
+      wallFillerWidthMm: 45,
+      system32Holes: false,
+      addWardrobeRod: false,
+      corpusMaterialId: 'osb3',
+      frontMaterialId: 'steel_black',
+      frontFinish: 'matte',
+      addCountertop: false,
+      countertopMaterialId: 'osb3',
+      autoFasteners: true,
+      fastenerType: 'bolt_m8',
     },
   },
 };
@@ -353,7 +390,6 @@ export function buildParametricCabinet(
   const baseY = Math.max(0, Math.round(cfg.elevationYmm));
   const bodyH = Math.max(160, H - plinthH);
   const innerW = Math.max(120, W - 2 * t);
-  const innerH = Math.max(100, bodyH - 2 * t);
   const gap = Math.max(1, Math.min(6, Math.round(cfg.frontGapMm)));
   const isSliding = cfg.preset === 'sliding_wardrobe';
   const isCorner = cfg.preset === 'corner_l';
@@ -362,8 +398,129 @@ export function buildParametricCabinet(
   const rawDividersCount = isCorner
     ? 0
     : (Math.max(0, Math.min(2, Math.round(cfg.verticalDividers ?? 0))) as 0 | 1 | 2);
+  const effectiveDrawerCount =
+    isSliding || isCorner ? 0 : Math.max(0, Math.min(6, Math.round(cfg.drawerCount)));
+  const hasUpperZoneContent =
+    cfg.shelfCount > 0 || Boolean(cfg.addWardrobeRod) || cfg.doorMode !== 'none';
+  const isHybridCabinet = effectiveDrawerCount > 0 && hasUpperZoneContent && bodyH >= 900;
+  // Wide commodes & RTV consoles (bay clear span >= 750 mm) use a reinforced 28 mm top deck so it never sags under load
+  const topBayClearSpan = Math.floor((innerW - rawDividersCount * t) / (rawDividersCount + 1));
+  const topDeckT =
+    !isHybridCabinet &&
+    effectiveDrawerCount > 0 &&
+    topType === 'full_panel' &&
+    topBayClearSpan >= 750
+      ? Math.max(t, 28)
+      : t;
+  const innerH = Math.max(100, bodyH - t - topDeckT);
 
   const groupId = `${cfg.name.trim() || 'Szafka'} #${Math.floor(10 + Math.random() * 89)}`;
+
+  // Dedicated Industrial Steel-Frame + Wood/OSB Rack Generator
+  if (cfg.preset === 'steel_rack') {
+    const postSize = 40;
+    const bayCount = (Math.max(0, Math.min(2, Math.round(cfg.verticalDividers ?? 1))) + 1) as 1 | 2 | 3;
+    const postPairs = bayCount + 1;
+    const totalClearW = Math.max(200 * bayCount, W - postPairs * postSize);
+    const bayW = Math.floor(totalClearW / bayCount);
+    const actualW = postPairs * postSize + bayCount * bayW;
+    const steelMat: MaterialId =
+      cfg.frontMaterialId === 'steel_galv' || cfg.frontMaterialId === 'steel_black'
+        ? cfg.frontMaterialId
+        : 'steel_black';
+    const postFrontZ = offsetZmm + D / 2 - postSize / 2;
+    const postBackZ = offsetZmm - D / 2 + postSize / 2;
+
+    // 1. Vertical steel corner & intermediate posts (front + back pairs)
+    for (let p = 0; p < postPairs; p++) {
+      const px = Math.round(offsetXmm - actualW / 2 + postSize / 2 + p * (bayW + postSize));
+      const label =
+        p === 0 ? 'lewy' : p === postPairs - 1 ? 'prawy' : `środek ${p}`;
+      parts.push(
+        {
+          id: uid(`rack_post_f_${p + 1}`),
+          name: `${cfg.name} — Słupek stalowy ${label} przód`,
+          kind: 'profile',
+          materialId: steelMat,
+          width: postSize,
+          height: H,
+          depth: postSize,
+          position: [px, baseY + H / 2, postFrontZ],
+          rotation: [0, 0, 0],
+          groupId,
+        },
+        {
+          id: uid(`rack_post_b_${p + 1}`),
+          name: `${cfg.name} — Słupek stalowy ${label} tył`,
+          kind: 'profile',
+          materialId: steelMat,
+          width: postSize,
+          height: H,
+          depth: postSize,
+          position: [px, baseY + H / 2, postBackZ],
+          rotation: [0, 0, 0],
+          groupId,
+        }
+      );
+    }
+
+    // 2. Shelves across each bay (bottom deck + top deck + cfg.shelfCount intermediate shelves, or min 2 levels)
+    const totalLevels = Math.max(2, Math.min(8, Math.round(cfg.shelfCount) + 1));
+    const bottomShelfY = baseY + Math.max(80, Math.min(200, Math.round(cfg.plinthHeightMm || 100))) + t / 2;
+    const topShelfY = baseY + H - t / 2;
+    const levelSpan = Math.max(120, topShelfY - bottomShelfY);
+
+    for (let b = 0; b < bayCount; b++) {
+      const bx = Math.round(
+        offsetXmm - actualW / 2 + postSize + b * (bayW + postSize) + bayW / 2
+      );
+      for (let lv = 0; lv < totalLevels; lv++) {
+        const sy =
+          totalLevels === 1
+            ? bottomShelfY
+            : Math.round(bottomShelfY + (lv / (totalLevels - 1)) * levelSpan);
+        parts.push({
+          id: uid(`rack_shelf_${b + 1}_${lv + 1}`),
+          name:
+            bayCount > 1
+              ? `${cfg.name} — Półka ${b + 1}.${lv + 1}`
+              : `${cfg.name} — Półka ${lv + 1}`,
+          kind: 'panel',
+          materialId: cfg.corpusMaterialId,
+          width: bayW,
+          height: t,
+          depth: D,
+          position: [bx, sy, offsetZmm],
+          rotation: [0, 0, 0],
+          groupId,
+        });
+      }
+
+      // Optional rear OSB/wood stiffening panel per bay (fits standard sheets cleanly)
+      if (cfg.backType !== 'none') {
+        const backThick = 18;
+        const panelW = bayW + postSize;
+        parts.push({
+          id: uid(`rack_back_${b + 1}`),
+          name: `${cfg.name} — Plecy tylne sekcja ${b + 1}`,
+          kind: 'panel',
+          materialId: cfg.corpusMaterialId,
+          width: panelW,
+          height: H,
+          depth: backThick,
+          position: [bx, baseY + H / 2, offsetZmm - D / 2 - backThick / 2],
+          rotation: [0, 0, 0],
+          groupId,
+        });
+      }
+    }
+
+    const rackFasteners = cfg.autoFasteners
+      ? autoDetectJointFasteners(parts, [], 'bolt_m8')
+      : [];
+    return { parts, fasteners: rackFasteners, groupId };
+  }
+
   const bodyBottomY = baseY + plinthH;
   const bodyCenterY = bodyBottomY + bodyH / 2;
 
@@ -471,9 +628,9 @@ export function buildParametricCabinet(
       kind: 'panel',
       materialId: cfg.corpusMaterialId,
       width: innerW,
-      height: t,
+      height: topDeckT,
       depth: D,
-      position: [offsetXmm, bodyBottomY + bodyH - t / 2, offsetZmm],
+      position: [offsetXmm, bodyBottomY + bodyH - topDeckT / 2, offsetZmm],
       rotation: [0, 0, 0],
       edgeBanding: frontEdge2mm,
       dadoGroove: backGroove,
@@ -482,35 +639,55 @@ export function buildParametricCabinet(
   }
 
   // 3. Back panel (Dedicated 3 mm white HDF — hdf_white — in dado groove OR nailed behind)
+  // Automatically splits across vertical dividers (H-profile join) when a single HDF panel would exceed a 2800×2070 mm sheet
   const backInsetForInterior = cfg.backType === 'hdf_grooved' ? 20 : 0;
-  if (cfg.backType === 'hdf_grooved') {
-    const hdfW = Math.min(W - 4, innerW + 12);
-    const hdfH = Math.min(bodyH - 4, innerH + 12);
-    parts.push({
-      id: uid('cab_back'),
-      name: `${cfg.name} — Plecy HDF 3mm (w nut)`,
-      kind: 'panel',
-      materialId: 'hdf_white',
-      width: hdfW,
-      height: hdfH,
-      depth: 3,
-      position: [offsetXmm, bodyCenterY, offsetZmm - D / 2 + 16],
-      rotation: [0, 0, 0],
-      groupId,
-    });
-  } else if (cfg.backType === 'hdf_nailed') {
-    parts.push({
-      id: uid('cab_back'),
-      name: `${cfg.name} — Plecy HDF 3mm`,
-      kind: 'panel',
-      materialId: 'hdf_white',
-      width: W - 4,
-      height: bodyH - 4,
-      depth: 3,
-      position: [offsetXmm, bodyCenterY, offsetZmm - D / 2 - 1.5],
-      rotation: [0, 0, 0],
-      groupId,
-    });
+  const dividersForBack = rawDividersCount;
+  if (cfg.backType === 'hdf_grooved' || cfg.backType === 'hdf_nailed') {
+    const isGrooved = cfg.backType === 'hdf_grooved';
+    const totalHdfW = isGrooved ? Math.min(W - 4, innerW + 12) : W - 4;
+    const totalHdfH = isGrooved ? Math.min(bodyH - 4, innerH + 12) : bodyH - 4;
+    const hdfCenterY = isGrooved ? Math.round(bodyBottomY + t + innerH / 2) : bodyCenterY;
+    const hdfZ = isGrooved ? offsetZmm - D / 2 + 16 : offsetZmm - D / 2 - 1.5;
+    const splitBays =
+      dividersForBack > 0 && (totalHdfW > 1800 || Math.min(totalHdfW, totalHdfH) > 2020)
+        ? dividersForBack + 1
+        : 1;
+
+    if (splitBays === 1) {
+      parts.push({
+        id: uid('cab_back'),
+        name: isGrooved ? `${cfg.name} — Plecy HDF 3mm (w nut)` : `${cfg.name} — Plecy HDF 3mm`,
+        kind: 'panel',
+        materialId: 'hdf_white',
+        width: totalHdfW,
+        height: totalHdfH,
+        depth: 3,
+        position: [offsetXmm, hdfCenterY, hdfZ],
+        rotation: [0, 0, 0],
+        groupId,
+      });
+    } else {
+      const hProfileGap = 2;
+      const segW = Math.floor((totalHdfW - (splitBays - 1) * hProfileGap) / splitBays);
+      const startLeftX = offsetXmm - (segW * splitBays + (splitBays - 1) * hProfileGap) / 2;
+      for (let b = 0; b < splitBays; b++) {
+        const segCx = Math.round(startLeftX + b * (segW + hProfileGap) + segW / 2);
+        parts.push({
+          id: uid(`cab_back_${b + 1}`),
+          name: isGrooved
+            ? `${cfg.name} — Plecy HDF 3mm cz. ${b + 1} (w nut)`
+            : `${cfg.name} — Plecy HDF 3mm cz. ${b + 1}`,
+          kind: 'panel',
+          materialId: 'hdf_white',
+          width: segW,
+          height: totalHdfH,
+          depth: 3,
+          position: [segCx, hdfCenterY, hdfZ],
+          rotation: [0, 0, 0],
+          groupId,
+        });
+      }
+    }
   }
 
   // 4. Plinth board or 4 adjustable furniture legs
@@ -550,6 +727,12 @@ export function buildParametricCabinet(
       ['Nóżka TL', -W / 2 + insetX, -D / 2 + insetZ],
       ['Nóżka TP', W / 2 - insetX, -D / 2 + insetZ],
     ];
+    if (W >= 1000) {
+      legCoords.push(
+        ['Nóżka ŚP', 0, D / 2 - insetZ],
+        ['Nóżka ŚT', 0, -D / 2 + insetZ]
+      );
+    }
     for (const [label, lx, lz] of legCoords) {
       parts.push({
         id: uid('cab_leg'),
@@ -605,17 +788,13 @@ export function buildParametricCabinet(
     });
   }
 
-  // Determine hybrid zone split (bottom drawers + upper shelves/rod + upper doors)
-  const effectiveDrawerCount = isSliding || isCorner ? 0 : Math.max(0, Math.min(6, Math.round(cfg.drawerCount)));
-  const hasUpperZoneContent =
-    cfg.shelfCount > 0 || Boolean(cfg.addWardrobeRod) || cfg.doorMode !== 'none';
-  const isHybridCabinet = effectiveDrawerCount > 0 && hasUpperZoneContent && bodyH >= 900;
-
   // Height of bottom drawer zone (in mm inside corpus) vs upper shelf/door zone
   let drawerInteriorZoneH = innerH;
   let upperZoneBottomY = bodyBottomY + t;
   let upperZoneInnerH = innerH;
   let separatorCenterY: number | null = null;
+  // Wide hybrid wardrobes use a reinforced double-thickness separator deck so 1000+ mm spans never sag
+  const separatorT = isHybridCabinet && innerW >= 950 ? Math.max(t, 36) : t;
 
   if (isHybridCabinet) {
     // Bottom ~38-44% reserved for drawers, separated by a full-width horizontal deck
@@ -624,8 +803,8 @@ export function buildParametricCabinet(
       Math.min(Math.round(innerH * 0.42), effectiveDrawerCount * 240)
     );
     drawerInteriorZoneH = Math.min(innerH - 360, rawDrwH);
-    separatorCenterY = Math.round(bodyBottomY + t + drawerInteriorZoneH + t / 2);
-    upperZoneBottomY = separatorCenterY + t / 2;
+    separatorCenterY = Math.round(bodyBottomY + t + drawerInteriorZoneH + separatorT / 2);
+    upperZoneBottomY = separatorCenterY + separatorT / 2;
     upperZoneInnerH = bodyBottomY + bodyH - t - upperZoneBottomY;
   }
 
@@ -647,7 +826,7 @@ export function buildParametricCabinet(
       kind: 'panel',
       materialId: cfg.corpusMaterialId,
       width: innerW,
-      height: t,
+      height: separatorT,
       depth: interiorDepth,
       position: [offsetXmm, separatorCenterY, interiorCenterZ],
       rotation: [0, 0, 0],
@@ -656,9 +835,8 @@ export function buildParametricCabinet(
     });
   }
 
-  // 6. Vertical Dividers (0 / 1 / 2) — spanning full innerH or upper zone if hybrid; skipped if non-hybrid full-width drawers fill cabinet
-  const dividersCount =
-    effectiveDrawerCount > 0 && !isHybridCabinet ? 0 : rawDividersCount;
+  // 6. Vertical Dividers (0 / 1 / 2) — spanning full innerH (or upper zone in hybrid cabinets)
+  const dividersCount = rawDividersCount;
   const bayCount = dividersCount + 1;
   const bayW = Math.floor((innerW - dividersCount * t) / bayCount);
   const bayCentersX: number[] = [];
@@ -735,8 +913,20 @@ export function buildParametricCabinet(
         const slots = cfg.shelfCount + 1;
         const usableH = upperZoneInnerH - cfg.shelfCount * t;
         const clearStep = usableH / slots;
+        let prevTopY = upperZoneBottomY;
+        const cornerSupportX = isCorner
+          ? Math.round(
+              offsetXmm -
+                W / 2 +
+                Math.max(
+                  260,
+                  Math.min(W - 320, Math.round(cfg.cornerBlindWidthMm ?? Math.round(W * 0.52)))
+                ) -
+                27
+            )
+          : null;
         for (let i = 0; i < cfg.shelfCount; i++) {
-          const sy = upperZoneBottomY + clearStep * (i + 1) + t * i + t / 2;
+          const sy = Math.round(upperZoneBottomY + clearStep * (i + 1) + t * i + t / 2);
           parts.push({
             id: uid(`cab_shelf_${b + 1}_${i + 1}`),
             name:
@@ -748,11 +938,35 @@ export function buildParametricCabinet(
             width: bayW,
             height: t,
             depth: interiorDepth,
-            position: [bx, Math.round(sy), interiorCenterZ],
+            position: [bx, sy, interiorCenterZ],
             rotation: [0, 0, 0],
             edgeBanding: frontEdge2mm,
             groupId,
           });
+          // Blind-corner cabinets >850 mm wide need a front support stile under the shelf so it doesn't sag
+          if (isCorner && cornerSupportX !== null && bayW >= 800) {
+            const stileH = Math.max(40, Math.round(sy - t / 2 - prevTopY));
+            const stileDepth = Math.min(80, Math.max(50, Math.round(interiorDepth * 0.2)));
+            parts.push({
+              id: uid(`cab_corner_stile_${i + 1}`),
+              name: `${cfg.name} — Słupek wsporczy półki ${i + 1}`,
+              kind: 'panel',
+              materialId: cfg.corpusMaterialId,
+              width: t,
+              height: stileH,
+              depth: stileDepth,
+              position: [
+                cornerSupportX,
+                Math.round(prevTopY + stileH / 2),
+                Math.round(interiorCenterZ + interiorDepth / 2 - stileDepth / 2),
+              ],
+              rotation: [0, 0, 0],
+              grainRotated: true,
+              edgeBanding: frontEdge2mm,
+              groupId,
+            });
+          }
+          prevTopY = sy + t / 2;
         }
       }
     }
@@ -761,184 +975,222 @@ export function buildParametricCabinet(
   // 8. Full Multi-Part Drawers (with exact Blum/GTV −10 mm + recessed grooved HDF bottom +13 mm OR Ball −26 mm)
   let topDrawerFrontTopY: number | null = null;
   if (effectiveDrawerCount > 0) {
-    const dCount = effectiveDrawerCount;
+    const drawerCols = !isHybridCabinet && dividersCount > 0 ? bayCount : 1;
+    const rowsPerCol = Math.max(1, Math.round(effectiveDrawerCount / drawerCols));
     const isUndermount = cfg.slideType === 'undermount_blum';
     const slideClearanceTotal = isUndermount
       ? 10
       : cfg.slideType === 'ball_26mm'
         ? 26
         : 14;
-    const boxOuterW = Math.max(100, innerW - slideClearanceTotal);
     const boxThickness = 16;
-    const boxInnerW = Math.max(60, boxOuterW - 2 * boxThickness);
-    const boxDepth = Math.max(150, Math.min(500, D - backInsetForInterior - 36));
-    const boxCenterZ = Math.round(
-      offsetZmm + D / 2 - boxDepth / 2 - (cfg.frontType === 'inset' ? t + 6 : 8)
+    const frontZ =
+      cfg.frontType === 'overlay'
+        ? offsetZmm + D / 2 + t / 2 + 1
+        : offsetZmm + D / 2 - t / 2 - 1;
+    // Drawer box front sits flush 1 mm behind the inner face of the drawer front (no 9 mm air gap!)
+    const frontInnerFaceZ = frontZ - t / 2;
+    const maxBoxDepth = Math.max(
+      150,
+      Math.floor(frontInnerFaceZ - 1 - (offsetZmm - D / 2 + backInsetForInterior + 14))
     );
+    const boxDepth = Math.min(500, maxBoxDepth);
+    const boxCenterZ = Math.round((frontInnerFaceZ - 1 - boxDepth / 2) * 10) / 10;
 
     const drawerZoneExternalH = isHybridCabinet
-      ? drawerInteriorZoneH + t + t / 2 - gap
+      ? cfg.frontType === 'overlay'
+        ? drawerInteriorZoneH + t + separatorT / 2 - gap
+        : drawerInteriorZoneH - gap
       : cfg.frontType === 'overlay'
         ? bodyH - gap
         : innerH - gap;
     const eachFrontH = Math.max(
       80,
-      Math.floor((drawerZoneExternalH - (dCount - 1) * gap) / dCount)
+      Math.floor((drawerZoneExternalH - (rowsPerCol - 1) * gap) / rowsPerCol)
     );
-    const frontW = cfg.frontType === 'overlay' ? W - gap : innerW - gap * 2;
-    const frontZ =
-      cfg.frontType === 'overlay'
-        ? offsetZmm + D / 2 + t / 2 + 1
-        : offsetZmm + D / 2 - t / 2 - 1;
-    const boxH = Math.max(68, Math.min(eachFrontH - 36, 175));
+    const drawerZoneCeilingY =
+      isHybridCabinet && separatorCenterY !== null
+        ? separatorCenterY - separatorT / 2
+        : bodyBottomY + bodyH - topDeckT;
+    const drawerZoneFloorY = bodyBottomY + t;
+    const nominalBoxH = Math.max(68, Math.min(eachFrontH - 36, 175));
 
     const undermountGroove = isUndermount
       ? { enabled: true, edge: 'bottom' as const, insetMm: 13, widthMm: 4, depthMm: 7 }
       : undefined;
 
-    for (let i = 0; i < dCount; i++) {
-      const frontBottomY =
-        (cfg.frontType === 'overlay'
-          ? bodyBottomY + gap / 2
-          : bodyBottomY + t + gap / 2) +
-        i * (eachFrontH + gap);
-      const frontCenterY = Math.round(frontBottomY + eachFrontH / 2);
-      topDrawerFrontTopY = frontCenterY + eachFrontH / 2;
-      const boxCenterY = Math.round(frontBottomY + 18 + boxH / 2);
+    let drawerIdx = 0;
+    for (let col = 0; col < drawerCols; col++) {
+      const bayCenterX = drawerCols > 1 ? bayCentersX[col] : offsetXmm;
+      const bayClearW = drawerCols > 1 ? bayW : innerW;
+      const boxOuterW = Math.max(100, bayClearW - slideClearanceTotal);
+      const boxInnerW = Math.max(60, boxOuterW - 2 * boxThickness);
+      const frontW =
+        drawerCols > 1
+          ? cfg.frontType === 'overlay'
+            ? Math.floor((W - (drawerCols + 1) * gap) / drawerCols)
+            : bayW - gap * 2
+          : cfg.frontType === 'overlay'
+            ? W - gap
+            : innerW - gap * 2;
+      const frontCenterX =
+        drawerCols > 1 && cfg.frontType === 'overlay'
+          ? Math.round(offsetXmm - W / 2 + gap + frontW / 2 + col * (frontW + gap))
+          : bayCenterX;
 
-      // Drawer Front
-      parts.push({
-        id: uid(`cab_drw_f_${i + 1}`),
-        name: `${cfg.name} — Front szuflady ${i + 1}`,
-        kind: 'door',
-        materialId: cfg.frontMaterialId,
-        surfaceFinish: cfg.frontFinish,
-        width: frontW,
-        height: eachFrontH,
-        depth: t,
-        position: [offsetXmm, frontCenterY, frontZ],
-        rotation: [0, 0, 0],
-        handleSide: 'top',
-        handleStyle,
-        edgeBanding: allEdge08,
-        drawerSlideType: cfg.slideType === 'none' ? 'ball_26mm' : cfg.slideType,
-        hardwareTag: 'drawer_front',
-        groupId,
-      });
+      for (let i = 0; i < rowsPerCol; i++) {
+        drawerIdx += 1;
+        const frontBottomY =
+          (cfg.frontType === 'overlay'
+            ? bodyBottomY + gap / 2
+            : bodyBottomY + t + gap / 2) +
+          i * (eachFrontH + gap);
+        const frontCenterY = Math.round(frontBottomY + eachFrontH / 2);
+        topDrawerFrontTopY = Math.max(topDrawerFrontTopY ?? 0, frontCenterY + eachFrontH / 2);
 
-      // Drawer Box Left & Right sides
-      parts.push({
-        id: uid(`cab_drw_l_${i + 1}`),
-        name: `${cfg.name} — Szuflada ${i + 1} (bok L)`,
-        kind: 'panel',
-        materialId: 'birch_plywood',
-        width: boxThickness,
-        height: boxH,
-        depth: boxDepth,
-        position: [
-          offsetXmm - boxOuterW / 2 + boxThickness / 2,
-          boxCenterY,
-          boxCenterZ,
-        ],
-        rotation: [0, 0, 0],
-        dadoGroove: undermountGroove,
-        hardwareTag: 'drawer_box',
-        groupId,
-      });
-      parts.push({
-        id: uid(`cab_drw_r_${i + 1}`),
-        name: `${cfg.name} — Szuflada ${i + 1} (bok P)`,
-        kind: 'panel',
-        materialId: 'birch_plywood',
-        width: boxThickness,
-        height: boxH,
-        depth: boxDepth,
-        position: [
-          offsetXmm + boxOuterW / 2 - boxThickness / 2,
-          boxCenterY,
-          boxCenterZ,
-        ],
-        rotation: [0, 0, 0],
-        dadoGroove: undermountGroove,
-        hardwareTag: 'drawer_box',
-        groupId,
-      });
+        // Strictly keep drawer box clear of both bottom deck and top/separator deck (zero collisions even with 28 mm top)
+        const minBoxBottomY = Math.max(drawerZoneFloorY + 6, Math.round(frontBottomY + 18));
+        const maxBoxTopY = Math.min(
+          Math.round(frontBottomY + eachFrontH - 12),
+          Math.round(drawerZoneCeilingY - 8)
+        );
+        const thisBoxH = Math.max(56, Math.min(nominalBoxH, maxBoxTopY - minBoxBottomY));
+        const boxCenterY = Math.round(minBoxBottomY + thisBoxH / 2);
 
-      // Drawer Back & Inner Front Stretcher
-      parts.push({
-        id: uid(`cab_drw_bk_${i + 1}`),
-        name: `${cfg.name} — Szuflada ${i + 1} (tył)`,
-        kind: 'panel',
-        materialId: 'birch_plywood',
-        width: boxInnerW,
-        height: boxH,
-        depth: boxThickness,
-        position: [
-          offsetXmm,
-          boxCenterY,
-          Math.round(boxCenterZ - boxDepth / 2 + boxThickness / 2),
-        ],
-        rotation: [0, 0, 0],
-        dadoGroove: undermountGroove,
-        hardwareTag: 'drawer_box',
-        groupId,
-      });
-      parts.push({
-        id: uid(`cab_drw_fr_${i + 1}`),
-        name: `${cfg.name} — Szuflada ${i + 1} (przód korpusu)`,
-        kind: 'panel',
-        materialId: 'birch_plywood',
-        width: boxInnerW,
-        height: boxH,
-        depth: boxThickness,
-        position: [
-          offsetXmm,
-          boxCenterY,
-          Math.round(boxCenterZ + boxDepth / 2 - boxThickness / 2),
-        ],
-        rotation: [0, 0, 0],
-        dadoGroove: undermountGroove,
-        hardwareTag: 'drawer_box',
-        groupId,
-      });
-
-      // Drawer Bottom (HDF 3 mm): recessed +13 mm up in dado groove for Blum/GTV undermount slides, or nailed underneath for ball slides!
-      if (isUndermount) {
+        // Drawer Front
         parts.push({
-          id: uid(`cab_drw_btm_${i + 1}`),
-          name: `${cfg.name} — Szuflada ${i + 1} (dno HDF 3mm w nut +13mm)`,
+          id: uid(`cab_drw_f_${drawerIdx}`),
+          name: `${cfg.name} — Front szuflady ${drawerIdx}`,
+          kind: 'door',
+          materialId: cfg.frontMaterialId,
+          surfaceFinish: cfg.frontFinish,
+          width: frontW,
+          height: eachFrontH,
+          depth: t,
+          position: [frontCenterX, frontCenterY, frontZ],
+          rotation: [0, 0, 0],
+          handleSide: 'top',
+          handleStyle,
+          edgeBanding: allEdge08,
+          drawerSlideType: cfg.slideType === 'none' ? 'ball_26mm' : cfg.slideType,
+          hardwareTag: 'drawer_front',
+          groupId,
+        });
+
+        // Drawer Box Left & Right sides
+        parts.push({
+          id: uid(`cab_drw_l_${drawerIdx}`),
+          name: `${cfg.name} — Szuflada ${drawerIdx} (bok L)`,
           kind: 'panel',
-          materialId: 'hdf_white',
-          width: boxInnerW + 10,
-          height: 3,
-          depth: boxDepth - 2 * boxThickness + 10,
+          materialId: 'birch_plywood',
+          width: boxThickness,
+          height: thisBoxH,
+          depth: boxDepth,
           position: [
-            offsetXmm,
-            Math.round(boxCenterY - boxH / 2 + 13),
+            bayCenterX - boxOuterW / 2 + boxThickness / 2,
+            boxCenterY,
             boxCenterZ,
           ],
           rotation: [0, 0, 0],
+          dadoGroove: undermountGroove,
           hardwareTag: 'drawer_box',
           groupId,
         });
-      } else {
         parts.push({
-          id: uid(`cab_drw_btm_${i + 1}`),
-          name: `${cfg.name} — Szuflada ${i + 1} (dno HDF 3mm)`,
+          id: uid(`cab_drw_r_${drawerIdx}`),
+          name: `${cfg.name} — Szuflada ${drawerIdx} (bok P)`,
           kind: 'panel',
-          materialId: 'hdf_white',
-          width: boxOuterW - 2,
-          height: 3,
-          depth: boxDepth - 2,
+          materialId: 'birch_plywood',
+          width: boxThickness,
+          height: thisBoxH,
+          depth: boxDepth,
           position: [
-            offsetXmm,
-            Math.round(boxCenterY - boxH / 2 - 1.5),
+            bayCenterX + boxOuterW / 2 - boxThickness / 2,
+            boxCenterY,
             boxCenterZ,
           ],
           rotation: [0, 0, 0],
+          dadoGroove: undermountGroove,
           hardwareTag: 'drawer_box',
           groupId,
         });
+
+        // Drawer Back & Inner Front Stretcher
+        parts.push({
+          id: uid(`cab_drw_bk_${drawerIdx}`),
+          name: `${cfg.name} — Szuflada ${drawerIdx} (tył)`,
+          kind: 'panel',
+          materialId: 'birch_plywood',
+          width: boxInnerW,
+          height: thisBoxH,
+          depth: boxThickness,
+          position: [
+            bayCenterX,
+            boxCenterY,
+            Math.round(boxCenterZ - boxDepth / 2 + boxThickness / 2),
+          ],
+          rotation: [0, 0, 0],
+          dadoGroove: undermountGroove,
+          hardwareTag: 'drawer_box',
+          groupId,
+        });
+        parts.push({
+          id: uid(`cab_drw_fr_${drawerIdx}`),
+          name: `${cfg.name} — Szuflada ${drawerIdx} (przód korpusu)`,
+          kind: 'panel',
+          materialId: 'birch_plywood',
+          width: boxInnerW,
+          height: thisBoxH,
+          depth: boxThickness,
+          position: [
+            bayCenterX,
+            boxCenterY,
+            Math.round(boxCenterZ + boxDepth / 2 - boxThickness / 2),
+          ],
+          rotation: [0, 0, 0],
+          dadoGroove: undermountGroove,
+          hardwareTag: 'drawer_box',
+          groupId,
+        });
+
+        // Drawer Bottom (HDF 3 mm): recessed +13 mm up in dado groove for Blum/GTV undermount slides, or nailed underneath for ball slides!
+        if (isUndermount) {
+          parts.push({
+            id: uid(`cab_drw_btm_${drawerIdx}`),
+            name: `${cfg.name} — Szuflada ${drawerIdx} (dno HDF 3mm w nut +13mm)`,
+            kind: 'panel',
+            materialId: 'hdf_white',
+            width: boxInnerW + 10,
+            height: 3,
+            depth: boxDepth - 2 * boxThickness + 10,
+            position: [
+              bayCenterX,
+              Math.round(boxCenterY - thisBoxH / 2 + 13),
+              boxCenterZ,
+            ],
+            rotation: [0, 0, 0],
+            hardwareTag: 'drawer_box',
+            groupId,
+          });
+        } else {
+          parts.push({
+            id: uid(`cab_drw_btm_${drawerIdx}`),
+            name: `${cfg.name} — Szuflada ${drawerIdx} (dno HDF 3mm)`,
+            kind: 'panel',
+            materialId: 'hdf_white',
+            width: boxOuterW - 2,
+            height: 3,
+            depth: boxDepth - 2,
+            position: [
+              bayCenterX,
+              Math.round(boxCenterY - thisBoxH / 2 - 1.5),
+              boxCenterZ,
+            ],
+            rotation: [0, 0, 0],
+            hardwareTag: 'drawer_box',
+            groupId,
+          });
+        }
       }
     }
   }
@@ -1010,6 +1262,7 @@ export function buildParametricCabinet(
         rearTrackZ,
       ],
       rotation: [0, 0, 0],
+      grainRotated: slidingDoorH > slidingDoorW,
       handleSide: 'left',
       handleStyle,
       edgeBanding: allEdge08,
@@ -1033,6 +1286,7 @@ export function buildParametricCabinet(
         frontTrackZ,
       ],
       rotation: [0, 0, 0],
+      grainRotated: slidingDoorH > slidingDoorW,
       handleSide: 'right',
       handleStyle,
       edgeBanding: allEdge08,
@@ -1110,7 +1364,11 @@ export function buildParametricCabinet(
         frontZ,
       ],
       rotation: [0, 0, 0],
-      handleSide: 'left',
+      grainRotated: doorH > activeDoorW,
+      handleSide:
+        (handleStyle === 'gola_j' || handleStyle === 'chamfer_45') && bodyH <= 1050
+          ? 'top'
+          : 'left',
       handleStyle,
       hingeSide: 'right',
       hingeCount: hingesPerDoor,
@@ -1119,13 +1377,19 @@ export function buildParametricCabinet(
       groupId,
     });
   } else if (cfg.doorMode !== 'none' && (effectiveDrawerCount === 0 || isHybridCabinet)) {
-    // Standard hinged doors (either full height, or upper zone cleanly above top drawer front + gap in hybrid mode!)
+    // Standard hinged doors (either full height, or upper zone cleanly above top drawer front / separator deck)
     const hybridDoorBottomY =
-      topDrawerFrontTopY !== null
-        ? topDrawerFrontTopY + gap
-        : separatorCenterY! - t / 2 + gap;
+      cfg.frontType === 'inset'
+        ? upperZoneBottomY + gap
+        : topDrawerFrontTopY !== null
+          ? topDrawerFrontTopY + gap
+          : separatorCenterY! - separatorT / 2 + gap;
+    const hybridDoorTopY =
+      cfg.frontType === 'inset'
+        ? bodyBottomY + bodyH - t - gap
+        : bodyBottomY + bodyH - gap / 2;
     const doorH = isHybridCabinet
-      ? Math.max(180, Math.round(bodyBottomY + bodyH - gap / 2 - hybridDoorBottomY))
+      ? Math.max(180, Math.round(hybridDoorTopY - hybridDoorBottomY))
       : cfg.frontType === 'overlay'
         ? bodyH - gap
         : innerH - gap * 2;
@@ -1138,6 +1402,11 @@ export function buildParametricCabinet(
         : offsetZmm + D / 2 - t / 2 - 1;
     const hingesPerDoor = doorH > 1550 ? 4 : doorH > 950 ? 3 : 2;
     const hwTag = cfg.frontType === 'overlay' ? 'door_overlay' : 'door_inset';
+
+    const useTopEdgePull =
+      (handleStyle === 'gola_j' || handleStyle === 'chamfer_45') &&
+      bodyH <= 1050 &&
+      !isHybridCabinet;
 
     if (cfg.doorMode === 'single_left' || cfg.doorMode === 'single_right') {
       const doorW = cfg.frontType === 'overlay' ? W - gap : innerW - gap * 2;
@@ -1153,7 +1422,8 @@ export function buildParametricCabinet(
         depth: t,
         position: [offsetXmm, doorCenterY, doorZ],
         rotation: [0, 0, 0],
-        handleSide: isLeftHinged ? 'right' : 'left',
+        grainRotated: doorH > doorW,
+        handleSide: useTopEdgePull ? 'top' : isLeftHinged ? 'right' : 'left',
         handleStyle,
         hingeSide: isLeftHinged ? 'left' : 'right',
         hingeCount: hingesPerDoor,
@@ -1176,7 +1446,8 @@ export function buildParametricCabinet(
         depth: t,
         position: [offsetXmm - dx, doorCenterY, doorZ],
         rotation: [0, 0, 0],
-        handleSide: 'right',
+        grainRotated: doorH > doorW,
+        handleSide: useTopEdgePull ? 'top' : 'right',
         handleStyle,
         hingeSide: 'left',
         hingeCount: hingesPerDoor,
@@ -1195,7 +1466,8 @@ export function buildParametricCabinet(
         depth: t,
         position: [offsetXmm + dx, doorCenterY, doorZ],
         rotation: [0, 0, 0],
-        handleSide: 'left',
+        grainRotated: doorH > doorW,
+        handleSide: useTopEdgePull ? 'top' : 'left',
         handleStyle,
         hingeSide: 'right',
         hingeCount: hingesPerDoor,

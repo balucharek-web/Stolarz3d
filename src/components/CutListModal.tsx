@@ -42,6 +42,8 @@ import {
   computeCommercialQuote,
   extractBoardDrillingMap,
   generateProjectDxf,
+  getBoardOutline2D,
+  getDadoGrooveLine2D,
   printBoardLabels,
   printTechnicalDocumentation,
 } from '../engine/documentation';
@@ -167,10 +169,12 @@ export const CutListModal: React.FC<CutListModalProps> = ({
 
   const drillingMaps = useMemo(() => {
     if (!open || activeTab !== 'drilling') return [];
-    return project.parts.map((part, idx) => ({
-      index: idx + 1,
-      map: extractBoardDrillingMap(part, project.parts, project.fasteners),
-    }));
+    return project.parts
+      .filter((p) => p.kind !== 'appliance')
+      .map((part, idx) => ({
+        index: idx + 1,
+        map: extractBoardDrillingMap(part, project.parts, project.fasteners),
+      }));
   }, [open, activeTab, project.parts, project.fasteners]);
 
   const summary = useMemo(() => {
@@ -179,7 +183,10 @@ export const CutListModal: React.FC<CutListModalProps> = ({
     let totalSheets = 0;
     let totalSheetCostPln = 0;
 
-    for (const spec of cutSpecs.values()) {
+    for (const part of project.parts) {
+      if (part.kind === 'profile' || part.kind === 'appliance') continue;
+      const spec = cutSpecs.get(part.id);
+      if (!spec) continue;
       totalAreaM2 += spec.areaM2;
       totalEdgeBandingM += spec.edgeBandingLinearM;
     }
@@ -189,15 +196,6 @@ export const CutListModal: React.FC<CutListModalProps> = ({
       nestingByMat.set(nr.materialId, nr);
       totalSheets += nr.totalSheets;
       totalSheetCostPln += nr.estimatedCostPln;
-    }
-
-    for (const part of project.parts) {
-      if (part.kind === 'profile') {
-        const spec = cutSpecs.get(part.id);
-        if (spec) {
-          totalSheetCostPln += Math.round(spec.areaM2 * getMaterialMeta(part.materialId).pricePerM2Pln);
-        }
-      }
     }
 
     const fastenerTotals: Record<ScrewType, number> = {
@@ -266,30 +264,37 @@ export const CutListModal: React.FC<CutListModalProps> = ({
       .filter((p) => p.kind !== 'appliance')
       .map((part, idx) => {
         const spec = cutSpecs.get(part.id) ?? getCarpentryCutSpec(part);
+        const isProfile = part.kind === 'profile';
+        const sortedProfile = isProfile
+          ? [Math.round(part.width), Math.round(part.height), Math.round(part.depth)].sort(
+              (a, b) => a - b
+            )
+          : null;
         return [
           String(idx + 1),
           `"${part.name.replace(/"/g, '""')}"`,
-          `"${PART_KIND_LABELS[part.kind]}"`,
+          `"${isProfile ? 'Profil 1D' : PART_KIND_LABELS[part.kind]}"`,
           `"${getMaterialMeta(part.materialId).name}"`,
-          String(spec.grainLenMm),
-          String(spec.crossWidMm),
-          `${spec.sawLenMm}x${spec.sawWidMm}`,
-          String(spec.thicknessMm),
-          `"${spec.edgeBandingLabel}"`,
-          spec.edgeBandingLinearM.toFixed(2),
+          String(isProfile && sortedProfile ? sortedProfile[2] : spec.grainLenMm),
+          String(isProfile && sortedProfile ? sortedProfile[1] : spec.crossWidMm),
+          isProfile && sortedProfile ? `1D: ${sortedProfile[2]} mm` : `${spec.sawLenMm}x${spec.sawWidMm}`,
+          String(isProfile && sortedProfile ? sortedProfile[0] : spec.thicknessMm),
+          `"${isProfile ? 'Brak' : spec.edgeBandingLabel}"`,
+          isProfile ? '0.00' : spec.edgeBandingLinearM.toFixed(2),
           `"${formatAnglesNote(part)}"`,
           `"${formatMachiningNote(part)}"`,
-          spec.areaM2.toFixed(3),
+          isProfile ? '0.000' : spec.areaM2.toFixed(3),
         ].join(';');
       });
 
     const nestingRows = [
       '',
-      `PODSUMOWANIE ROZKROJU ARKUSZY (RZAZ ${kerfMm} mm, OBRZYN 10 mm)`,
-      'Material;Format arkusza;Liczba arkuszy;Odpad [%];Szac. koszt [zl]',
+      `PODSUMOWANIE ROZKROJU ARKUSZY 2D (RZAZ ${kerfMm} mm, OBRZYN 10 mm)`,
+      'Material;Grubosc [mm];Format arkusza;Liczba arkuszy;Odpad [%];Szac. koszt [zl]',
       ...nestingResults.map((nr) =>
         [
           `"${getMaterialMeta(nr.materialId).name}"`,
+          String(nr.thicknessMm),
           `${nr.sheetWidthMm}x${nr.sheetHeightMm} mm`,
           String(nr.totalSheets),
           `${nr.wastePercent}%`,
@@ -298,10 +303,30 @@ export const CutListModal: React.FC<CutListModalProps> = ({
       ),
     ];
 
+    const linearRows =
+      linearResults.length > 0
+        ? [
+            '',
+            `PODSUMOWANIE CIECIA LINIOWEGO 1D (PROFILE / SZTANGI, RZAZ ${kerfMm} mm)`,
+            'Material;Przekroj;Dlugosc sztangi [mm];Liczba elementow;Liczba sztang;Odpad [%];Szac. koszt [zl]',
+            ...linearResults.map((lr) =>
+              [
+                `"${getMaterialMeta(lr.materialId).name}"`,
+                `"${lr.profileSectionLabel}"`,
+                String(lr.stockLengthMm),
+                String(lr.totalParts),
+                String(lr.totalBars),
+                `${lr.wastePercent}%`,
+                String(lr.estimatedCostPln),
+              ].join(';')
+            ),
+          ]
+        : [];
+
     const screwRows = [
       '',
-      'LISTA WKRETOW I OKUC',
-      'Nazwa;Rozmiar;Ilosc [szt.]',
+      'LISTA WKRETOW, OKUC I WYPOSAZENIA',
+      'Nazwa;Rozmiar / Jednostka;Ilosc',
       ...SCREW_CATALOG.filter((s) => summary.fastenerTotals[s.id] > 0).map((s) =>
         [
           `"${s.name}"`,
@@ -310,21 +335,33 @@ export const CutListModal: React.FC<CutListModalProps> = ({
         ].join(';')
       ),
       ...(quote.hardware.hingeCupsCount > 0
-        ? [`"Zawias puszkowy Ø35";"Ø35 mm";${quote.hardware.hingeCupsCount}`]
+        ? [`"Zawias puszkowy Ø35";"Ø35 mm [szt.]";${quote.hardware.hingeCupsCount}`]
         : []),
       ...(quote.hardware.drawerSlidePairs > 0
-        ? [`"Prowadnice szuflad (komplety)";"L/P";${quote.hardware.drawerSlidePairs}`]
+        ? [`"Prowadnice szuflad (komplety)";"L/P [kpl.]";${quote.hardware.drawerSlidePairs}`]
         : []),
       ...(quote.hardware.handlesCount > 0
         ? [`"Uchwyty meblowe";"szt.";${quote.hardware.handlesCount}`]
         : []),
+      ...(quote.hardware.tipOnCount > 0
+        ? [`"Odbojniki Tip-On";"szt.";${quote.hardware.tipOnCount}`]
+        : []),
+      ...(quote.hardware.golaLinearM > 0
+        ? [`"Listwa aluminiowa Gola J";"mb";${quote.hardware.golaLinearM.toFixed(2)}`]
+        : []),
+      ...(quote.hardware.slidingDoorsCount > 0
+        ? [`"System drzwi przesuwnych";"skrz.";${quote.hardware.slidingDoorsCount}`]
+        : []),
       ...(quote.hardware.legsCount > 0
         ? [`"Nóżki regulowane";"szt.";${quote.hardware.legsCount}`]
+        : []),
+      ...(quote.hardware.appliancesCount > 0
+        ? [`"Wnętrze / AGD 3D";"szt.";${quote.hardware.appliancesCount}`]
         : []),
     ];
 
     const csvContent =
-      '\uFEFF' + [header.join(';'), ...rows, ...nestingRows, ...screwRows].join('\n');
+      '\uFEFF' + [header.join(';'), ...rows, ...nestingRows, ...linearRows, ...screwRows].join('\n');
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -351,6 +388,7 @@ export const CutListModal: React.FC<CutListModalProps> = ({
       project,
       cutSpecs,
       nestingResults,
+      linearResults,
       quote,
       quoteSettings,
       kerfMm,
@@ -653,8 +691,15 @@ export const CutListModal: React.FC<CutListModalProps> = ({
                     <tbody className="divide-y divide-zinc-800/60">
                       {boardParts.map((part, i) => {
                         const spec = cutSpecs.get(part.id) ?? getCarpentryCutSpec(part);
+                        const isProfile = part.kind === 'profile';
+                        const sortedProfile = isProfile
+                          ? [Math.round(part.width), Math.round(part.height), Math.round(part.depth)].sort(
+                              (a, b) => a - b
+                            )
+                          : null;
                         const sawReduced =
-                          spec.sawLenMm !== spec.grainLenMm || spec.sawWidMm !== spec.crossWidMm;
+                          !isProfile &&
+                          (spec.sawLenMm !== spec.grainLenMm || spec.sawWidMm !== spec.crossWidMm);
                         return (
                           <tr key={part.id} className="text-zinc-200">
                             <td className="py-2 pr-2 text-zinc-500 font-mono-num">{i + 1}</td>
@@ -663,17 +708,25 @@ export const CutListModal: React.FC<CutListModalProps> = ({
                               {getMaterialMeta(part.materialId).shortName}
                             </td>
                             <td className="py-2 px-2 text-right font-mono-num whitespace-nowrap">
-                              {spec.grainLenMm} × {spec.crossWidMm} × {spec.thicknessMm}
+                              {isProfile && sortedProfile
+                                ? `${sortedProfile[0]}×${sortedProfile[1]} × ${sortedProfile[2]}`
+                                : `${spec.grainLenMm} × ${spec.crossWidMm} × ${spec.thicknessMm}`}
                             </td>
                             <td
                               className={`py-2 px-2 text-right font-mono-num whitespace-nowrap ${
-                                sawReduced ? 'text-amber-300 font-semibold' : 'text-zinc-400'
+                                isProfile
+                                  ? 'text-sky-300'
+                                  : sawReduced
+                                    ? 'text-amber-300 font-semibold'
+                                    : 'text-zinc-400'
                               }`}
                             >
-                              {spec.sawLenMm} × {spec.sawWidMm}
+                              {isProfile && sortedProfile
+                                ? `Profil 1D · ${sortedProfile[2]} mm`
+                                : `${spec.sawLenMm} × ${spec.sawWidMm}`}
                             </td>
                             <td className="py-2 px-2 text-right font-mono-num text-sky-300/90 whitespace-nowrap">
-                              {spec.edgeBandingLabel}
+                              {isProfile ? '—' : spec.edgeBandingLabel}
                             </td>
                             <td className="py-2 px-2 text-right font-mono-num text-amber-300/90 whitespace-nowrap">
                               {formatAnglesNote(part)}
@@ -1129,31 +1182,53 @@ export const CutListModal: React.FC<CutListModalProps> = ({
                         const vw = m.faceWidthMm + pad * 2;
                         const vh = m.faceHeightMm + pad * 2;
                         const fs = Math.max(20, Math.max(m.faceWidthMm, m.faceHeightMm) * 0.036);
+                        const isPolyOutline = m.part.kind === 'sloped' || m.part.kind === 'custom';
+                        const outlinePtsStr = isPolyOutline
+                          ? getBoardOutline2D(m.part, m.faceWidthMm, m.faceHeightMm)
+                              .map(([x, y]) => `${pad + x},${pad + m.faceHeightMm - y}`)
+                              .join(' ')
+                          : '';
+                        const groove = getDadoGrooveLine2D(
+                          m.part,
+                          m.thinAxis,
+                          m.faceWidthMm,
+                          m.faceHeightMm
+                        );
                         return (
                           <svg
                             viewBox={`0 0 ${vw} ${vh}`}
                             className="w-full h-auto max-h-[300px] rounded-lg border border-zinc-800 bg-[#1B1D22]"
                           >
-                            {/* Board outline */}
-                            <rect
-                              x={pad}
-                              y={pad}
-                              width={m.faceWidthMm}
-                              height={m.faceHeightMm}
-                              rx={m.part.cornerRadiusMm ?? 0}
-                              fill="#252932"
-                              stroke="#E4E4E7"
-                              strokeWidth={Math.max(3, fs * 0.14)}
-                            />
-                            {/* Dado groove line */}
-                            {m.part.dadoGroove?.enabled && (
+                            {/* Board outline (trapezoid / custom polygon OR rounded rectangle) */}
+                            {isPolyOutline ? (
+                              <polygon
+                                points={outlinePtsStr}
+                                fill="#252932"
+                                stroke="#E4E4E7"
+                                strokeWidth={Math.max(3, fs * 0.14)}
+                                strokeLinejoin="round"
+                              />
+                            ) : (
+                              <rect
+                                x={pad}
+                                y={pad}
+                                width={m.faceWidthMm}
+                                height={m.faceHeightMm}
+                                rx={m.part.cornerRadiusMm ?? 0}
+                                fill="#252932"
+                                stroke="#E4E4E7"
+                                strokeWidth={Math.max(3, fs * 0.14)}
+                              />
+                            )}
+                            {/* Dado groove line (vertical X=inset on side walls, horizontal on decks) */}
+                            {groove && (
                               <line
-                                x1={pad}
-                                y1={pad + m.faceHeightMm - m.part.dadoGroove.insetMm}
-                                x2={pad + m.faceWidthMm}
-                                y2={pad + m.faceHeightMm - m.part.dadoGroove.insetMm}
+                                x1={pad + groove.x1}
+                                y1={pad + m.faceHeightMm - groove.y1}
+                                x2={pad + groove.x2}
+                                y2={pad + m.faceHeightMm - groove.y2}
                                 stroke="#38BDF8"
-                                strokeWidth={Math.max(3, m.part.dadoGroove.widthMm)}
+                                strokeWidth={Math.max(3, groove.widthMm)}
                                 strokeDasharray="16 8"
                               />
                             )}

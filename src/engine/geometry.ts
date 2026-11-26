@@ -264,9 +264,9 @@ function appendCutoutHoles(
  * structural profile, cabinet door, bullnose kitchen countertop, with optional cutouts & rounded corners).
  */
 export function buildPartGeometry(part: FurniturePart): THREE.BufferGeometry {
-  const w = Math.max(part.width, 6) * MM_TO_M;
-  const h = Math.max(part.height, 6) * MM_TO_M;
-  const d = Math.max(part.depth, 4) * MM_TO_M;
+  const w = Math.max(part.width, 2) * MM_TO_M;
+  const h = Math.max(part.height, 2) * MM_TO_M;
+  const d = Math.max(part.depth, 2) * MM_TO_M;
   const hasCutouts = Boolean(part.cutouts && part.cutouts.length > 0);
   const cornerR = Math.max(0, (part.cornerRadiusMm ?? 0) * MM_TO_M);
 
@@ -1493,7 +1493,7 @@ export function autoDetectJointFasteners(
     return false;
   };
 
-  const screwOrder: ScrewType[] = [
+  const baseScrewOrder: ScrewType[] = [
     screwType,
     ...(['wood_4x45', 'confirmat_7x50', 'minifix_15', 'dowel_8x35', 'bolt_m8'] as ScrewType[]).filter(
       (t) => t !== screwType
@@ -1515,6 +1515,11 @@ export function autoDetectJointFasteners(
     const margin = count === 1 ? longSpan * 0.5 : Math.min(55, longSpan * 0.22);
     const axisIdx = z.axis === 'x' ? 0 : z.axis === 'y' ? 1 : 2;
     const normalWorld = new THREE.Vector3(...z.normalWorld);
+
+    const zoneScrewOrder: ScrewType[] = [
+      z.recommendedScrew,
+      ...baseScrewOrder.filter((t) => t !== z.recommendedScrew),
+    ];
 
     for (let k = 0; k < count; k++) {
       const longCoord =
@@ -1538,7 +1543,7 @@ export function autoDetectJointFasteners(
       const localNorm = worldNormalToPartLocal(host, normalWorld);
 
       let validType: ScrewType | null = null;
-      for (const candidateType of screwOrder) {
+      for (const candidateType of zoneScrewOrder) {
         const probeFastener: Fastener = {
           id: '__auto_probe__',
           partId: host.id,
@@ -1566,6 +1571,148 @@ export function autoDetectJointFasteners(
         jointParamU: Number(paramU.toFixed(4)),
       });
       placedWorldPoints.push(headWorld);
+    }
+  }
+
+  // Secondary pass: non-orthogonal / rotated panels & diagonal braces (e.g. sloped roof, tilted shelf + lip, steel brace)
+  const isAligned90 = (p: FurniturePart) =>
+    Math.abs(p.rotation[0] % 90) < 1 &&
+    Math.abs(p.rotation[1] % 90) < 1 &&
+    Math.abs(p.rotation[2] % 90) < 1;
+
+  const isEligibleRotatedHost = (p: FurniturePart) =>
+    p.kind !== 'door' &&
+    p.kind !== 'appliance' &&
+    p.kind !== 'countertop' &&
+    p.materialId !== 'glass_clear' &&
+    p.hardwareTag !== 'leg' &&
+    p.hardwareTag !== 'drawer_box' &&
+    Math.min(p.width, p.height, p.depth) >= 8 &&
+    Math.min(p.width, p.height, p.depth) <= 44;
+
+  const isSteelMat = (id: string) => id === 'steel_black' || id === 'steel_galv';
+
+  for (const host of parts) {
+    if (isAligned90(host) || !isEligibleRotatedHost(host)) continue;
+    const hBox = boxMap.get(host.id)!;
+
+    // Identify the thinnest local axis of the rotated part (the face normal direction to screw through)
+    const dims: Array<{ axis: 0 | 1 | 2; size: number }> = (
+      [
+        { axis: 0 as const, size: host.width },
+        { axis: 1 as const, size: host.height },
+        { axis: 2 as const, size: host.depth },
+      ]
+    ).sort((a, b) => a.size - b.size);
+    const thinIdx = dims[0].axis;
+    const uIdx = dims[1].axis;
+    const vIdx = dims[2].axis;
+    const halfThin = dims[0].size / 2;
+    const uSize = dims[1].size;
+    const vSize = dims[2].size;
+
+    const uSteps = Math.max(1, Math.min(9, Math.round(uSize / 120)));
+    const vSteps = Math.max(1, Math.min(13, Math.round(vSize / 120)));
+
+    for (const other of parts) {
+      if (
+        other.id === host.id ||
+        other.kind === 'door' ||
+        other.kind === 'appliance' ||
+        other.materialId === 'glass_clear' ||
+        other.hardwareTag === 'leg' ||
+        other.hardwareTag === 'drawer_box'
+      ) {
+        continue;
+      }
+      if (filterPartId && host.id !== filterPartId && other.id !== filterPartId) continue;
+
+      const oBox = boxMap.get(other.id)!;
+      if (
+        hBox.maxX < oBox.minX - 6 ||
+        hBox.minX > oBox.maxX + 6 ||
+        hBox.maxY < oBox.minY - 6 ||
+        hBox.minY > oBox.maxY + 6 ||
+        hBox.maxZ < oBox.minZ - 6 ||
+        hBox.minZ > oBox.maxZ + 6
+      ) {
+        continue;
+      }
+
+      const pairOrder: ScrewType[] =
+        isSteelMat(host.materialId) || isSteelMat(other.materialId)
+          ? ['bolt_m8', 'wood_4x45', ...baseScrewOrder.filter((t) => t !== 'bolt_m8' && t !== 'wood_4x45')]
+          : ['wood_4x45', ...baseScrewOrder.filter((t) => t !== 'wood_4x45')];
+
+      // Try both faces (+thin and -thin) along a clean grid in host local space
+      const validHits: Array<{
+        localPos: [number, number, number];
+        localNorm: [number, number, number];
+        worldPos: THREE.Vector3;
+        type: ScrewType;
+      }> = [];
+
+      for (const sign of [1, -1] as const) {
+        const localNorm: [number, number, number] = [0, 0, 0];
+        localNorm[thinIdx] = sign;
+
+        for (let iu = 0; iu < uSteps; iu++) {
+          const uFrac = uSteps === 1 ? 0.5 : (iu + 0.5) / uSteps;
+          const uVal = (uFrac - 0.5) * (uSize - Math.min(24, uSize * 0.15));
+          for (let iv = 0; iv < vSteps; iv++) {
+            const vFrac = vSteps === 1 ? 0.5 : (iv + 0.5) / vSteps;
+            const vVal = (vFrac - 0.5) * (vSize - Math.min(24, vSize * 0.15));
+
+            const localPos: [number, number, number] = [0, 0, 0];
+            localPos[thinIdx] = Number((sign * halfThin).toFixed(1));
+            localPos[uIdx] = Number(uVal.toFixed(1));
+            localPos[vIdx] = Number(vVal.toFixed(1));
+
+            const headWorld = partLocalToWorld(host, localPos);
+            if (isNearAnyFastener(headWorld)) continue;
+
+            for (const candidateType of pairOrder) {
+              const audit = auditSingleFastener(
+                {
+                  id: '__auto_rot_probe__',
+                  partId: host.id,
+                  type: candidateType,
+                  localPosition: localPos,
+                  localNormal: localNorm,
+                },
+                parts,
+                partMap,
+                boxMap
+              );
+              if (audit && audit.status === 'ok' && audit.targetPartName === other.name) {
+                validHits.push({ localPos, localNorm, worldPos: headWorld, type: candidateType });
+                break;
+              }
+            }
+          }
+        }
+      }
+
+      if (validHits.length === 0) continue;
+
+      // Pick up to 2 well-spaced fasteners per rotated host-target pair (ends if wide, center if narrow)
+      const selectedHits =
+        validHits.length <= 2
+          ? validHits
+          : [validHits[0], validHits[validHits.length - 1]];
+
+      for (const hit of selectedHits) {
+        if (isNearAnyFastener(hit.worldPos)) continue;
+        added.push({
+          id: `f_auto_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+          partId: host.id,
+          type: hit.type,
+          localPosition: hit.localPos,
+          localNormal: hit.localNorm,
+          targetPartId: other.id,
+        });
+        placedWorldPoints.push(hit.worldPos);
+      }
     }
   }
 

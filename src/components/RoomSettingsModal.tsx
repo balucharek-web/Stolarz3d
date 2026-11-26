@@ -1,15 +1,17 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { AlertTriangle, Check, Plus, Trash2, X } from 'lucide-react';
 import {
   DEFAULT_ROOM_CONFIG,
+  type FurniturePart,
   type RoomConfig,
   type RoomObstacle,
   type RoomObstacleType,
 } from '../types/furniture';
-import type { RoomClearanceIssue } from '../engine/carpentry';
+import { auditRoomClearances, type RoomClearanceIssue } from '../engine/carpentry';
 
 interface RoomSettingsModalProps {
   open: boolean;
+  parts: FurniturePart[];
   room: RoomConfig | undefined;
   roomIssues: RoomClearanceIssue[];
   onClose: () => void;
@@ -52,6 +54,7 @@ const OBSTACLE_PRESETS: Record<
 
 export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
   open,
+  parts,
   room,
   roomIssues,
   onClose,
@@ -71,7 +74,12 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
 
   const [newObsType, setNewObsType] = useState<RoomObstacleType>('socket');
   const [newObsWall, setNewObsWall] = useState<'back' | 'left' | 'right'>('back');
-  const [newObsOffset, setNewObsOffset] = useState<number>(0);
+  const [newObsOffset, setNewObsOffset] = useState<number>(300);
+
+  const liveIssues = useMemo(
+    () => (open ? auditRoomClearances(parts, draft) : roomIssues),
+    [open, parts, draft, roomIssues]
+  );
 
   if (!open) return null;
 
@@ -186,14 +194,14 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
             </button>
           </div>
 
-          {roomIssues.length > 0 && draft.enabled && (
+          {liveIssues.length > 0 && draft.enabled && (
             <div className="rounded-xl border border-red-500/40 bg-red-950/35 px-3.5 py-2.5 space-y-1">
               <div className="flex items-center gap-1.5 text-xs font-semibold text-red-200">
                 <AlertTriangle className="h-4 w-4 text-red-400 shrink-0" />
-                <span>Wykryte kolizje z wnęką ({roomIssues.length}):</span>
+                <span>Wykryte kolizje z wnęką ({liveIssues.length}):</span>
               </div>
               <ul className="space-y-0.5 text-[11px] text-red-200/90 pl-5 list-disc">
-                {roomIssues.slice(0, 6).map((iss, idx) => (
+                {liveIssues.slice(0, 6).map((iss, idx) => (
                   <li key={`${iss.partId}_${idx}`}>{iss.message}</li>
                 ))}
               </ul>
@@ -250,7 +258,10 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
                   max={1000}
                   step={20}
                   value={draft.backWallZMm}
-                  onChange={(e) => patch({ backWallZMm: Number(e.target.value) || -340 })}
+                  onChange={(e) => {
+                    const v = e.target.value === '' ? 0 : Number(e.target.value);
+                    if (Number.isFinite(v)) patch({ backWallZMm: v });
+                  }}
                   className="mt-1 w-full rounded-lg border border-zinc-800 bg-zinc-900 px-2.5 py-2 text-xs font-mono-num text-white focus:border-amber-500 focus:outline-none"
                 />
               </label>
@@ -397,7 +408,7 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
                 </select>
               </label>
               <label className="block">
-                <span className="text-[11px] text-zinc-400">Przesunięcie (mm)</span>
+                <span className="text-[11px] text-zinc-400">Od lewej/tyłu (mm)</span>
                 <input
                   type="number"
                   step={50}

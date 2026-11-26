@@ -688,7 +688,14 @@ export function snapManualFastenerToJoint(
   let bestDistSq = snapRadiusMm * snapRadiusMm;
 
   for (const nb of parts) {
-    if (nb.id === host.id || nb.kind === 'door' || nb.materialId === 'glass_clear') continue;
+    if (
+      nb.id === host.id ||
+      nb.kind === 'door' ||
+      nb.kind === 'appliance' ||
+      nb.materialId === 'glass_clear'
+    ) {
+      continue;
+    }
     const nbox = boxMap.get(nb.id)!;
 
     // Check if neighbor lies along the inward ray (within screw length + small tolerance)
@@ -820,7 +827,29 @@ export function computeJointZones(
   preferredScrewType: Fastener['type'] = 'wood_4x45'
 ): JointZone[] {
   const zones: JointZone[] = [];
-  const tol = 5;
+  const tol = 2.5;
+
+  const isThinHdfBackOrBottom = (p: FurniturePart): boolean => {
+    const minDim = Math.min(p.width, p.height, p.depth);
+    return (
+      minDim <= 4.5 &&
+      (p.materialId === 'hdf_white' ||
+        p.materialId === 'hdf_black' ||
+        /hdf|plecy|dno/i.test(p.name))
+    );
+  };
+
+  const isNonFastenable = (p: FurniturePart): boolean =>
+    p.kind === 'door' ||
+    p.kind === 'appliance' ||
+    p.materialId === 'glass_clear' ||
+    p.hardwareTag === 'leg' ||
+    p.hardwareTag === 'drawer_front' ||
+    p.hardwareTag === 'sliding_door' ||
+    isThinHdfBackOrBottom(p);
+
+  const isSteelPart = (p: FurniturePart): boolean =>
+    p.materialId === 'steel_black' || p.materialId === 'steel_galv';
 
   const partMap = new Map<string, FurniturePart>();
   const boxMap = new Map<string, WorldBox>();
@@ -829,12 +858,26 @@ export function computeJointZones(
     boxMap.set(p.id, getPartWorldBox(p));
   }
 
-  const screwOrder: Fastener['type'][] = [
+  const baseScrewOrder: Fastener['type'][] = [
     preferredScrewType,
     ...(['wood_4x45', 'confirmat_7x50', 'minifix_15', 'dowel_8x35', 'bolt_m8'] as Fastener['type'][]).filter(
       (t) => t !== preferredScrewType
     ),
   ];
+
+  const getPairScrewOrder = (host: FurniturePart, other: FurniturePart): Fastener['type'][] => {
+    if (isSteelPart(host) || isSteelPart(other)) {
+      return [
+        'bolt_m8',
+        ...baseScrewOrder.filter((t) => t !== 'bolt_m8'),
+      ];
+    }
+    if (host.hardwareTag === 'drawer_box' || other.hardwareTag === 'drawer_box') {
+      const drwPref: Fastener['type'][] = ['wood_4x45', 'confirmat_7x50', 'dowel_8x35', 'minifix_15'];
+      return drwPref;
+    }
+    return baseScrewOrder;
+  };
 
   const evaluateAxis = (
     a: FurniturePart,
@@ -866,8 +909,12 @@ export function computeJointZones(
       bOther: WorldBox;
       thick: number;
     }> = [];
-    if (thickA <= 48) candidates.push({ host: a, other: b, bHost: ba, bOther: bb, thick: thickA });
-    if (thickB <= 48) candidates.push({ host: b, other: a, bHost: bb, bOther: ba, thick: thickB });
+    if (thickA <= 48 && a.kind !== 'countertop') {
+      candidates.push({ host: a, other: b, bHost: ba, bOther: bb, thick: thickA });
+    }
+    if (thickB <= 48 && b.kind !== 'countertop') {
+      candidates.push({ host: b, other: a, bHost: bb, bOther: ba, thick: thickB });
+    }
     if (candidates.length === 0) return;
 
     candidates.sort((c1, c2) => c1.thick - c2.thick);
@@ -913,7 +960,15 @@ export function computeJointZones(
         axis === 'y' ? (hostBeforeOther ? -1 : 1) : 0,
         axis === 'z' ? (hostBeforeOther ? -1 : 1) : 0,
       ];
+
+      // Countertops may ONLY be fastened upward from underneath (e.g. via kitchen stretchers)
+      if (other.kind === 'countertop' && !(axis === 'y' && normalTuple[1] === -1)) {
+        continue;
+      }
+
       const normalVec = new THREE.Vector3(...normalTuple);
+      const pairScrewOrder = getPairScrewOrder(host, other);
+      const minRequiredEmbed = isSteelPart(host) && cand.thick >= 30 ? 10 : 6;
 
       // Probe 3 points along the long span to confirm at least one valid screw fits
       const testFractions = [0.5, 0.25, 0.75];
@@ -931,7 +986,7 @@ export function computeJointZones(
         const localPos = worldToPartLocalPrecise(host, headW);
         const localNorm = worldNormalToPartLocalPrecise(host, normalVec);
 
-        for (const st of screwOrder) {
+        for (const st of pairScrewOrder) {
           const audit = auditSingleFastener(
             {
               id: '__zone_probe__',
@@ -944,7 +999,12 @@ export function computeJointZones(
             partMap,
             boxMap
           );
-          if (audit && audit.status === 'ok' && audit.targetPartName === other.name) {
+          if (
+            audit &&
+            audit.status === 'ok' &&
+            audit.targetPartName === other.name &&
+            (audit.embedDepthMm ?? 0) >= minRequiredEmbed
+          ) {
             matchedScrew = st;
             break;
           }
@@ -985,7 +1045,7 @@ export function computeJointZones(
 
   for (let i = 0; i < parts.length; i++) {
     const a = parts[i];
-    if (a.kind === 'door' || a.materialId === 'glass_clear') continue;
+    if (isNonFastenable(a)) continue;
     const aAligned =
       Math.abs(a.rotation[0] % 90) < 1 &&
       Math.abs(a.rotation[1] % 90) < 1 &&
@@ -995,13 +1055,19 @@ export function computeJointZones(
 
     for (let j = i + 1; j < parts.length; j++) {
       const b = parts[j];
-      if (b.kind === 'door' || b.materialId === 'glass_clear') continue;
+      if (isNonFastenable(b)) continue;
       const bAligned =
         Math.abs(b.rotation[0] % 90) < 1 &&
         Math.abs(b.rotation[1] % 90) < 1 &&
         Math.abs(b.rotation[2] % 90) < 1;
       if (!bAligned) continue;
       const bb = boxMap.get(b.id)!;
+
+      // Movable drawer boxes must NEVER be screwed/doweled to the cabinet carcass or another drawer!
+      if (a.hardwareTag === 'drawer_box' || b.hardwareTag === 'drawer_box') {
+        if (a.hardwareTag !== 'drawer_box' || b.hardwareTag !== 'drawer_box') continue;
+        if (Math.abs(ba.minY - bb.minY) > 6 || Math.abs(ba.maxY - bb.maxY) > 6) continue;
+      }
 
       const oxMin = Math.max(ba.minX, bb.minX);
       const oxMax = Math.min(ba.maxX, bb.maxX);
@@ -1853,29 +1919,29 @@ function getMaterialElasticModulusMpa(materialId: string): number {
     case 'glass_clear':
       return 70_000;
     case 'birch_plywood':
-      return 6800;
+      return 7200;
     case 'osb3':
-      return 3500;
+      return 3800;
     case 'concrete_top':
       return 12_000;
     case 'hdf_white':
     case 'hdf_black':
       return 3200;
     default:
-      // Standard laminated furniture particleboard / MDF (E ≈ 2400 MPa long-term creep-adjusted ≈ 1850 MPa)
-      return 1900;
+      // EN 312 P2 melamine-faced furniture board / MDF short-term elastic modulus (creep applied once below)
+      return 2800;
   }
 }
 
 /**
  * Real-world carpentry Shelf Deflection (Sag) Analyzer.
  * Finds every horizontal shelf/deck in the project, detects physical vertical supports
- * underneath or flanking it (sides, dividers, posts), computes the longest unsupported
+ * underneath or flanking it (sides, dividers, posts, legs, plinths), computes the longest unsupported
  * clear span L, and evaluates mid-span deflection δ = 5 w L⁴ / (384 E I).
  */
 export function analyzeShelfDeflection(
   parts: FurniturePart[],
-  loadKgPerM = 30
+  loadKgPerM = 25
 ): Map<string, ShelfDeflectionAudit> {
   const result = new Map<string, ShelfDeflectionAudit>();
   const boxes = new Map<string, WorldBox>();
@@ -1911,19 +1977,35 @@ export function analyzeShelfDeflection(
 
     // Collect X positions of all vertical structural supports underneath or abutting this shelf
     const supportIntervals: Array<[number, number]> = [];
+    let continuousPlinthUnderCount = 0;
+
     for (const other of parts) {
-      if (other.id === p.id || other.kind === 'door' || other.kind === 'appliance') continue;
+      if (
+        other.id === p.id ||
+        other.kind === 'door' ||
+        other.kind === 'appliance' ||
+        other.hardwareTag === 'drawer_box'
+      ) {
+        continue;
+      }
       const ob = boxes.get(other.id)!;
       const ody = ob.maxY - ob.minY;
       const odx = ob.maxX - ob.minX;
-      // Ignore thin horizontal boards; keep vertical walls, dividers, posts, gussets, or back walls
-      if (ody < 60) continue;
+      // Ignore thin horizontal boards; keep vertical walls, dividers, posts, legs, plinths
+      if (ody < 45) continue;
 
       const zOverlap = Math.min(b.maxZ, ob.maxZ) - Math.max(b.minZ, ob.minZ);
-      if (zOverlap < 20) continue;
+      if (zOverlap < 14) continue;
 
-      // Support either sits directly underneath (ob.maxY ≈ b.minY) OR flanks the shelf vertically
-      const supportsUnder = ob.maxY >= b.minY - 8 && ob.minY < b.minY - 20;
+      // Support either sits directly underneath (ob.maxY ≈ b.minY), suspends from above (vertical divider on bottom deck), OR flanks the shelf vertically
+      const supportsUnder = ob.maxY >= b.minY - 8 && ob.maxY <= b.minY + 12 && ob.minY < b.minY - 20;
+      const supportsAbove =
+        ob.minY >= b.maxY - 12 &&
+        ob.minY <= b.maxY + 8 &&
+        ob.maxY > b.maxY + 120 &&
+        odx <= 90 &&
+        ob.maxX >= b.minX - 8 &&
+        ob.minX <= b.maxX + 8;
       const flanksVertical =
         ob.minY <= b.minY + 12 &&
         ob.maxY >= b.maxY - 12 &&
@@ -1931,10 +2013,16 @@ export function analyzeShelfDeflection(
         ob.maxX >= b.minX - 8 &&
         ob.minX <= b.maxX + 8;
 
-      if (supportsUnder || flanksVertical) {
-        // Ignore thin back wall spanning the entire width (it stiffens only rear edge, not front sag unless deep)
-        const isRearBackWall = ob.maxZ - ob.minZ <= 24 && ob.maxZ <= b.minZ + 32;
+      if (supportsUnder || supportsAbove || flanksVertical) {
+        // Ignore thin rear HDF/back wall (it does not prevent front-edge shelf sag)
+        const isRearBackWall =
+          ob.maxZ - ob.minZ <= 24 && ob.maxZ <= b.minZ + 32 && !supportsUnder;
         if (isRearBackWall) continue;
+
+        // Full-width plinth board running directly underneath bottom deck stiffens it continuously along X
+        if (supportsUnder && odx >= dx * 0.7 && b.minY <= 220) {
+          continuousPlinthUnderCount += 1;
+        }
 
         const clampedMin = Math.max(b.minX, ob.minX);
         const clampedMax = Math.min(b.maxX, ob.maxX);
@@ -1944,19 +2032,30 @@ export function analyzeShelfDeflection(
       }
     }
 
-    // Sort support intervals along X and compute longest clear unsupported gap
+    // Bottom deck supported continuously by front+back plinths (or full-width plinth) does not sag as a free shelf
+    if (continuousPlinthUnderCount >= 1) {
+      continue;
+    }
+
+    // Sort & merge overlapping support intervals along X to compute true longest clear unsupported gap
     supportIntervals.sort((u, v) => u[0] - v[0]);
+    const merged: Array<[number, number]> = [];
+    for (const iv of supportIntervals) {
+      if (merged.length === 0 || iv[0] > merged[merged.length - 1][1]) {
+        merged.push([iv[0], iv[1]]);
+      } else {
+        merged[merged.length - 1][1] = Math.max(merged[merged.length - 1][1], iv[1]);
+      }
+    }
 
     let maxSpanMm = dx;
-    if (supportIntervals.length > 0) {
+    if (merged.length > 0) {
       let longest = 0;
-      // Left overhang / span from left edge to first support
-      longest = Math.max(longest, supportIntervals[0][0] - b.minX);
-      for (let i = 0; i < supportIntervals.length - 1; i++) {
-        longest = Math.max(longest, supportIntervals[i + 1][0] - supportIntervals[i][1]);
+      longest = Math.max(longest, merged[0][0] - b.minX);
+      for (let i = 0; i < merged.length - 1; i++) {
+        longest = Math.max(longest, merged[i + 1][0] - merged[i][1]);
       }
-      // Right overhang / span from last support to right edge
-      longest = Math.max(longest, b.maxX - supportIntervals[supportIntervals.length - 1][1]);
+      longest = Math.max(longest, b.maxX - merged[merged.length - 1][1]);
       maxSpanMm = Math.max(120, Math.round(longest));
     } else {
       maxSpanMm = Math.round(dx);
@@ -1971,8 +2070,8 @@ export function analyzeShelfDeflection(
     const wNPerMm = (loadKgPerM * 9.81) / 1000;
     const L = maxSpanMm;
 
-    // Long-term wood creep factor (~1.45× immediate elastic sag for furniture boards)
-    const creepFactor = p.materialId.startsWith('steel') || p.materialId === 'glass_clear' ? 1.0 : 1.45;
+    // Long-term wood creep factor (~1.35× immediate elastic sag for furniture boards)
+    const creepFactor = p.materialId.startsWith('steel') || p.materialId === 'glass_clear' ? 1.0 : 1.35;
     const rawDeflectionMm =
       ((5 * wNPerMm * Math.pow(L, 4)) / (384 * E * I)) * creepFactor;
     const deflectionMm = Math.round(rawDeflectionMm * 100) / 100;
@@ -1984,8 +2083,8 @@ export function analyzeShelfDeflection(
         ? Math.min(250, Math.round((spanLoadKg * (2.0 / rawDeflectionMm)) * 10) / 10)
         : 250;
 
-    const limitWarn = Math.min(2.2, L / 350);
-    const limitCrit = Math.min(3.8, L / 220);
+    const limitWarn = Math.min(2.2, L / 320);
+    const limitCrit = Math.min(3.8, L / 200);
 
     let status: ShelfLoadStatus = 'ok';
     let recommendation = `Sztywność OK — ugięcie ~${deflectionMm.toFixed(1)} mm przy ${spanLoadKg} kg (udźwig bezpieczny ok. ${safeMaxLoadKg} kg).`;

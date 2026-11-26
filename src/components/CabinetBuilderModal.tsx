@@ -32,6 +32,7 @@ const PRESET_ORDER: CabinetPresetId[] = [
   'wardrobe',
   'sliding_wardrobe',
   'tv_console',
+  'steel_rack',
 ];
 
 export const CabinetBuilderModal: React.FC<CabinetBuilderModalProps> = ({
@@ -79,6 +80,7 @@ export const CabinetBuilderModal: React.FC<CabinetBuilderModalProps> = ({
 
   const isSliding = cfg.preset === 'sliding_wardrobe';
   const isCorner = cfg.preset === 'corner_l';
+  const isSteelRack = cfg.preset === 'steel_rack';
 
   // Live 2D SVG schematic dimensions
   const totalDrawH = cfg.heightMm + (cfg.addCountertop ? 38 : 0);
@@ -99,10 +101,10 @@ export const CabinetBuilderModal: React.FC<CabinetBuilderModalProps> = ({
         <div className="flex items-center justify-between gap-3 border-b border-zinc-800 px-5 py-3.5">
           <div className="min-w-0">
             <h2 className="text-base font-semibold text-white truncate">
-              Kreator parametrycznych szafek, szaf przesuwnych i narożnych
+              Kreator parametrycznych szafek, szaf przesuwnych i regałów
             </h2>
             <p className="mt-0.5 text-xs text-zinc-400">
-              Trawersy, przegrody, strefy hybrydowe, dno Blum −13 mm, blendy przyścienne, Tip-On / Gola i System 32
+              Trawersy, przegrody, strefy hybrydowe, dno Blum −13 mm, blendy, regały stal+OSB i System 32
             </p>
           </div>
           <button
@@ -117,8 +119,8 @@ export const CabinetBuilderModal: React.FC<CabinetBuilderModalProps> = ({
 
         {/* Body */}
         <div className="cad-scroll flex-1 overflow-y-auto px-5 py-4 space-y-4">
-          {/* 7 Presets Grid */}
-          <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-1.5">
+          {/* 8 Presets Grid */}
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5">
             {PRESET_ORDER.map((pid) => {
               const p = CABINET_PRESETS[pid];
               const active = cfg.preset === pid;
@@ -170,55 +172,95 @@ export const CabinetBuilderModal: React.FC<CabinetBuilderModalProps> = ({
                     />
                   )}
 
-                  {/* Main Corpus Box */}
-                  <rect
-                    x={pad}
-                    y={pad + topOffset}
-                    width={cfg.widthMm}
-                    height={bodyH}
-                    fill="#3F3F46"
-                    fillOpacity={0.28}
-                    stroke="#F59E0B"
-                    strokeWidth={6}
-                  />
+                  {/* Main Corpus Box or Steel Rack Posts */}
+                  {isSteelRack ? (
+                    <>
+                      {Array.from({ length: divCount + 2 }).map((_, idx) => {
+                        const px = pad + (idx / (divCount + 1)) * (cfg.widthMm - 40);
+                        return (
+                          <rect
+                            key={`post_${idx}`}
+                            x={px}
+                            y={pad}
+                            width={40}
+                            height={cfg.heightMm}
+                            fill="#334155"
+                            stroke="#94A3B8"
+                            strokeWidth={6}
+                          />
+                        );
+                      })}
+                      {Array.from({ length: Math.max(2, cfg.shelfCount + 1) }).map((_, idx, arr) => {
+                        const y =
+                          pad +
+                          11 +
+                          (idx / Math.max(1, arr.length - 1)) *
+                            Math.max(100, cfg.heightMm - 120);
+                        return (
+                          <line
+                            key={`rsh_${idx}`}
+                            x1={pad + 40}
+                            y1={y}
+                            x2={pad + cfg.widthMm - 40}
+                            y2={y}
+                            stroke="#F59E0B"
+                            strokeWidth={cfg.boardThicknessMm}
+                          />
+                        );
+                      })}
+                    </>
+                  ) : (
+                    <>
+                      <rect
+                        x={pad}
+                        y={pad + topOffset}
+                        width={cfg.widthMm}
+                        height={bodyH}
+                        fill="#3F3F46"
+                        fillOpacity={0.28}
+                        stroke="#F59E0B"
+                        strokeWidth={6}
+                      />
 
-                  {/* Vertical Dividers */}
-                  {divCount > 0 &&
-                    Array.from({ length: divCount }).map((_, idx) => {
-                      const x = pad + ((idx + 1) / (divCount + 1)) * cfg.widthMm;
-                      return (
-                        <line
-                          key={`div_${idx}`}
-                          x1={x}
-                          y1={pad + topOffset + cfg.boardThicknessMm}
-                          x2={x}
-                          y2={pad + topOffset + upperZoneH - cfg.boardThicknessMm}
-                          stroke="#A1A1AA"
-                          strokeWidth={cfg.boardThicknessMm}
-                        />
-                      );
-                    })}
+                      {/* Vertical Dividers */}
+                      {divCount > 0 &&
+                        Array.from({ length: divCount }).map((_, idx) => {
+                          const x = pad + ((idx + 1) / (divCount + 1)) * cfg.widthMm;
+                          return (
+                            <line
+                              key={`div_${idx}`}
+                              x1={x}
+                              y1={pad + topOffset + cfg.boardThicknessMm}
+                              x2={x}
+                              y2={pad + topOffset + upperZoneH - cfg.boardThicknessMm}
+                              stroke="#A1A1AA"
+                              strokeWidth={cfg.boardThicknessMm}
+                            />
+                          );
+                        })}
 
-                  {/* Internal Shelves */}
-                  {(cfg.drawerCount === 0 || previewSummary.isHybrid) &&
-                    Array.from({ length: cfg.shelfCount }).map((_, idx) => {
-                      const y =
-                        pad +
-                        topOffset +
-                        ((idx + 1) / (cfg.shelfCount + 1)) * upperZoneH;
-                      return (
-                        <line
-                          key={`sh_${idx}`}
-                          x1={pad + cfg.boardThicknessMm}
-                          y1={y}
-                          x2={pad + cfg.widthMm - cfg.boardThicknessMm}
-                          y2={y}
-                          stroke="#94A3B8"
-                          strokeWidth={cfg.boardThicknessMm}
-                          strokeDasharray="18 10"
-                        />
-                      );
-                    })}
+                      {/* Internal Shelves */}
+                      {(cfg.drawerCount === 0 || previewSummary.isHybrid) &&
+                        Array.from({ length: cfg.shelfCount }).map((_, idx) => {
+                          const y =
+                            pad +
+                            topOffset +
+                            ((idx + 1) / (cfg.shelfCount + 1)) * upperZoneH;
+                          return (
+                            <line
+                              key={`sh_${idx}`}
+                              x1={pad + cfg.boardThicknessMm}
+                              y1={y}
+                              x2={pad + cfg.widthMm - cfg.boardThicknessMm}
+                              y2={y}
+                              stroke="#94A3B8"
+                              strokeWidth={cfg.boardThicknessMm}
+                              strokeDasharray="18 10"
+                            />
+                          );
+                        })}
+                    </>
+                  )}
 
                   {/* Drawers (Full or Bottom Hybrid Zone) */}
                   {!isSliding &&

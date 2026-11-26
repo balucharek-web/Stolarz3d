@@ -263,8 +263,8 @@ export function sanitizeImportedProject(
     const materialId: MaterialId =
       rawMat in MATERIAL_MAP || rawMat.startsWith('custom_mat_') ? rawMat : 'osb3';
 
-    const width = toFiniteNumber(p.width, 600, 4, 10000);
-    const height = toFiniteNumber(p.height, 400, 4, 10000);
+    const width = toFiniteNumber(p.width, 600, 2, 10000);
+    const height = toFiniteNumber(p.height, 400, 2, 10000);
     const depth = toFiniteNumber(p.depth, 18, 2, 10000);
     const position = toVec3(p.position, [0, height / 2, 0], -20000, 20000);
     const rotation = toVec3(p.rotation, [0, 0, 0], -360, 360);
@@ -418,6 +418,14 @@ export function sanitizeImportedProject(
   return { project };
 }
 
+function isLegacyBrokenWarehouseStarter(project: FurnitureProject): boolean {
+  if (project.id !== 'proj_warehouse_sloped') return false;
+  const hasOldPosts = project.parts.some((p) => p.id === 'p_post_fm');
+  const hasFixedSplitShelves = project.parts.some((p) => p.id === 'p_shelf_1_l');
+  // Old broken default template had 16 parts with full-width shelves colliding through center posts
+  return hasOldPosts && !hasFixedSplitShelves && project.parts.length <= 17;
+}
+
 export function loadProjectStore(defaultFactory: () => FurnitureProject): ProjectStoreState {
   try {
     const rawV2 = localStorage.getItem(PROJECTS_STORAGE_KEY);
@@ -428,9 +436,18 @@ export function loadProjectStore(defaultFactory: () => FurnitureProject): Projec
       };
       if (Array.isArray(parsed.projects) && parsed.projects.length > 0) {
         const cleanProjects: FurnitureProject[] = [];
+        let upgradedLegacyStarter = false;
         for (const item of parsed.projects) {
           const { project } = sanitizeImportedProject(item);
-          if (project) cleanProjects.push(project);
+          if (!project) continue;
+          if (isLegacyBrokenWarehouseStarter(project)) {
+            const fresh = defaultFactory();
+            fresh.updatedAt = Date.now();
+            cleanProjects.push(fresh);
+            upgradedLegacyStarter = true;
+          } else {
+            cleanProjects.push(project);
+          }
         }
         if (cleanProjects.length > 0) {
           const activeId =
@@ -438,7 +455,11 @@ export function loadProjectStore(defaultFactory: () => FurnitureProject): Projec
             cleanProjects.some((p) => p.id === parsed.activeProjectId)
               ? parsed.activeProjectId
               : cleanProjects[0].id;
-          return { activeProjectId: activeId, projects: cleanProjects };
+          const store: ProjectStoreState = { activeProjectId: activeId, projects: cleanProjects };
+          if (upgradedLegacyStarter) {
+            saveProjectStore(store);
+          }
+          return store;
         }
       }
     }
@@ -448,9 +469,12 @@ export function loadProjectStore(defaultFactory: () => FurnitureProject): Projec
     if (rawV1) {
       const { project } = sanitizeImportedProject(JSON.parse(rawV1));
       if (project) {
+        const finalProject = isLegacyBrokenWarehouseStarter(project)
+          ? { ...defaultFactory(), updatedAt: Date.now() }
+          : project;
         const migrated: ProjectStoreState = {
-          activeProjectId: project.id,
-          projects: [project],
+          activeProjectId: finalProject.id,
+          projects: [finalProject],
         };
         saveProjectStore(migrated);
         return migrated;

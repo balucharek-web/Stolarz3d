@@ -8,7 +8,7 @@ import {
   QuoteSettings,
   SCREW_MAP,
 } from '../types/furniture';
-import { getPartQuaternion, getPartWorldBox } from './carpentry';
+import { computeSawCutAngles, getPartQuaternion, getPartWorldBox } from './carpentry';
 import { getProjectDimensionsMm } from './geometry';
 import {
   nestLinearProfiles,
@@ -97,6 +97,97 @@ function getBoardPrimaryPlane(part: FurniturePart): {
     return { thinAxis: 'y', faceW: part.width, faceH: part.depth, thickness: part.height };
   }
   return { thinAxis: 'x', faceW: part.depth, faceH: part.height, thickness: part.width };
+}
+
+/**
+ * Returns the exact 2D board outer contour vertices [xMm, yMm] in bottom-left origin coordinates
+ * (X in [0, faceW], Y in [0, faceH]) for rectangular, sloped trapezoid, and custom polygon parts.
+ */
+export function getBoardOutline2D(
+  part: FurniturePart,
+  faceW: number,
+  faceH: number
+): [number, number][] {
+  if (part.kind === 'custom' && part.customPolygon && part.customPolygon.length >= 3) {
+    const pts = part.customPolygon;
+    let minX = Infinity,
+      maxX = -Infinity,
+      minY = Infinity,
+      maxY = -Infinity;
+    for (const [px, py] of pts) {
+      if (px < minX) minX = px;
+      if (px > maxX) maxX = px;
+      if (py < minY) minY = py;
+      if (py > maxY) maxY = py;
+    }
+    const rawW = Math.max(1, maxX - minX);
+    const rawH = Math.max(1, maxY - minY);
+    return pts.map(([px, py]) => [
+      Math.round(((px - minX) / rawW) * faceW * 10) / 10,
+      Math.round(((py - minY) / rawH) * faceH * 10) / 10,
+    ]);
+  }
+  if (part.kind === 'sloped') {
+    const bl = Math.max(0, Math.min(faceH - 20, part.slopeBottomLeft ?? 0));
+    const br = Math.max(0, Math.min(faceH - 20, part.slopeBottomRight ?? 0));
+    const tr = Math.max(br + 20, faceH - Math.max(0, part.slopeTopRight ?? 0));
+    const tl = Math.max(bl + 20, faceH - Math.max(0, part.slopeTopLeft ?? 0));
+    return [
+      [0, bl],
+      [faceW, br],
+      [faceW, tr],
+      [0, tl],
+    ];
+  }
+  return [
+    [0, 0],
+    [faceW, 0],
+    [faceW, faceH],
+    [0, faceH],
+  ];
+}
+
+/**
+ * Returns the exact 2D dado groove segment in bottom-left board coordinates (X in [0..faceW], Y in [0..faceH]).
+ * Correctly places `edge: 'back'` vertically along X = insetMm for vertical side walls (thinAxis === 'x').
+ */
+export function getDadoGrooveLine2D(
+  part: FurniturePart,
+  thinAxis: 'x' | 'y' | 'z',
+  faceW: number,
+  faceH: number
+): { x1: number; y1: number; x2: number; y2: number; widthMm: number; depthMm: number } | null {
+  if (!part.dadoGroove?.enabled) return null;
+  const ins = Math.max(2, part.dadoGroove.insetMm);
+  const edge = part.dadoGroove.edge;
+  const widthMm = part.dadoGroove.widthMm;
+  const depthMm = part.dadoGroove.depthMm;
+
+  if (thinAxis === 'x') {
+    // Vertical side wall: X=0 is back (-Z), X=faceW is front (+Z), Y=0..faceH is bottom..top
+    if (edge === 'back') {
+      return { x1: ins, y1: 0, x2: ins, y2: faceH, widthMm, depthMm };
+    }
+    if (edge === 'top') {
+      const y = Math.max(2, faceH - ins);
+      return { x1: 0, y1: y, x2: faceW, y2: y, widthMm, depthMm };
+    }
+    return { x1: 0, y1: ins, x2: faceW, y2: ins, widthMm, depthMm };
+  }
+  if (thinAxis === 'y') {
+    // Horizontal deck/shelf: X=width, Y=0 is back (-Z), Y=faceH is front (+Z)
+    if (edge === 'top') {
+      const y = Math.max(2, faceH - ins);
+      return { x1: 0, y1: y, x2: faceW, y2: y, widthMm, depthMm };
+    }
+    return { x1: 0, y1: ins, x2: faceW, y2: ins, widthMm, depthMm };
+  }
+  // Front/back panel (thinAxis === 'z'): X=width, Y=height
+  if (edge === 'top') {
+    const y = Math.max(2, faceH - ins);
+    return { x1: 0, y1: y, x2: faceW, y2: y, widthMm, depthMm };
+  }
+  return { x1: 0, y1: ins, x2: faceW, y2: ins, widthMm, depthMm };
 }
 
 function localPointToBoard2D(
@@ -560,32 +651,12 @@ export function generateProjectDxf(
     const ox = cursorX;
     const oy = cursorY;
 
-    // 1. Outer contour on layer OUTLINE
-    if (part.kind === 'custom' && part.customPolygon && part.customPolygon.length >= 3) {
-      const pts = part.customPolygon;
-      let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
-      for (const [px, py] of pts) {
-        if (px < minX) minX = px;
-        if (px > maxX) maxX = px;
-        if (py < minY) minY = py;
-        if (py > maxY) maxY = py;
-      }
-      const rawW = Math.max(1, maxX - minX);
-      const rawH = Math.max(1, maxY - minY);
-      const scaled = pts.map(([px, py]) => [
-        ox + ((px - minX) / rawW) * w,
-        oy + ((py - minY) / rawH) * h,
-      ]);
-      for (let i = 0; i < scaled.length; i++) {
-        const [x1, y1] = scaled[i];
-        const [x2, y2] = scaled[(i + 1) % scaled.length];
-        addLine('OUTLINE', x1, y1, x2, y2);
-      }
-    } else {
-      addLine('OUTLINE', ox, oy, ox + w, oy);
-      addLine('OUTLINE', ox + w, oy, ox + w, oy + h);
-      addLine('OUTLINE', ox + w, oy + h, ox, oy + h);
-      addLine('OUTLINE', ox, oy + h, ox, oy);
+    // 1. Outer contour on layer OUTLINE (exact polygon for sloped trapezoids & custom 2D shapes!)
+    const outlinePts = getBoardOutline2D(part, w, h);
+    for (let i = 0; i < outlinePts.length; i++) {
+      const [x1, y1] = outlinePts[i];
+      const [x2, y2] = outlinePts[(i + 1) % outlinePts.length];
+      addLine('OUTLINE', ox + x1, oy + y1, ox + x2, oy + y2);
     }
 
     // 2. Internal cutouts on layer CUTOUT
@@ -609,10 +680,10 @@ export function generateProjectDxf(
       addCircle('DRILL', ox + hole.xMm, oy + hole.yMm, Math.max(1.5, hole.diameterMm / 2));
     }
 
-    // 4. Dado groove on layer GROOVE
-    if (part.dadoGroove?.enabled) {
-      const ins = part.dadoGroove.insetMm;
-      addLine('GROOVE', ox, oy + ins, ox + w, oy + ins);
+    // 4. Dado groove on layer GROOVE (respects vertical side wall X-axis vs horizontal Y-axis)
+    const groove = getDadoGrooveLine2D(part, map.thinAxis, w, h);
+    if (groove) {
+      addLine('GROOVE', ox + groove.x1, oy + groove.y1, ox + groove.x2, oy + groove.y2);
     }
 
     // 5. Part label on layer TEXT
@@ -632,8 +703,92 @@ export function generateProjectDxf(
   return lines.join('\n');
 }
 
+function getPartLocalVertices3D(part: FurniturePart): THREE.Vector3[] {
+  const hw = part.width / 2;
+  const hh = part.height / 2;
+  const hd = part.depth / 2;
+
+  if (part.kind === 'custom' && part.customPolygon && part.customPolygon.length >= 3) {
+    const pts = part.customPolygon;
+    let minX = Infinity,
+      maxX = -Infinity,
+      minY = Infinity,
+      maxY = -Infinity;
+    for (const [px, py] of pts) {
+      if (px < minX) minX = px;
+      if (px > maxX) maxX = px;
+      if (py < minY) minY = py;
+      if (py > maxY) maxY = py;
+    }
+    const rawW = Math.max(1, maxX - minX);
+    const rawH = Math.max(1, maxY - minY);
+    const verts: THREE.Vector3[] = [];
+    for (const [px, py] of pts) {
+      const lx = ((px - minX) / rawW - 0.5) * part.width;
+      const ly = ((py - minY) / rawH - 0.5) * part.height;
+      verts.push(new THREE.Vector3(lx, ly, -hd), new THREE.Vector3(lx, ly, hd));
+    }
+    return verts;
+  }
+
+  if (part.kind === 'sloped') {
+    const yBL = -hh + Math.max(0, Math.min(part.height - 20, part.slopeBottomLeft ?? 0));
+    const yBR = -hh + Math.max(0, Math.min(part.height - 20, part.slopeBottomRight ?? 0));
+    const yTL = Math.max(yBL + 20, hh - Math.max(0, part.slopeTopLeft ?? 0));
+    const yTR = Math.max(yBR + 20, hh - Math.max(0, part.slopeTopRight ?? 0));
+    return [
+      new THREE.Vector3(-hw, yBL, -hd),
+      new THREE.Vector3(hw, yBR, -hd),
+      new THREE.Vector3(hw, yTR, -hd),
+      new THREE.Vector3(-hw, yTL, -hd),
+      new THREE.Vector3(-hw, yBL, hd),
+      new THREE.Vector3(hw, yBR, hd),
+      new THREE.Vector3(hw, yTR, hd),
+      new THREE.Vector3(-hw, yTL, hd),
+    ];
+  }
+
+  return [
+    new THREE.Vector3(-hw, -hh, -hd),
+    new THREE.Vector3(hw, -hh, -hd),
+    new THREE.Vector3(hw, hh, -hd),
+    new THREE.Vector3(-hw, hh, -hd),
+    new THREE.Vector3(-hw, -hh, hd),
+    new THREE.Vector3(hw, -hh, hd),
+    new THREE.Vector3(hw, hh, hd),
+    new THREE.Vector3(-hw, hh, hd),
+  ];
+}
+
+function convexHull2D(points: [number, number][]): [number, number][] {
+  if (points.length <= 3) return points;
+  const sorted = [...points].sort((a, b) => (a[0] === b[0] ? a[1] - b[1] : a[0] - b[0]));
+  const cross = (o: [number, number], a: [number, number], b: [number, number]) =>
+    (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]);
+
+  const lower: [number, number][] = [];
+  for (const p of sorted) {
+    while (lower.length >= 2 && cross(lower[lower.length - 2], lower[lower.length - 1], p) <= 0) {
+      lower.pop();
+    }
+    lower.push(p);
+  }
+  const upper: [number, number][] = [];
+  for (let i = sorted.length - 1; i >= 0; i--) {
+    const p = sorted[i];
+    while (upper.length >= 2 && cross(upper[upper.length - 2], upper[upper.length - 1], p) <= 0) {
+      upper.pop();
+    }
+    upper.push(p);
+  }
+  lower.pop();
+  upper.pop();
+  return [...lower, ...upper];
+}
+
 /**
  * Builds crisp 2D Orthographic Projection SVGs (Front XY, Side ZY, Top XZ) of the whole furniture piece.
+ * Projects exact 3D vertices + 2D convex hull so rotated roofs, tilted shelves, and sloped panels draw accurately.
  */
 export function buildOrthographicSvg(
   parts: FurniturePart[],
@@ -642,22 +797,27 @@ export function buildOrthographicSvg(
   if (parts.length === 0) {
     return '<svg viewBox="0 0 200 120" xmlns="http://www.w3.org/2000/svg"></svg>';
   }
-  const boxes = parts.map((p) => ({ part: p, box: getPartWorldBox(p) }));
-  let minU = Infinity, maxU = -Infinity, minV = Infinity, maxV = -Infinity;
 
-  const projectRect = (b: ReturnType<typeof getPartWorldBox>) => {
-    if (view === 'front') return { u1: b.minX, u2: b.maxX, v1: b.minY, v2: b.maxY };
-    if (view === 'side') return { u1: b.minZ, u2: b.maxZ, v1: b.minY, v2: b.maxY };
-    return { u1: b.minX, u2: b.maxX, v1: b.minZ, v2: b.maxZ };
-  };
+  let minU = Infinity,
+    maxU = -Infinity,
+    minV = Infinity,
+    maxV = -Infinity;
 
-  const rects = boxes.map(({ part, box }) => {
-    const r = projectRect(box);
-    minU = Math.min(minU, r.u1);
-    maxU = Math.max(maxU, r.u2);
-    minV = Math.min(minV, r.v1);
-    maxV = Math.max(maxV, r.v2);
-    return { part, ...r };
+  const shapes = parts.map((part) => {
+    const quat = getPartQuaternion(part);
+    const pos = new THREE.Vector3(...part.position);
+    const projected: [number, number][] = getPartLocalVertices3D(part).map((v) => {
+      const w = v.applyQuaternion(quat).add(pos);
+      const u = view === 'side' ? w.z : w.x;
+      const vv = view === 'top' ? w.z : w.y;
+      if (u < minU) minU = u;
+      if (u > maxU) maxU = u;
+      if (vv < minV) minV = vv;
+      if (vv > maxV) maxV = vv;
+      return [u, vv];
+    });
+    const hull = convexHull2D(projected);
+    return { part, hull };
   });
 
   const spanU = Math.max(100, maxU - minU);
@@ -671,14 +831,20 @@ export function buildOrthographicSvg(
   const mapU = (u: number) => pad + (u - minU);
   const mapV = (v: number) => (view === 'top' ? pad + (v - minV) : pad + (maxV - v));
 
-  const bodyRects = rects
-    .map((r) => {
-      const x = mapU(r.u1);
-      const w = Math.max(2, r.u2 - r.u1);
-      const yTop = Math.min(mapV(r.v1), mapV(r.v2));
-      const h = Math.max(2, Math.abs(mapV(r.v2) - mapV(r.v1)));
-      const fill = r.part.kind === 'door' ? '#FDE68A' : r.part.kind === 'countertop' ? '#E5E7EB' : '#F8FAFC';
-      return `<rect x="${x.toFixed(1)}" y="${yTop.toFixed(1)}" width="${w.toFixed(1)}" height="${h.toFixed(1)}" fill="${fill}" fill-opacity="0.72" stroke="#18181B" stroke-width="${sw.toFixed(1)}" />`;
+  const bodyPolys = shapes
+    .map(({ part, hull }) => {
+      const fill =
+        part.kind === 'door'
+          ? '#FDE68A'
+          : part.kind === 'countertop'
+            ? '#E5E7EB'
+            : part.kind === 'profile'
+              ? '#CBD5E1'
+              : '#F8FAFC';
+      const ptsStr = hull
+        .map(([u, v]) => `${mapU(u).toFixed(1)},${mapV(v).toFixed(1)}`)
+        .join(' ');
+      return `<polygon points="${ptsStr}" fill="${fill}" fill-opacity="0.76" stroke="#18181B" stroke-width="${sw.toFixed(1)}" stroke-linejoin="round" />`;
     })
     .join('');
 
@@ -687,12 +853,111 @@ export function buildOrthographicSvg(
   const dimRightX = pad + spanU + pad * 0.52;
 
   return `<svg viewBox="0 0 ${vbW.toFixed(0)} ${vbH.toFixed(0)}" xmlns="http://www.w3.org/2000/svg" style="width:100%;height:auto;max-height:220px;background:#FFFFFF;border:1px solid #E4E4E7;border-radius:8px;">
-    ${bodyRects}
+    ${bodyPolys}
     <line x1="${pad}" y1="${dimBottomY}" x2="${pad + spanU}" y2="${dimBottomY}" stroke="#D97706" stroke-width="${sw}" />
     <text x="${pad + spanU / 2}" y="${dimBottomY + fs * 1.05}" text-anchor="middle" fill="#18181B" font-size="${fs.toFixed(0)}" font-family="monospace" font-weight="700">${Math.round(spanU)} mm</text>
     <line x1="${dimRightX}" y1="${pad}" x2="${dimRightX}" y2="${pad + spanV}" stroke="#D97706" stroke-width="${sw}" />
     <text x="${dimRightX + fs * 0.35}" y="${pad + spanV / 2}" text-anchor="start" fill="#18181B" font-size="${fs.toFixed(0)}" font-family="monospace" font-weight="700">${Math.round(spanV)} mm</text>
   </svg>`;
+}
+
+const PDF_NEST_COLORS = [
+  '#D97706',
+  '#0284C7',
+  '#059669',
+  '#7C3AED',
+  '#DB2777',
+  '#EA580C',
+  '#0D9488',
+  '#4F46E5',
+];
+
+function buildPdfNestingSectionHtml(
+  nestingResults: MaterialNestingResult[],
+  linearResults: MaterialLinearResult[]
+): string {
+  if (nestingResults.length === 0 && linearResults.length === 0) return '';
+
+  const sheetsHtml = nestingResults
+    .map((nr) => {
+      const meta = getMaterialMeta(nr.materialId);
+      const sheetSvgs = nr.sheets
+        .map((sheet) => {
+          const w = sheet.sheetWidthMm;
+          const h = sheet.sheetHeightMm;
+          const pieces = sheet.placements
+            .map((pl, idx) => {
+              const color = pl.oversized
+                ? '#DC2626'
+                : PDF_NEST_COLORS[idx % PDF_NEST_COLORS.length];
+              const fontSize = Math.max(24, Math.min(54, Math.min(pl.wMm, pl.hMm) * 0.22));
+              const showDims = pl.wMm >= 140 && pl.hMm >= 90;
+              return `<g>
+                <rect x="${pl.xMm}" y="${pl.yMm}" width="${pl.wMm}" height="${pl.hMm}" fill="${color}" fill-opacity="0.18" stroke="${color}" stroke-width="5" />
+                <text x="${pl.xMm + pl.wMm / 2}" y="${pl.yMm + pl.hMm / 2 - (showDims ? fontSize * 0.25 : 0)}" text-anchor="middle" dominant-baseline="middle" fill="#18181B" font-size="${fontSize.toFixed(0)}" font-family="monospace" font-weight="700">#${pl.labelIndex}</text>
+                ${
+                  showDims
+                    ? `<text x="${pl.xMm + pl.wMm / 2}" y="${pl.yMm + pl.hMm / 2 + fontSize * 0.78}" text-anchor="middle" dominant-baseline="middle" fill="#3F3F46" font-size="${(fontSize * 0.62).toFixed(0)}" font-family="monospace">${pl.wMm}×${pl.hMm}${pl.rotated ? ' ↻' : ''}</text>`
+                    : ''
+                }
+              </g>`;
+            })
+            .join('');
+
+          return `<div class="nest-card">
+            <div class="nest-head">
+              <strong>${escapeHtml(meta.name)} (${nr.thicknessMm} mm) — Arkusz #${sheet.sheetIndex}</strong>
+              <span>${w} × ${h} mm · ${sheet.placements.length} szt. · Odpad ${sheet.wastePercent}%${nr.grainLocked ? ' · Słój →' : ''}</span>
+            </div>
+            <svg viewBox="0 0 ${w} ${h}" xmlns="http://www.w3.org/2000/svg" style="width:100%;height:auto;max-height:200px;background:#FAFAFA;border:1px solid #D4D4D8;border-radius:4px;">
+              <rect x="0" y="0" width="${w}" height="${h}" fill="#F4F4F5" stroke="#52525B" stroke-width="6" />
+              ${pieces}
+            </svg>
+          </div>`;
+        })
+        .join('');
+      return sheetSvgs;
+    })
+    .join('');
+
+  const barsHtml = linearResults
+    .map((lr) => {
+      const meta = getMaterialMeta(lr.materialId);
+      return lr.bars
+        .map((bar) => {
+          const L = bar.stockLengthMm;
+          const barH = 260;
+          const cutsSvg = bar.cuts
+            .map((c, idx) => {
+              const color = c.oversized
+                ? '#DC2626'
+                : PDF_NEST_COLORS[idx % PDF_NEST_COLORS.length];
+              return `<g>
+                <rect x="${c.startMm}" y="30" width="${c.lengthMm}" height="${barH - 60}" fill="${color}" fill-opacity="0.22" stroke="${color}" stroke-width="8" />
+                <text x="${c.startMm + c.lengthMm / 2}" y="${barH / 2 - 14}" text-anchor="middle" fill="#18181B" font-size="68" font-family="monospace" font-weight="700">#${c.labelIndex}</text>
+                <text x="${c.startMm + c.lengthMm / 2}" y="${barH / 2 + 54}" text-anchor="middle" fill="#3F3F46" font-size="54" font-family="monospace">${c.lengthMm} mm</text>
+              </g>`;
+            })
+            .join('');
+          return `<div class="nest-card">
+            <div class="nest-head">
+              <strong>${escapeHtml(meta.name)} (${lr.profileSectionLabel}) — Sztanga 1D #${bar.barIndex}</strong>
+              <span>Sztanga ${L} mm · Wykorzystano ${bar.usedMm} mm · Odpad ${bar.wasteMm} mm (${bar.wastePercent}%)</span>
+            </div>
+            <svg viewBox="0 0 ${L} ${barH}" xmlns="http://www.w3.org/2000/svg" style="width:100%;height:auto;max-height:64px;background:#FAFAFA;border:1px solid #D4D4D8;border-radius:4px;">
+              <rect x="0" y="20" width="${L}" height="${barH - 40}" fill="#F4F4F5" stroke="#52525B" stroke-width="8" />
+              ${cutsSvg}
+            </svg>
+          </div>`;
+        })
+        .join('');
+    })
+    .join('');
+
+  return `<div class="page-break"></div>
+  <h2>4. Mapy rozkroju 2D (arkusze) i 1D (sztangi liniowe)</h2>
+  ${sheetsHtml}
+  ${barsHtml}`;
 }
 
 /**
@@ -703,12 +968,14 @@ export function printTechnicalDocumentation(params: {
   project: FurnitureProject;
   cutSpecs: Map<string, CarpentryCutSpec>;
   nestingResults: MaterialNestingResult[];
+  linearResults?: MaterialLinearResult[];
   quote: CommercialQuoteBreakdown;
   quoteSettings: QuoteSettings;
   kerfMm: number;
   snapshotDataUrl: string | null;
 }) {
   const { project, cutSpecs, nestingResults, quote, quoteSettings, kerfMm, snapshotDataUrl } = params;
+  const linearResults = params.linearResults ?? nestLinearProfiles(project.parts, kerfMm);
   const overall = getProjectDimensionsMm(project.parts);
   const dateStr = new Date().toLocaleDateString('pl-PL');
 
@@ -716,30 +983,48 @@ export function printTechnicalDocumentation(params: {
   const sideSvg = buildOrthographicSvg(project.parts, 'side');
   const topSvg = buildOrthographicSvg(project.parts, 'top');
 
-  const drillingMaps = project.parts
+  const boardParts = project.parts.filter((p) => p.kind !== 'appliance');
+  const drillingMaps = boardParts
     .map((p, idx) => ({ idx: idx + 1, map: extractBoardDrillingMap(p, project.parts, project.fasteners) }))
     .filter((item) => item.map.holes.length > 0 || item.map.cutouts.length > 0 || item.map.part.dadoGroove?.enabled);
 
-  const cutRowsHtml = project.parts
-    .filter((p) => p.kind !== 'appliance')
+  const cutRowsHtml = boardParts
     .map((p, i) => {
       const spec = cutSpecs.get(p.id);
+      const isProfile = p.kind === 'profile';
+      const sortedProfileDims = isProfile
+        ? [Math.round(p.width), Math.round(p.height), Math.round(p.depth)].sort((a, b) => a - b)
+        : null;
       const machiningNotes: string[] = [];
+      const sawAngles = computeSawCutAngles(p);
+      if (sawAngles.length > 0) machiningNotes.push(`Skos ${sawAngles.map((a) => `${a.interiorDeg}°`).join('/')}`);
       if (p.cornerRadiusMm) machiningNotes.push(`R${p.cornerRadiusMm}`);
       if (p.cutouts?.length) machiningNotes.push(`${p.cutouts.length} wyc.`);
       if (p.dadoGroove?.enabled) machiningNotes.push(`Nut ${p.dadoGroove.widthMm}×${p.dadoGroove.depthMm}`);
       if (p.hingeSide && p.hingeSide !== 'none') machiningNotes.push(`Zawias Ø35 (${p.hingeCount ?? 2} szt)`);
+      const finishedDim = isProfile && sortedProfileDims
+        ? `Profil ${sortedProfileDims[0]}×${sortedProfileDims[1]} × ${sortedProfileDims[2]}`
+        : spec
+          ? `${spec.grainLenMm} × ${spec.crossWidMm} × ${spec.thicknessMm}`
+          : `${p.width} × ${p.height} × ${p.depth}`;
+      const sawDim = isProfile && sortedProfileDims
+        ? `1D: ${sortedProfileDims[2]} mm`
+        : spec
+          ? `${spec.sawLenMm} × ${spec.sawWidMm}`
+          : '-';
       return `<tr>
         <td>${i + 1}</td>
         <td><strong>${escapeHtml(p.name)}</strong></td>
         <td>${escapeHtml(getMaterialMeta(p.materialId).shortName)}</td>
-        <td class="num">${spec ? `${spec.grainLenMm} × ${spec.crossWidMm} × ${spec.thicknessMm}` : `${p.width} × ${p.height} × ${p.depth}`}</td>
-        <td class="num">${spec ? `${spec.sawLenMm} × ${spec.sawWidMm}` : '-'}</td>
-        <td class="num">${spec ? escapeHtml(spec.edgeBandingLabel) : 'Brak'}</td>
+        <td class="num">${finishedDim}</td>
+        <td class="num">${sawDim}</td>
+        <td class="num">${isProfile ? '—' : spec ? escapeHtml(spec.edgeBandingLabel) : 'Brak'}</td>
         <td>${escapeHtml(machiningNotes.join(', ') || '—')}</td>
       </tr>`;
     })
     .join('');
+
+  const nestingSectionHtml = buildPdfNestingSectionHtml(nestingResults, linearResults);
 
   const drillCardsHtml = drillingMaps
     .map(({ idx, map }) => {
@@ -747,6 +1032,13 @@ export function printTechnicalDocumentation(params: {
       const vw = map.faceWidthMm + pad * 2;
       const vh = map.faceHeightMm + pad * 2;
       const fs = Math.max(18, Math.max(map.faceWidthMm, map.faceHeightMm) * 0.036);
+      const outlinePts = getBoardOutline2D(map.part, map.faceWidthMm, map.faceHeightMm)
+        .map(([x, y]) => `${(pad + x).toFixed(1)},${(pad + map.faceHeightMm - y).toFixed(1)}`)
+        .join(' ');
+      const groove = getDadoGrooveLine2D(map.part, map.thinAxis, map.faceWidthMm, map.faceHeightMm);
+      const grooveSvg = groove
+        ? `<line x1="${(pad + groove.x1).toFixed(1)}" y1="${(pad + map.faceHeightMm - groove.y1).toFixed(1)}" x2="${(pad + groove.x2).toFixed(1)}" y2="${(pad + map.faceHeightMm - groove.y2).toFixed(1)}" stroke="#0284C7" stroke-width="${Math.max(4, groove.widthMm)}" stroke-dasharray="14 8" />`
+        : '';
       const cutoutsSvg = map.cutouts
         .map((c) => {
           const cx = pad + map.faceWidthMm / 2 + c.xMm;
@@ -792,7 +1084,8 @@ export function printTechnicalDocumentation(params: {
         </div>
         <div class="drill-grid">
           <svg viewBox="0 0 ${vw} ${vh}" style="width:100%;max-height:190px;background:#FAFAFA;border:1px solid #E4E4E7;border-radius:6px;">
-            <rect x="${pad}" y="${pad}" width="${map.faceWidthMm}" height="${map.faceHeightMm}" fill="#FFFFFF" stroke="#18181B" stroke-width="4" />
+            <polygon points="${outlinePts}" fill="#FFFFFF" stroke="#18181B" stroke-width="4" stroke-linejoin="round" />
+            ${grooveSvg}
             ${cutoutsSvg}
             ${holesSvg}
             <text x="${pad + map.faceWidthMm / 2}" y="${pad - 18}" text-anchor="middle" font-size="${fs.toFixed(0)}" fill="#18181B" font-family="monospace">${map.faceWidthMm} mm</text>
@@ -800,7 +1093,7 @@ export function printTechnicalDocumentation(params: {
           </svg>
           <table>
             <thead><tr><th>Otw.</th><th>Opis</th><th>Strona</th><th class="num">X [mm]</th><th class="num">Y [mm]</th><th class="num">Wymiar</th></tr></thead>
-            <tbody>${holeTable || '<tr><td colspan="6">Tylko wycięcia / frezowania</td></tr>'}</tbody>
+            <tbody>${holeTable || '<tr><td colspan="6">Tylko wycięcia / nutowanie</td></tr>'}</tbody>
           </table>
         </div>
       </div>`;
@@ -849,6 +1142,8 @@ export function printTechnicalDocumentation(params: {
     th { background: #F4F4F5; font-weight: 600; color: #3F3F46; }
     .num { text-align: right; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
     .quote-total { font-size: 14px; font-weight: 700; background: #FFFBEB; }
+    .nest-card { border: 1px solid #E4E4E7; border-radius: 8px; padding: 8px 10px; margin-bottom: 10px; page-break-inside: avoid; }
+    .nest-head { display: flex; justify-content: space-between; margin-bottom: 6px; font-size: 11px; color: #3F3F46; }
     .drill-card { border: 1px solid #E4E4E7; border-radius: 8px; padding: 10px; margin-bottom: 10px; page-break-inside: avoid; }
     .drill-head { display: flex; justify-content: space-between; margin-bottom: 8px; font-size: 12px; }
     .drill-grid { display: grid; grid-template-columns: 230px 1fr; gap: 12px; align-items: start; }
@@ -866,7 +1161,7 @@ export function printTechnicalDocumentation(params: {
     <div style="text-align:right;">
       <div style="font-size:11px;color:#52525B;">Gabaryt całkowity (S × W × G)</div>
       <div style="font-size:16px;font-weight:700;font-family:monospace;">${overall.width} × ${overall.height} × ${overall.depth} mm</div>
-      <div style="font-size:11px;color:#52525B;margin-top:4px;">${project.parts.length} formatek · ${project.fasteners.length} łączników · ${nestingResults.reduce((s, n) => s + n.totalSheets, 0)} arkuszy</div>
+      <div style="font-size:11px;color:#52525B;margin-top:4px;">${boardParts.length} elementów · ${project.fasteners.length} łączników · ${nestingResults.reduce((s, n) => s + n.totalSheets, 0)} arkuszy${quote.linearBarsCount > 0 ? ` · ${quote.linearBarsCount} sztang 1D` : ''}</div>
     </div>
   </div>
 
@@ -887,7 +1182,7 @@ export function printTechnicalDocumentation(params: {
       ${quote.linearBarsCount > 0 ? `<tr><td>Profile liniowe / sztangi 1D</td><td>${quote.linearBarsCount} sztang</td><td class="num">${quote.linearProfilesCostPln} zł</td></tr>` : ''}
       <tr><td>Usługa rozkroju na pile formatowej</td><td>${quote.cuttingLinearM} mb × ${quoteSettings.cuttingPricePerMbPln} zł</td><td class="num">${quote.cuttingCostPln} zł</td></tr>
       <tr><td>Okleinowanie krawędzi ABS/PCV</td><td>${quote.edgeBandingLinearM} mb × ${quoteSettings.edgeBandingPricePerMbPln} zł</td><td class="num">${quote.edgeBandingCostPln} zł</td></tr>
-      <tr><td>Okucia i akcesoria meblowe</td><td>Zawiasy: ${quote.hardware.hingeCupsCount} · Prowadnice: ${quote.hardware.drawerSlidePairs} kpl · Uchwyty: ${quote.hardware.handlesCount} · Nóżki: ${quote.hardware.legsCount} · Wkręty: ${quote.hardware.fastenersTotal}</td><td class="num">${quote.hardwareCostPln} zł</td></tr>
+      <tr><td>Okucia i akcesoria meblowe</td><td>Zawiasy: ${quote.hardware.hingeCupsCount} · Prowadnice: ${quote.hardware.drawerSlidePairs} kpl · Uchwyty: ${quote.hardware.handlesCount}${quote.hardware.tipOnCount > 0 ? ` · Tip-On: ${quote.hardware.tipOnCount} szt.` : ''}${quote.hardware.golaLinearM > 0 ? ` · Gola J: ${quote.hardware.golaLinearM} mb` : ''}${quote.hardware.slidingDoorsCount > 0 ? ` · System przesuwny: ${quote.hardware.slidingDoorsCount} skrz.` : ''} · Nóżki: ${quote.hardware.legsCount} · Wkręty: ${quote.hardware.fastenersTotal}</td><td class="num">${quote.hardwareCostPln} zł</td></tr>
       <tr><td>Robocizna i montaż warsztatowy</td><td>${quoteSettings.laborHours} h × ${quoteSettings.laborRatePln} zł/h</td><td class="num">${quote.laborCostPln} zł</td></tr>
       <tr><td>Marża pracowni (${quoteSettings.marginPercent}%)</td><td></td><td class="num">${quote.marginPln} zł</td></tr>
       <tr><td><strong>RAZEM NETTO</strong></td><td></td><td class="num"><strong>${quote.netTotalPln} zł</strong></td></tr>
@@ -898,7 +1193,7 @@ export function printTechnicalDocumentation(params: {
   ${quoteSettings.notes ? `<p class="meta" style="margin-top:8px;">Uwagi: ${escapeHtml(quoteSettings.notes)}</p>` : ''}
 
   <div class="page-break"></div>
-  <h2>3. Lista rozkroju na piłę formatową</h2>
+  <h2>3. Lista rozkroju na piłę formatową i cięcie profili 1D</h2>
   <table>
     <thead>
       <tr><th>#</th><th>Element</th><th>Materiał</th><th class="num">Gotowy [mm]</th><th class="num">Cięcie piłą</th><th class="num">Okleina</th><th>Obróbki</th></tr>
@@ -906,10 +1201,12 @@ export function printTechnicalDocumentation(params: {
     <tbody>${cutRowsHtml}</tbody>
   </table>
 
+  ${nestingSectionHtml}
+
   ${
     drillingMaps.length > 0
       ? `<div class="page-break"></div>
-  <h2>4. Karty wierceń 2D i wycięć (współrzędne X/Y od lewego dolnego narożnika)</h2>
+  <h2>5. Karty wierceń 2D i wycięć (współrzędne X/Y od lewego dolnego narożnika)</h2>
   ${drillCardsHtml}`
       : ''
   }
@@ -917,7 +1214,7 @@ export function printTechnicalDocumentation(params: {
   ${
     assemblyPlan.steps.length > 0
       ? `<div class="page-break"></div>
-  <h2>5. Kolejność montażu (wykryta automatycznie ze styków fizycznych: ${assemblyPlan.totalContacts} styków)</h2>
+  <h2>6. Kolejność montażu (wykryta automatycznie ze styków fizycznych: ${assemblyPlan.totalContacts} styków)</h2>
   <table>
     <thead>
       <tr><th class="num">Krok</th><th>Etap i wskazówka warsztatowa</th><th>Elementy i baza styku</th><th>Łączniki</th></tr>
@@ -1010,6 +1307,36 @@ export function printBoardLabels(
     .map((p, idx) => {
       const spec = cutSpecs.get(p.id);
       const meta = getMaterialMeta(p.materialId);
+
+      // Dedicated linear profile sticker (cross-section + cut length, no fake ABS edge banding)
+      if (p.kind === 'profile') {
+        const dims = [Math.round(p.width), Math.round(p.height), Math.round(p.depth)].sort(
+          (a, b) => a - b
+        );
+        const secLabel = `${dims[0]}×${dims[1]} mm`;
+        const lenMm = dims[2];
+        return `<div class="label">
+          <div class="l-head">
+            <span class="badge">#${idx + 1}</span>
+            <span class="proj">${escapeHtml(project.name)}</span>
+            <span class="thick">PROFIL 1D</span>
+          </div>
+          <div class="l-name">${escapeHtml(p.name)}</div>
+          <div class="l-mat">${escapeHtml(meta.name)}</div>
+          <div class="l-body">
+            <div class="l-dims">
+              <div><span class="lbl">Przekrój:</span> <strong>${secLabel}</strong></div>
+              <div><span class="lbl">Cięcie 1D:</span> <strong>${lenMm} mm</strong></div>
+              <div class="cnc">Sztanga / cięcie na długość</div>
+            </div>
+            <svg viewBox="0 0 76 52" class="eb-svg">
+              <rect x="6" y="19" width="64" height="14" rx="2" fill="#E2E8F0" stroke="#334155" stroke-width="2" />
+              <text x="38" y="29" text-anchor="middle" font-size="8.5" font-family="monospace" font-weight="700" fill="#0F172A">${lenMm}</text>
+            </svg>
+          </div>
+        </div>`;
+      }
+
       const eb = p.edgeBanding;
       const hasEb = eb && eb.thicknessMm > 0;
       const ebColor = eb?.thicknessMm === 2 ? '#D97706' : '#0284C7';
@@ -1023,10 +1350,18 @@ export function printBoardLabels(
       const rightW = hasEb && eb.right ? 5 : 1.5;
 
       const cncTags: string[] = [];
+      const sawAngles = computeSawCutAngles(p);
+      if (sawAngles.length > 0) {
+        cncTags.push(`Skos ${sawAngles.map((a) => `${a.interiorDeg}°`).join('/')}`);
+      }
       if (p.cornerRadiusMm) cncTags.push(`R${p.cornerRadiusMm}`);
       if (p.cutouts?.length) cncTags.push(`${p.cutouts.length} wyc.`);
       if (p.dadoGroove?.enabled) cncTags.push(`Nut ${p.dadoGroove.widthMm}×${p.dadoGroove.depthMm}`);
       if (p.hingeSide && p.hingeSide !== 'none') cncTags.push(`Ø35 ×${p.hingeCount ?? 2}`);
+      if (p.system32ShelfHoles) cncTags.push('Sys32 Ø5');
+      if (p.kind === 'door' && p.handleStyle === 'gola_j') cncTags.push('Gola J');
+      if (p.kind === 'door' && p.handleStyle === 'chamfer_45') cncTags.push('Frez 45°');
+      if (p.kind === 'door' && p.handleStyle === 'tip_on') cncTags.push('Tip-On');
       if (p.surfaceFinish === 'gloss') cncTags.push('POŁYSK');
 
       return `<div class="label">
