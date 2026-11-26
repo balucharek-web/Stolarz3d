@@ -22,7 +22,7 @@ export default defineConfig(({command}) => {
           'pwa-maskable-512x512.png',
         ],
         manifest: {
-          id: '/',
+          id: './',
           name: 'Stolarz 3D — Projektant Mebli',
           short_name: 'Stolarz 3D',
           description:
@@ -32,24 +32,24 @@ export default defineConfig(({command}) => {
           display: 'standalone',
           orientation: 'any',
           lang: 'pl',
-          start_url: '/',
-          scope: '/',
+          start_url: './',
+          scope: './',
           categories: ['design', 'productivity', 'utilities'],
           icons: [
             {
-              src: '/pwa-192x192.png',
+              src: 'pwa-192x192.png',
               sizes: '192x192',
               type: 'image/png',
               purpose: 'any',
             },
             {
-              src: '/pwa-512x512.png',
+              src: 'pwa-512x512.png',
               sizes: '512x512',
               type: 'image/png',
               purpose: 'any',
             },
             {
-              src: '/pwa-maskable-512x512.png',
+              src: 'pwa-maskable-512x512.png',
               sizes: '512x512',
               type: 'image/png',
               purpose: 'maskable',
@@ -58,6 +58,7 @@ export default defineConfig(({command}) => {
         },
         workbox: {
           globPatterns: ['**/*.{js,css,html,ico,png,jpg,svg,woff,woff2}'],
+          globIgnores: ['**/assets/aistudio/**', '**/src/assets/**'],
           maximumFileSizeToCacheInBytes: 6 * 1024 * 1024,
           cleanupOutdatedCaches: true,
           runtimeCaching: [
@@ -92,7 +93,7 @@ export default defineConfig(({command}) => {
           ],
         },
         devOptions: {
-          enabled: true,
+          enabled: process.env.DISABLE_HMR !== 'true',
           type: 'module',
         },
       }),

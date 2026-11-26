@@ -24,8 +24,8 @@ export const PWAInstallButton: React.FC<PWAInstallButtonProps> = ({
   onApplyUpdate,
   onCheckForUpdate,
 }) => {
-  const { isInstallable, isInstalled, isIOS, install } = usePWAInstall();
-  const [showIOSGuide, setShowIOSGuide] = useState(false);
+  const { isInstallable, isInstalled, isIOS, isAndroid, install } = usePWAInstall();
+  const [showManualGuide, setShowManualGuide] = useState(false);
 
   // If a newer PWA version is ready, surface direct one-tap update button in the header too
   if (needRefresh) {
@@ -91,33 +91,33 @@ export const PWAInstallButton: React.FC<PWAInstallButtonProps> = ({
     );
   }
 
-  // iOS Safari guided installation modal (WebKit does not fire beforeinstallprompt)
-  if (isIOS) {
+  // iOS Safari or Android browser fallback guide when native beforeinstallprompt isn't active yet
+  if (isIOS || isAndroid) {
     return (
       <>
         <button
           type="button"
-          onClick={() => setShowIOSGuide(true)}
+          onClick={() => setShowManualGuide(true)}
           className="flex min-h-[34px] items-center gap-1.5 rounded-lg border border-amber-500/60 bg-amber-500/15 px-2.5 text-xs font-semibold text-amber-300 hover:bg-amber-500/25 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
-          title="Instrukcja instalacji aplikacji na iPhone / iPad"
+          title="Instrukcja instalacji aplikacji na telefonie"
         >
           <Smartphone className="h-3.5 w-3.5 shrink-0" />
           <span className="hidden sm:inline">Zainstaluj</span>
         </button>
 
-        {showIOSGuide && (
+        {showManualGuide && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/65 p-4">
             <div className="w-full max-w-sm rounded-xl border border-zinc-800 bg-[#141518] p-5 text-zinc-100 shadow-2xl">
               <div className="flex items-start justify-between gap-3">
                 <div className="flex items-center gap-3">
                   <img
-                    src="/pwa-192x192.png"
+                    src="./pwa-192x192.png"
                     alt="Ikona Stolarz 3D"
                     className="h-12 w-12 rounded-xl border border-zinc-700 object-cover shrink-0"
                   />
                   <div>
                     <h3 className="text-sm font-semibold text-white">
-                      Zainstaluj na iPhone / iPad
+                      {isIOS ? 'Zainstaluj na iPhone / iPad' : 'Zainstaluj na Androidzie'}
                     </h3>
                     <p className="text-xs text-zinc-400">
                       Aplikacja pełnoekranowa z pracą offline
@@ -126,7 +126,7 @@ export const PWAInstallButton: React.FC<PWAInstallButtonProps> = ({
                 </div>
                 <button
                   type="button"
-                  onClick={() => setShowIOSGuide(false)}
+                  onClick={() => setShowManualGuide(false)}
                   className="flex h-7 w-7 items-center justify-center rounded-lg text-zinc-400 hover:bg-zinc-800 hover:text-white cursor-pointer"
                   aria-label="Zamknij instrukcję instalacji"
                 >
@@ -134,43 +134,75 @@ export const PWAInstallButton: React.FC<PWAInstallButtonProps> = ({
                 </button>
               </div>
 
-              <ol className="mt-4 space-y-2.5 text-xs leading-relaxed text-zinc-300">
-                <li className="flex items-start gap-2.5">
-                  <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-md bg-zinc-800 font-mono-num font-semibold text-amber-400">
-                    1
-                  </span>
-                  <span>
-                    Stuknij ikonę{' '}
-                    <strong className="inline-flex items-center gap-1 text-white">
-                      <Share className="h-3.5 w-3.5 text-sky-400" />
-                      Udostępnij
-                    </strong>{' '}
-                    na dolnym pasku Safari.
-                  </span>
-                </li>
-                <li className="flex items-start gap-2.5">
-                  <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-md bg-zinc-800 font-mono-num font-semibold text-amber-400">
-                    2
-                  </span>
-                  <span>
-                    Przewiń listę w dół i wybierz{' '}
-                    <strong className="text-white">Do ekranu początkowego</strong>.
-                  </span>
-                </li>
-                <li className="flex items-start gap-2.5">
-                  <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-md bg-zinc-800 font-mono-num font-semibold text-amber-400">
-                    3
-                  </span>
-                  <span>
-                    Stuknij <strong className="text-white">Dodaj</strong> — aplikacja
-                    pojawi się z własną ikoną i będzie automatycznie wykrywać aktualizacje.
-                  </span>
-                </li>
-              </ol>
+              {isIOS ? (
+                <ol className="mt-4 space-y-2.5 text-xs leading-relaxed text-zinc-300">
+                  <li className="flex items-start gap-2.5">
+                    <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-md bg-zinc-800 font-mono-num font-semibold text-amber-400">
+                      1
+                    </span>
+                    <span>
+                      Stuknij ikonę{' '}
+                      <strong className="inline-flex items-center gap-1 text-white">
+                        <Share className="h-3.5 w-3.5 text-sky-400" />
+                        Udostępnij
+                      </strong>{' '}
+                      na dolnym pasku Safari.
+                    </span>
+                  </li>
+                  <li className="flex items-start gap-2.5">
+                    <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-md bg-zinc-800 font-mono-num font-semibold text-amber-400">
+                      2
+                    </span>
+                    <span>
+                      Przewiń listę w dół i wybierz{' '}
+                      <strong className="text-white">Do ekranu początkowego</strong>.
+                    </span>
+                  </li>
+                  <li className="flex items-start gap-2.5">
+                    <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-md bg-zinc-800 font-mono-num font-semibold text-amber-400">
+                      3
+                    </span>
+                    <span>
+                      Stuknij <strong className="text-white">Dodaj</strong> — aplikacja
+                      pojawi się z własną ikoną i będzie automatycznie wykrywać aktualizacje.
+                    </span>
+                  </li>
+                </ol>
+              ) : (
+                <ol className="mt-4 space-y-2.5 text-xs leading-relaxed text-zinc-300">
+                  <li className="flex items-start gap-2.5">
+                    <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-md bg-zinc-800 font-mono-num font-semibold text-amber-400">
+                      1
+                    </span>
+                    <span>
+                      Stuknij menu przeglądarki <strong className="text-white">(⋮)</strong> w
+                      prawym górnym rogu Chrome.
+                    </span>
+                  </li>
+                  <li className="flex items-start gap-2.5">
+                    <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-md bg-zinc-800 font-mono-num font-semibold text-amber-400">
+                      2
+                    </span>
+                    <span>
+                      Wybierz <strong className="text-white">Dodaj do ekranu głównego</strong>{' '}
+                      lub <strong className="text-white">Zainstaluj aplikację</strong>.
+                    </span>
+                  </li>
+                  <li className="flex items-start gap-2.5">
+                    <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-md bg-zinc-800 font-mono-num font-semibold text-amber-400">
+                      3
+                    </span>
+                    <span>
+                      Potwierdź <strong className="text-white">Zainstaluj</strong> — aplikacja
+                      otworzy się na pełnym ekranie z własną ikoną.
+                    </span>
+                  </li>
+                </ol>
+              )}
 
               <button
                 type="button"
-                onClick={() => setShowIOSGuide(false)}
+                onClick={() => setShowManualGuide(false)}
                 className="mt-5 w-full rounded-lg bg-amber-500 py-2 text-xs font-semibold text-zinc-950 hover:bg-amber-400 transition-colors cursor-pointer"
               >
                 Rozumiem
@@ -214,7 +246,7 @@ export const PWAStatusOverlays: React.FC<PWAStatusOverlaysProps> = ({
         >
           <div className="flex items-start gap-3">
             <img
-              src="/pwa-192x192.png"
+              src="./pwa-192x192.png"
               alt="Stolarz 3D"
               className="h-10 w-10 rounded-lg border border-zinc-700 object-cover shrink-0"
             />
