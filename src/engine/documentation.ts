@@ -631,7 +631,12 @@ export function computeCommercialQuote(
       }
     }
     if (p.drawerSlideType === 'ball_26mm') ballSlidePairs += 1;
-    else if (p.drawerSlideType === 'undermount_blum') undermountSlidePairs += 1;
+    else if (
+      p.drawerSlideType === 'undermount_blum' ||
+      p.drawerSlideType === 'tandembox_metabox'
+    ) {
+      undermountSlidePairs += 1;
+    }
 
     if (p.hardwareTag === 'leg') legsCount += 1;
   }

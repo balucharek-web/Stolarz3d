@@ -311,7 +311,7 @@ export const FURNITURE_TEMPLATES: FurnitureTemplateMeta[] = [
       id: 'proj_kitchen_base',
       name: 'Szafka kuchenna dolna 120 cm',
       parts: [
-        // Cokół cofnięty
+        // Cokół cofnięty + 6 regulowanych nóżek kuchennych pod wieńcem dolnym
         {
           id: 'k_plinth',
           name: 'Cokół frontowy antracyt',
@@ -324,6 +324,12 @@ export const FURNITURE_TEMPLATES: FurnitureTemplateMeta[] = [
           rotation: [0, 0, 0],
           edgeBanding: { thicknessMm: 0.8, top: true, bottom: true },
         },
+        { id: 'k_leg_fl', name: 'Nóżka regulowana PL', kind: 'profile', materialId: 'steel_black', width: 36, height: 100, depth: 36, position: [-530, 50, 155], rotation: [0, 0, 0], hardwareTag: 'leg' },
+        { id: 'k_leg_fc', name: 'Nóżka regulowana ŚP', kind: 'profile', materialId: 'steel_black', width: 36, height: 100, depth: 36, position: [0, 50, 155], rotation: [0, 0, 0], hardwareTag: 'leg' },
+        { id: 'k_leg_fr', name: 'Nóżka regulowana PP', kind: 'profile', materialId: 'steel_black', width: 36, height: 100, depth: 36, position: [530, 50, 155], rotation: [0, 0, 0], hardwareTag: 'leg' },
+        { id: 'k_leg_bl', name: 'Nóżka regulowana TL', kind: 'profile', materialId: 'steel_black', width: 36, height: 100, depth: 36, position: [-530, 50, -210], rotation: [0, 0, 0], hardwareTag: 'leg' },
+        { id: 'k_leg_bc', name: 'Nóżka regulowana ŚT', kind: 'profile', materialId: 'steel_black', width: 36, height: 100, depth: 36, position: [0, 50, -210], rotation: [0, 0, 0], hardwareTag: 'leg' },
+        { id: 'k_leg_br', name: 'Nóżka regulowana TP', kind: 'profile', materialId: 'steel_black', width: 36, height: 100, depth: 36, position: [530, 50, -210], rotation: [0, 0, 0], hardwareTag: 'leg' },
         // Korpus biały mat
         {
           id: 'k_bottom',
@@ -349,6 +355,7 @@ export const FURNITURE_TEMPLATES: FurnitureTemplateMeta[] = [
           rotation: [0, 0, 0],
           grainRotated: true,
           edgeBanding: { thicknessMm: 2, top: true },
+          system32ShelfHoles: true,
         },
         {
           id: 'k_side_r',
@@ -362,6 +369,7 @@ export const FURNITURE_TEMPLATES: FurnitureTemplateMeta[] = [
           rotation: [0, 0, 0],
           grainRotated: true,
           edgeBanding: { thicknessMm: 2, top: true },
+          system32ShelfHoles: true,
         },
         {
           id: 'k_divider',
@@ -375,6 +383,7 @@ export const FURNITURE_TEMPLATES: FurnitureTemplateMeta[] = [
           rotation: [0, 0, 0],
           grainRotated: true,
           edgeBanding: { thicknessMm: 2, top: true },
+          system32ShelfHoles: true,
         },
         {
           id: 'k_shelf_in',
@@ -413,16 +422,16 @@ export const FURNITURE_TEMPLATES: FurnitureTemplateMeta[] = [
         },
         {
           id: 'k_back',
-          name: 'Plecy HDF 6 mm',
+          name: 'Plecy HDF 3 mm',
           kind: 'panel',
-          materialId: 'white_matte',
+          materialId: 'hdf_white',
           width: 1196,
           height: 716,
-          depth: 6,
-          position: [0, 460, -283],
+          depth: 3,
+          position: [0, 460, -281.5],
           rotation: [0, 0, 0],
         },
-        // Fronty kuchenne (lewy antracyt na zawiasach Ø35, prawy zestaw wysuwanych szuflad Dąb Craft + antracyt)
+        // Fronty kuchenne (lewy antracyt na zawiasach Ø35, prawy zestaw 3 pełnych szuflad na prowadnicach Blum Movento)
         {
           id: 'k_door_l',
           name: 'Front drzwi lewe (Antracyt)',
@@ -440,6 +449,7 @@ export const FURNITURE_TEMPLATES: FurnitureTemplateMeta[] = [
           edgeBanding: { thicknessMm: 0.8, top: true, bottom: true, left: true, right: true },
           hardwareTag: 'door_overlay',
         },
+        // Szuflada 1 (górna) — Front + pełna skrzynka sklejka 16 mm + dno HDF 3 mm w nut +13 mm pod Blum Movento
         {
           id: 'k_drawer_top',
           name: 'Front szuflady górnej (Dąb Craft)',
@@ -455,6 +465,12 @@ export const FURNITURE_TEMPLATES: FurnitureTemplateMeta[] = [
           edgeBanding: { thicknessMm: 0.8, top: true, bottom: true, left: true, right: true },
           hardwareTag: 'drawer_front',
         },
+        { id: 'k_drw1_l', name: 'Szuflada 1 (bok L)', kind: 'panel', materialId: 'birch_plywood', width: 16, height: 135, depth: 480, position: [22, 710, 21], rotation: [0, 0, 0], dadoGroove: { enabled: true, edge: 'bottom', insetMm: 13, widthMm: 4, depthMm: 7 }, hardwareTag: 'drawer_box' },
+        { id: 'k_drw1_r', name: 'Szuflada 1 (bok P)', kind: 'panel', materialId: 'birch_plywood', width: 16, height: 135, depth: 480, position: [569, 710, 21], rotation: [0, 0, 0], dadoGroove: { enabled: true, edge: 'bottom', insetMm: 13, widthMm: 4, depthMm: 7 }, hardwareTag: 'drawer_box' },
+        { id: 'k_drw1_bk', name: 'Szuflada 1 (tył)', kind: 'panel', materialId: 'birch_plywood', width: 531, height: 135, depth: 16, position: [295.5, 710, -211], rotation: [0, 0, 0], dadoGroove: { enabled: true, edge: 'bottom', insetMm: 13, widthMm: 4, depthMm: 7 }, hardwareTag: 'drawer_box' },
+        { id: 'k_drw1_fr', name: 'Szuflada 1 (przód korpusu)', kind: 'panel', materialId: 'birch_plywood', width: 531, height: 135, depth: 16, position: [295.5, 710, 253], rotation: [0, 0, 0], dadoGroove: { enabled: true, edge: 'bottom', insetMm: 13, widthMm: 4, depthMm: 7 }, hardwareTag: 'drawer_box' },
+        { id: 'k_drw1_btm', name: 'Szuflada 1 (dno HDF 3mm w nut +13mm)', kind: 'panel', materialId: 'hdf_white', width: 541, height: 3, depth: 458, position: [295.5, 655.5, 21], rotation: [0, 0, 0], hardwareTag: 'drawer_box' },
+        // Szuflada 2 (środkowa) — Front + pełna skrzynka sklejka 16 mm + dno HDF 3 mm w nut +13 mm
         {
           id: 'k_drawer_mid',
           name: 'Front szuflady środkowej (Antracyt)',
@@ -470,6 +486,12 @@ export const FURNITURE_TEMPLATES: FurnitureTemplateMeta[] = [
           edgeBanding: { thicknessMm: 0.8, top: true, bottom: true, left: true, right: true },
           hardwareTag: 'drawer_front',
         },
+        { id: 'k_drw2_l', name: 'Szuflada 2 (bok L)', kind: 'panel', materialId: 'birch_plywood', width: 16, height: 175, depth: 480, position: [22, 478, 21], rotation: [0, 0, 0], dadoGroove: { enabled: true, edge: 'bottom', insetMm: 13, widthMm: 4, depthMm: 7 }, hardwareTag: 'drawer_box' },
+        { id: 'k_drw2_r', name: 'Szuflada 2 (bok P)', kind: 'panel', materialId: 'birch_plywood', width: 16, height: 175, depth: 480, position: [569, 478, 21], rotation: [0, 0, 0], dadoGroove: { enabled: true, edge: 'bottom', insetMm: 13, widthMm: 4, depthMm: 7 }, hardwareTag: 'drawer_box' },
+        { id: 'k_drw2_bk', name: 'Szuflada 2 (tył)', kind: 'panel', materialId: 'birch_plywood', width: 531, height: 175, depth: 16, position: [295.5, 478, -211], rotation: [0, 0, 0], dadoGroove: { enabled: true, edge: 'bottom', insetMm: 13, widthMm: 4, depthMm: 7 }, hardwareTag: 'drawer_box' },
+        { id: 'k_drw2_fr', name: 'Szuflada 2 (przód korpusu)', kind: 'panel', materialId: 'birch_plywood', width: 531, height: 175, depth: 16, position: [295.5, 478, 253], rotation: [0, 0, 0], dadoGroove: { enabled: true, edge: 'bottom', insetMm: 13, widthMm: 4, depthMm: 7 }, hardwareTag: 'drawer_box' },
+        { id: 'k_drw2_btm', name: 'Szuflada 2 (dno HDF 3mm w nut +13mm)', kind: 'panel', materialId: 'hdf_white', width: 541, height: 3, depth: 458, position: [295.5, 403.5, 21], rotation: [0, 0, 0], hardwareTag: 'drawer_box' },
+        // Szuflada 3 (dolna) — Front + pełna skrzynka sklejka 16 mm + dno HDF 3 mm w nut +13 mm
         {
           id: 'k_drawer_bot',
           name: 'Front szuflady dolnej (Antracyt)',
@@ -485,6 +507,11 @@ export const FURNITURE_TEMPLATES: FurnitureTemplateMeta[] = [
           edgeBanding: { thicknessMm: 0.8, top: true, bottom: true, left: true, right: true },
           hardwareTag: 'drawer_front',
         },
+        { id: 'k_drw3_l', name: 'Szuflada 3 (bok L)', kind: 'panel', materialId: 'birch_plywood', width: 16, height: 175, depth: 480, position: [22, 224, 21], rotation: [0, 0, 0], dadoGroove: { enabled: true, edge: 'bottom', insetMm: 13, widthMm: 4, depthMm: 7 }, hardwareTag: 'drawer_box' },
+        { id: 'k_drw3_r', name: 'Szuflada 3 (bok P)', kind: 'panel', materialId: 'birch_plywood', width: 16, height: 175, depth: 480, position: [569, 224, 21], rotation: [0, 0, 0], dadoGroove: { enabled: true, edge: 'bottom', insetMm: 13, widthMm: 4, depthMm: 7 }, hardwareTag: 'drawer_box' },
+        { id: 'k_drw3_bk', name: 'Szuflada 3 (tył)', kind: 'panel', materialId: 'birch_plywood', width: 531, height: 175, depth: 16, position: [295.5, 224, -211], rotation: [0, 0, 0], dadoGroove: { enabled: true, edge: 'bottom', insetMm: 13, widthMm: 4, depthMm: 7 }, hardwareTag: 'drawer_box' },
+        { id: 'k_drw3_fr', name: 'Szuflada 3 (przód korpusu)', kind: 'panel', materialId: 'birch_plywood', width: 531, height: 175, depth: 16, position: [295.5, 224, 253], rotation: [0, 0, 0], dadoGroove: { enabled: true, edge: 'bottom', insetMm: 13, widthMm: 4, depthMm: 7 }, hardwareTag: 'drawer_box' },
+        { id: 'k_drw3_btm', name: 'Szuflada 3 (dno HDF 3mm w nut +13mm)', kind: 'panel', materialId: 'hdf_white', width: 541, height: 3, depth: 458, position: [295.5, 149.5, 21], rotation: [0, 0, 0], hardwareTag: 'drawer_box' },
         // Blat kuchenny 38 mm Beton Architektoniczny z zaokrąglonym noskiem
         {
           id: 'k_countertop',

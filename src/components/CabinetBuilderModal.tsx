@@ -888,6 +888,7 @@ export const CabinetBuilderModal: React.FC<CabinetBuilderModalProps> = ({
                     className="mt-1 w-full rounded-lg border border-zinc-800 bg-zinc-900 px-2 py-2 text-xs text-white focus:border-amber-500 focus:outline-none"
                   >
                     <option value="undermount_blum">Blum/GTV (−10, dno +13)</option>
+                    <option value="tandembox_metabox">Tandembox metalowe (−14 mm)</option>
                     <option value="ball_26mm">Kulkowe (−26 mm)</option>
                   </select>
                 </label>

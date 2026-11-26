@@ -126,7 +126,12 @@ function sanitizePolygon(raw: unknown): [number, number][] | undefined {
 
 const VALID_FINISHES = new Set<SurfaceFinish>(['matte', 'satin', 'gloss']);
 const VALID_HANDLE_STYLES = new Set<HandleStyle>(['bar', 'tip_on', 'gola_j', 'chamfer_45']);
-const VALID_SLIDES = new Set<DrawerSlideType>(['none', 'ball_26mm', 'undermount_blum']);
+const VALID_SLIDES = new Set<DrawerSlideType>([
+  'none',
+  'ball_26mm',
+  'undermount_blum',
+  'tandembox_metabox',
+]);
 const VALID_HW_TAGS = new Set([
   'leg',
   'drawer_front',

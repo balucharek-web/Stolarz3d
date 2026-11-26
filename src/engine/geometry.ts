@@ -8,6 +8,10 @@ import {
   type FastenerAuditStatus,
   type WorldBox,
 } from './carpentry';
+import {
+  buildDoorHingeCupsGroup,
+  inferInnerFaceDirection,
+} from './hardware3D';
 
 export const MM_TO_M = 0.001;
 export const M_TO_MM = 1000;
@@ -660,27 +664,35 @@ export function buildDoorHandleGroup(part: FurniturePart): THREE.Group | null {
   const style = part.handleStyle ?? 'bar';
   const side = part.handleSide ?? 'none';
 
-  // Tip-On handleless: sleek exterior + small internal push-latch body behind opening edge
+  // Tip-On handleless: sleek exterior + thin magnetic strike plate flush on the back face
+  // (the actual cylindrical push-to-open latch body is mounted stationary on the cabinet carcass)
   if (style === 'tip_on') {
     const group = new THREE.Group();
-    group.name = 'door_tip_on';
+    group.name = 'door_tip_on_strike';
     const w = part.width * MM_TO_M;
     const h = part.height * MM_TO_M;
     const d = part.depth * MM_TO_M;
-    const latchMat = new THREE.MeshStandardMaterial({
-      color: '#94A3B8',
-      metalness: 0.65,
-      roughness: 0.35,
+    const strikeMat = new THREE.MeshStandardMaterial({
+      color: '#C8CFD8',
+      metalness: 0.9,
+      roughness: 0.22,
     });
-    const latch = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.005, 0.005, 0.022, 10),
-      latchMat
+    const strikePlate = new THREE.Mesh(
+      new THREE.BoxGeometry(0.018, 0.014, 0.0016),
+      strikeMat
     );
-    latch.rotation.x = Math.PI / 2;
-    const xPos = side === 'left' ? -w / 2 + 0.025 : side === 'right' ? w / 2 - 0.025 : 0;
-    const yPos = side === 'top' ? h / 2 - 0.025 : 0;
-    latch.position.set(xPos, yPos, -d / 2 - 0.011);
-    group.add(latch);
+    const openSide =
+      side !== 'none'
+        ? side
+        : part.hingeSide === 'left'
+          ? 'right'
+          : part.hingeSide === 'right'
+            ? 'left'
+            : 'top';
+    const xPos = openSide === 'left' ? -w / 2 + 0.024 : openSide === 'right' ? w / 2 - 0.024 : 0;
+    const yPos = openSide === 'top' ? h / 2 - 0.024 : 0;
+    strikePlate.position.set(xPos, yPos, -d / 2 - 0.0009);
+    group.add(strikePlate);
     return group;
   }
 
@@ -813,82 +825,41 @@ export function buildDoorHandleGroup(part: FurniturePart): THREE.Group | null {
 }
 
 /**
- * Procedural Ø35 mm concealed cup hinges (zawiasy puszkowe) mounted on the interior face of doors.
+ * Procedural Ø35 mm concealed cup hinges (door-side recessed cup + flange; carcass mounting
+ * plates and articulating hinge arms are built by hardware3D.ts so they stay anchored to the carcass
+ * and NEVER protrude past closed doors).
  */
 export function buildDoorHingesGroup(part: FurniturePart): THREE.Group | null {
-  if (part.kind !== 'door' || !part.hingeSide || part.hingeSide === 'none') {
-    return null;
-  }
-  const count = Math.max(2, Math.min(5, part.hingeCount ?? (part.height > 1500 ? 4 : part.height > 950 ? 3 : 2)));
-  const group = new THREE.Group();
-  group.name = 'door_hinges';
-
-  const steelMat = new THREE.MeshStandardMaterial({
-    color: '#B8C0CA',
-    metalness: 0.9,
-    roughness: 0.24,
-  });
-
-  const w = part.width * MM_TO_M;
-  const h = part.height * MM_TO_M;
-  const d = part.depth * MM_TO_M;
-  const cupRadius = 0.0175; // Ø35 mm cup
-  const insetFromEdge = 0.0225; // standard K=5 + 17.5mm = 22.5mm cup center from edge
-
-  for (let i = 0; i < count; i++) {
-    const frac = count === 1 ? 0.5 : i / (count - 1);
-    const hingeUnit = new THREE.Group();
-
-    const cup = new THREE.Mesh(
-      new THREE.CylinderGeometry(cupRadius, cupRadius, 0.008, 18),
-      steelMat
-    );
-    cup.rotation.x = Math.PI / 2;
-    cup.position.z = -0.004;
-    cup.userData.disposeMaterial = true;
-    hingeUnit.add(cup);
-
-    const arm = new THREE.Mesh(
-      new THREE.BoxGeometry(0.044, 0.015, 0.012),
-      steelMat
-    );
-    arm.position.set(part.hingeSide === 'left' ? -0.018 : part.hingeSide === 'right' ? 0.018 : 0, 0, -0.012);
-    arm.userData.disposeMaterial = true;
-    hingeUnit.add(arm);
-
-    if (part.hingeSide === 'top') {
-      const margin = Math.min(0.1, w * 0.2);
-      const x = -w / 2 + margin + frac * Math.max(0.05, w - margin * 2);
-      hingeUnit.position.set(x, h / 2 - insetFromEdge, -d / 2);
-    } else {
-      const margin = Math.min(0.1, h * 0.18);
-      const y = -h / 2 + margin + frac * Math.max(0.05, h - margin * 2);
-      const x = part.hingeSide === 'left' ? -w / 2 + insetFromEdge : w / 2 - insetFromEdge;
-      hingeUnit.position.set(x, y, -d / 2);
-    }
-    group.add(hingeUnit);
-  }
-
-  return group;
+  return buildDoorHingeCupsGroup(part);
 }
 
 /**
- * Visual machining overlay for Dado Grooves (nut pod plecy HDF) & 45° miter chamfers (gerung).
+ * Visual machining overlay for Dado Grooves (nut pod plecy HDF / dno szuflady),
+ * Recessed LED strip channels, System 32 Ø5 mm shelf-pin rows, and 45° miter chamfers (gerung).
+ * Strictly confined to INTERIOR faces so grooves and LED strips never bleed through exterior cabinet walls.
  */
-export function buildPartMachiningGroup(part: FurniturePart): THREE.Group | null {
+export function buildPartMachiningGroup(
+  part: FurniturePart,
+  allParts?: FurniturePart[]
+): THREE.Group | null {
   const hasDado = Boolean(part.dadoGroove?.enabled);
   const hasLed = Boolean(part.ledGroove?.enabled);
+  const hasSys32 = Boolean(part.system32ShelfHoles);
   const hasMiter = Boolean(
     part.miter45 &&
       (part.miter45.left || part.miter45.right || part.miter45.top || part.miter45.bottom)
   );
-  if (!hasDado && !hasLed && !hasMiter) return null;
+  if (!hasDado && !hasLed && !hasSys32 && !hasMiter) return null;
 
   const group = new THREE.Group();
   group.name = 'part_machining';
   const w = part.width * MM_TO_M;
   const h = part.height * MM_TO_M;
   const d = part.depth * MM_TO_M;
+
+  const { innerX, innerY, isMiddleDivider } = inferInnerFaceDirection(part, allParts ?? []);
+  const faceSignX = innerX === 0 ? 1 : innerX;
+  const faceSignY = innerY === 0 ? 1 : innerY;
 
   if (hasDado && part.dadoGroove) {
     const g = part.dadoGroove;
@@ -900,32 +871,53 @@ export function buildPartMachiningGroup(part: FurniturePart): THREE.Group | null
       polygonOffsetFactor: -2,
       polygonOffsetUnits: -2,
     });
+    const surfaceDepth = 0.0014; // thin recessed dark slot sitting strictly on the INNER face
 
-    // Place groove strip on the inner face of vertical side walls (X-thin) or horizontal tops/bottoms (Y-thin)
     if (w <= h && w <= d) {
-      // Side panel: groove runs vertically near back edge (-Z + inset) on both faces subtly
-      const strip = new THREE.Mesh(
-        new THREE.BoxGeometry(w + 0.0008, h - 0.004, grooveW),
-        grooveMat
-      );
-      strip.position.set(0, 0, -d / 2 + inset);
-      strip.userData.disposeMaterial = true;
-      group.add(strip);
+      // Vertical side panel or drawer side (X-thin): draw ONLY on interior X face (or both faces if divider)
+      const faces: number[] = isMiddleDivider ? [-1, 1] : [faceSignX];
+      for (const s of faces) {
+        if (g.edge === 'bottom' || g.edge === 'top') {
+          // Horizontal bottom/top dado groove (e.g. Blum undermount drawer box bottom groove +13 mm)
+          const yPos = g.edge === 'bottom' ? -h / 2 + inset : h / 2 - inset;
+          const strip = new THREE.Mesh(
+            new THREE.BoxGeometry(surfaceDepth, grooveW, Math.max(0.01, d - 0.006)),
+            grooveMat
+          );
+          strip.position.set(s * (w / 2 - surfaceDepth * 0.35), yPos, 0);
+          strip.userData.disposeMaterial = true;
+          group.add(strip);
+        } else {
+          // Vertical rear dado groove (e.g. HDF back groove near -Z)
+          const zPos = -d / 2 + inset;
+          const strip = new THREE.Mesh(
+            new THREE.BoxGeometry(surfaceDepth, Math.max(0.01, h - 0.006), grooveW),
+            grooveMat
+          );
+          strip.position.set(s * (w / 2 - surfaceDepth * 0.35), 0, zPos);
+          strip.userData.disposeMaterial = true;
+          group.add(strip);
+        }
+      }
     } else if (h <= w && h <= d) {
-      // Horizontal shelf/top/bottom: groove runs along X near back edge (-Z + inset)
+      // Horizontal deck/shelf (Y-thin): draw ONLY on interior Y face (+Y for bottom deck, -Y for top deck)
+      const zPos = -d / 2 + inset;
       const strip = new THREE.Mesh(
-        new THREE.BoxGeometry(w - 0.004, h + 0.0008, grooveW),
+        new THREE.BoxGeometry(Math.max(0.01, w - 0.006), surfaceDepth, grooveW),
         grooveMat
       );
-      strip.position.set(0, 0, -d / 2 + inset);
+      strip.position.set(0, faceSignY * (h / 2 - surfaceDepth * 0.35), zPos);
       strip.userData.disposeMaterial = true;
       group.add(strip);
     } else {
+      // Z-thin vertical panel (e.g. drawer box back / inner front with bottom HDF groove)
+      const zSign = part.name.includes('tył') ? 1 : -1;
+      const yPos = g.edge === 'top' ? h / 2 - inset : -h / 2 + inset;
       const strip = new THREE.Mesh(
-        new THREE.BoxGeometry(w - 0.004, grooveW, d + 0.0008),
+        new THREE.BoxGeometry(Math.max(0.01, w - 0.006), grooveW, surfaceDepth),
         grooveMat
       );
-      strip.position.set(0, -h / 2 + inset, 0);
+      strip.position.set(0, yPos, zSign * (d / 2 - surfaceDepth * 0.35));
       strip.userData.disposeMaterial = true;
       group.add(strip);
     }
@@ -968,18 +960,72 @@ export function buildPartMachiningGroup(part: FurniturePart): THREE.Group | null
       diffuser.userData.disposeMaterial = true;
       group.add(rail, diffuser);
     } else if (w <= h && w <= d) {
-      // Vertical side wall (e.g. wardrobe vertical LED strip): visible on both faces near front/back
+      // Vertical side wall: LED channel strictly on INTERIOR face (never shining through exterior wall!)
       const zPos = lg.edge === 'back' ? -d / 2 + inset : d / 2 - inset;
-      const rail = new THREE.Mesh(new THREE.BoxGeometry(w + 0.0012, h - 0.016, ledW), aluMat);
-      rail.position.set(0, 0, zPos);
-      rail.userData.disposeMaterial = true;
-      const diffuser = new THREE.Mesh(
-        new THREE.BoxGeometry(w + 0.0018, h - 0.02, ledW * 0.66),
-        diffuserMat
-      );
-      diffuser.position.set(0, 0, zPos);
-      diffuser.userData.disposeMaterial = true;
-      group.add(rail, diffuser);
+      const faces: number[] = isMiddleDivider ? [-1, 1] : [faceSignX];
+      for (const s of faces) {
+        const rail = new THREE.Mesh(new THREE.BoxGeometry(0.0022, h - 0.016, ledW), aluMat);
+        rail.position.set(s * (w / 2 + 0.0003), 0, zPos);
+        rail.userData.disposeMaterial = true;
+        const diffuser = new THREE.Mesh(
+          new THREE.BoxGeometry(0.0026, h - 0.02, ledW * 0.66),
+          diffuserMat
+        );
+        diffuser.position.set(s * (w / 2 + 0.0006), 0, zPos);
+        diffuser.userData.disposeMaterial = true;
+        group.add(rail, diffuser);
+      }
+    }
+  }
+
+  // System 32 dual vertical columns of Ø5 mm shelf-pin holes (37 mm front & back inset, 32 mm pitch)
+  if (hasSys32 && w <= h && w <= d && h >= 0.24 && d >= 0.16) {
+    const holeMat = new THREE.MeshStandardMaterial({
+      color: '#2A2520',
+      roughness: 0.92,
+      metalness: 0.05,
+      polygonOffset: true,
+      polygonOffsetFactor: -2,
+      polygonOffsetUnits: -2,
+    });
+    const holeGeo = new THREE.CylinderGeometry(0.0025, 0.0025, 0.0012, 10);
+    holeGeo.rotateZ(Math.PI / 2);
+
+    const zFront = d / 2 - 0.037;
+    const zBack = -d / 2 + 0.037;
+    const yStart = -h / 2 + 0.096;
+    const yEnd = h / 2 - 0.096;
+    const pitch = 0.032; // exact 32 mm System 32 spacing
+    const yCount = Math.max(0, Math.floor((yEnd - yStart) / pitch) + 1);
+    const faces: number[] = isMiddleDivider ? [-1, 1] : [faceSignX];
+    const totalHoles = yCount * 2 * faces.length;
+
+    if (totalHoles > 0) {
+      const inst = new THREE.InstancedMesh(holeGeo, holeMat, totalHoles);
+      inst.name = 'system32_holes';
+      const mat4 = new THREE.Matrix4();
+      const quat = new THREE.Quaternion();
+      const scale = new THREE.Vector3(1, 1, 1);
+      const pos = new THREE.Vector3();
+      let idx = 0;
+
+      for (const s of faces) {
+        const xFace = s * (w / 2 + 0.0002);
+        for (let i = 0; i < yCount; i++) {
+          const y = yStart + i * pitch;
+          pos.set(xFace, y, zFront);
+          mat4.compose(pos, quat, scale);
+          inst.setMatrixAt(idx++, mat4);
+
+          pos.set(xFace, y, zBack);
+          mat4.compose(pos, quat, scale);
+          inst.setMatrixAt(idx++, mat4);
+        }
+      }
+      inst.instanceMatrix.needsUpdate = true;
+      inst.computeBoundingSphere();
+      inst.userData.disposeMaterial = true;
+      group.add(inst);
     }
   }
 
@@ -1127,41 +1173,73 @@ export function buildApplianceGroup(part: FurniturePart): THREE.Group | null {
   } else if (part.applianceModel === 'kitchen_sink') {
     const steelMat = new THREE.MeshStandardMaterial({
       color: '#C7CDD4',
-      metalness: 0.85,
-      roughness: 0.26,
+      metalness: 0.88,
+      roughness: 0.24,
     });
     const innerMat = new THREE.MeshStandardMaterial({
       color: '#9BA3AD',
-      metalness: 0.82,
-      roughness: 0.34,
+      metalness: 0.84,
+      roughness: 0.32,
     });
-    // Outer rim deck sitting flush on countertop
-    const rimH = 0.012;
-    const rim = new THREE.Mesh(new THREE.BoxGeometry(w, rimH, d), steelMat);
-    rim.position.y = h / 2 - rimH / 2;
-    group.add(rim);
+    const drainDarkMat = new THREE.MeshStandardMaterial({
+      color: '#1E232B',
+      metalness: 0.5,
+      roughness: 0.6,
+    });
 
-    // Recessed basin walls & floor
-    const bw = w * 0.86;
-    const bd = d * 0.76;
-    const bh = Math.max(0.08, h - rimH);
-    const basin = new THREE.Mesh(new THREE.BoxGeometry(bw, bh, bd), innerMat);
-    basin.position.set(0, -rimH / 2, d * 0.04);
-    group.add(basin);
+    // True hollow 4-wall + recessed floor stainless steel kitchen basin
+    const rimH = 0.006;
+    const wallT = 0.006;
+    const bw = w * 0.84;
+    const bd = d * 0.72;
+    const basinZ = d * 0.06;
+    const bh = Math.max(0.11, h - rimH);
+    const rimY = h / 2 - rimH / 2;
 
-    // Dark recessed interior top illusion + chrome strainer
-    const darkWell = new THREE.Mesh(
-      new THREE.PlaneGeometry(bw * 0.96, bd * 0.94),
-      new THREE.MeshStandardMaterial({ color: '#4B525C', metalness: 0.7, roughness: 0.4 })
-    );
-    darkWell.rotation.x = -Math.PI / 2;
-    darkWell.position.set(0, h / 2 + 0.001, d * 0.04);
-    const drain = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.036, 0.036, 0.004, 18),
+    // 4 outer top rim strips framing the true hollow basin opening
+    const leftRimW = (w - bw) / 2;
+    const backRimD = Math.max(0.035, d / 2 + (basinZ - bd / 2));
+    const frontRimD = Math.max(0.02, d / 2 - (basinZ + bd / 2));
+
+    const rimBack = new THREE.Mesh(new THREE.BoxGeometry(w, rimH, backRimD), steelMat);
+    rimBack.position.set(0, rimY, -d / 2 + backRimD / 2);
+    const rimFront = new THREE.Mesh(new THREE.BoxGeometry(w, rimH, frontRimD), steelMat);
+    rimFront.position.set(0, rimY, d / 2 - frontRimD / 2);
+    const rimLeft = new THREE.Mesh(new THREE.BoxGeometry(leftRimW, rimH, bd), steelMat);
+    rimLeft.position.set(-w / 2 + leftRimW / 2, rimY, basinZ);
+    const rimRight = new THREE.Mesh(new THREE.BoxGeometry(leftRimW, rimH, bd), steelMat);
+    rimRight.position.set(w / 2 - leftRimW / 2, rimY, basinZ);
+    group.add(rimBack, rimFront, rimLeft, rimRight);
+
+    // 4 recessed vertical stainless basin walls + solid recessed bottom floor
+    const wallY = h / 2 - rimH - bh / 2;
+    const wallLeft = new THREE.Mesh(new THREE.BoxGeometry(wallT, bh, bd), innerMat);
+    wallLeft.position.set(-bw / 2 - wallT / 2, wallY, basinZ);
+    const wallRight = new THREE.Mesh(new THREE.BoxGeometry(wallT, bh, bd), innerMat);
+    wallRight.position.set(bw / 2 + wallT / 2, wallY, basinZ);
+    const wallFront = new THREE.Mesh(new THREE.BoxGeometry(bw + wallT * 2, bh, wallT), innerMat);
+    wallFront.position.set(0, wallY, basinZ + bd / 2 + wallT / 2);
+    const wallBack = new THREE.Mesh(new THREE.BoxGeometry(bw + wallT * 2, bh, wallT), innerMat);
+    wallBack.position.set(0, wallY, basinZ - bd / 2 - wallT / 2);
+    const basinFloor = new THREE.Mesh(new THREE.BoxGeometry(bw + wallT * 2, wallT, bd + wallT * 2), innerMat);
+    basinFloor.position.set(0, h / 2 - rimH - bh, basinZ);
+    group.add(wallLeft, wallRight, wallFront, wallBack, basinFloor);
+
+    // Chrome basket strainer drain sitting inside the recessed basin floor + rear overflow slot
+    const floorTopY = h / 2 - rimH - bh + wallT / 2;
+    const drainRing = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.044, 0.04, 0.005, 20),
       chromeMat
     );
-    drain.position.set(0, h / 2 + 0.002, d * 0.02);
-    group.add(darkWell, drain);
+    drainRing.position.set(0, floorTopY + 0.002, basinZ - bd * 0.08);
+    const drainHole = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.026, 0.026, 0.006, 16),
+      drainDarkMat
+    );
+    drainHole.position.set(0, floorTopY + 0.0025, basinZ - bd * 0.08);
+    const overflowSlot = new THREE.Mesh(new THREE.BoxGeometry(0.036, 0.012, 0.003), drainDarkMat);
+    overflowSlot.position.set(0, h / 2 - rimH - 0.028, basinZ - bd / 2 + 0.001);
+    group.add(drainRing, drainHole, overflowSlot);
 
     // Arched gooseneck chrome kitchen faucet
     const tapBaseZ = -d * 0.4;

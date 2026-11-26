@@ -810,6 +810,7 @@ export const InspectorDrawer: React.FC<InspectorDrawerProps> = ({
                       <option value="none">Brak</option>
                       <option value="ball_26mm">Kulkowe (−26 mm)</option>
                       <option value="undermount_blum">Dolny montaż Blum/GTV</option>
+                      <option value="tandembox_metabox">Tandembox / Metabox (metalowe)</option>
                     </select>
                   </label>
                 </div>
@@ -1607,6 +1608,7 @@ export const InspectorDrawer: React.FC<InspectorDrawerProps> = ({
                         <option value="none">Brak</option>
                         <option value="ball_26mm">Kulkowe (−26 mm)</option>
                         <option value="undermount_blum">Dolny montaż Blum/GTV</option>
+                        <option value="tandembox_metabox">Tandembox / Metabox (metalowe)</option>
                       </select>
                     </label>
                   </div>

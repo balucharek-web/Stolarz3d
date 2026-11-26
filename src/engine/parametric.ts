@@ -1642,12 +1642,15 @@ export function buildParametricCabinet(
     const drawerCols = !isHybridCabinet && dividersCount > 0 ? bayCount : 1;
     const rowsPerCol = Math.max(1, Math.round(effectiveDrawerCount / drawerCols));
     const isUndermount = cfg.slideType === 'undermount_blum';
+    const isTandembox = cfg.slideType === 'tandembox_metabox';
     const slideClearanceTotal = isUndermount
       ? 10
       : cfg.slideType === 'ball_26mm'
         ? 26
         : 14;
-    const boxThickness = 16;
+    const boxThickness = isTandembox ? 13 : 16;
+    const boxSideMat = isTandembox ? 'steel_black' : 'birch_plywood';
+    const boxBackMat = isTandembox ? cfg.corpusMaterialId : 'birch_plywood';
     const frontZ =
       cfg.frontType === 'overlay'
         ? offsetZmm + D / 2 + t / 2 + 1
@@ -1677,7 +1680,9 @@ export function buildParametricCabinet(
         ? separatorCenterY - separatorT / 2
         : bodyBottomY + bodyH - topDeckT;
     const drawerZoneFloorY = bodyBottomY + t;
-    const nominalBoxH = Math.max(68, Math.min(eachFrontH - 36, 175));
+    const nominalBoxH = isTandembox
+      ? Math.max(68, Math.min(eachFrontH - 42, 115))
+      : Math.max(68, Math.min(eachFrontH - 36, 175));
 
     const undermountGroove = isUndermount
       ? { enabled: true, edge: 'bottom' as const, insetMm: 13, widthMm: 4, depthMm: 7 }
@@ -1741,12 +1746,14 @@ export function buildParametricCabinet(
           groupId,
         });
 
-        // Drawer Box Left & Right sides
+        // Drawer Box Left & Right sides (slim steel profiles for Tandembox, 16 mm birch plywood for wooden drawers)
         parts.push({
           id: uid(`cab_drw_l_${drawerIdx}`),
-          name: `${cfg.name} — Szuflada ${drawerIdx} (bok L)`,
+          name: isTandembox
+            ? `${cfg.name} — Szuflada ${drawerIdx} (bok metalowy Tandembox L)`
+            : `${cfg.name} — Szuflada ${drawerIdx} (bok L)`,
           kind: 'panel',
-          materialId: 'birch_plywood',
+          materialId: boxSideMat,
           width: boxThickness,
           height: thisBoxH,
           depth: boxDepth,
@@ -1762,9 +1769,11 @@ export function buildParametricCabinet(
         });
         parts.push({
           id: uid(`cab_drw_r_${drawerIdx}`),
-          name: `${cfg.name} — Szuflada ${drawerIdx} (bok P)`,
+          name: isTandembox
+            ? `${cfg.name} — Szuflada ${drawerIdx} (bok metalowy Tandembox P)`
+            : `${cfg.name} — Szuflada ${drawerIdx} (bok P)`,
           kind: 'panel',
-          materialId: 'birch_plywood',
+          materialId: boxSideMat,
           width: boxThickness,
           height: thisBoxH,
           depth: boxDepth,
@@ -1779,37 +1788,21 @@ export function buildParametricCabinet(
           groupId,
         });
 
-        // Drawer Back & Inner Front Stretcher
+        // Drawer Back (and Inner Front Stretcher for wooden boxes; Tandembox clips directly onto drawer front!)
+        const backH = isTandembox && eachFrontH >= 200 ? Math.min(maxBoxTopY - minBoxBottomY, thisBoxH + 54) : thisBoxH;
+        const backCenterY = Math.round(minBoxBottomY + backH / 2);
         parts.push({
           id: uid(`cab_drw_bk_${drawerIdx}`),
           name: `${cfg.name} — Szuflada ${drawerIdx} (tył)`,
           kind: 'panel',
-          materialId: 'birch_plywood',
+          materialId: boxBackMat,
           width: boxInnerW,
-          height: thisBoxH,
-          depth: boxThickness,
+          height: backH,
+          depth: 16,
           position: [
             bayCenterX,
-            boxCenterY,
-            Math.round(boxCenterZ - boxDepth / 2 + boxThickness / 2),
-          ],
-          rotation: [0, 0, 0],
-          dadoGroove: undermountGroove,
-          hardwareTag: 'drawer_box',
-          groupId,
-        });
-        parts.push({
-          id: uid(`cab_drw_fr_${drawerIdx}`),
-          name: `${cfg.name} — Szuflada ${drawerIdx} (przód korpusu)`,
-          kind: 'panel',
-          materialId: 'birch_plywood',
-          width: boxInnerW,
-          height: thisBoxH,
-          depth: boxThickness,
-          position: [
-            bayCenterX,
-            boxCenterY,
-            Math.round(boxCenterZ + boxDepth / 2 - boxThickness / 2),
+            backCenterY,
+            Math.round(boxCenterZ - boxDepth / 2 + 8),
           ],
           rotation: [0, 0, 0],
           dadoGroove: undermountGroove,
@@ -1817,8 +1810,47 @@ export function buildParametricCabinet(
           groupId,
         });
 
-        // Drawer Bottom (HDF 3 mm): recessed +13 mm up in dado groove for Blum/GTV undermount slides, or nailed underneath for ball slides!
-        if (isUndermount) {
+        if (!isTandembox) {
+          parts.push({
+            id: uid(`cab_drw_fr_${drawerIdx}`),
+            name: `${cfg.name} — Szuflada ${drawerIdx} (przód korpusu)`,
+            kind: 'panel',
+            materialId: 'birch_plywood',
+            width: boxInnerW,
+            height: thisBoxH,
+            depth: boxThickness,
+            position: [
+              bayCenterX,
+              boxCenterY,
+              Math.round(boxCenterZ + boxDepth / 2 - boxThickness / 2),
+            ],
+            rotation: [0, 0, 0],
+            dadoGroove: undermountGroove,
+            hardwareTag: 'drawer_box',
+            groupId,
+          });
+        }
+
+        // Drawer Bottom: 16 mm melamine for Tandembox, recessed HDF 3 mm (+13 mm dado) for Blum, or bottom HDF for ball slides
+        if (isTandembox) {
+          parts.push({
+            id: uid(`cab_drw_btm_${drawerIdx}`),
+            name: `${cfg.name} — Szuflada ${drawerIdx} (dno płyta 16mm Tandembox)`,
+            kind: 'panel',
+            materialId: cfg.corpusMaterialId,
+            width: boxInnerW,
+            height: 16,
+            depth: boxDepth - 16,
+            position: [
+              bayCenterX,
+              Math.round(minBoxBottomY + 8),
+              Math.round(boxCenterZ + 8),
+            ],
+            rotation: [0, 0, 0],
+            hardwareTag: 'drawer_box',
+            groupId,
+          });
+        } else if (isUndermount) {
           parts.push({
             id: uid(`cab_drw_btm_${drawerIdx}`),
             name: `${cfg.name} — Szuflada ${drawerIdx} (dno HDF 3mm w nut +13mm)`,

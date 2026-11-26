@@ -52,7 +52,7 @@ export type HandleStyle = 'bar' | 'tip_on' | 'gola_j' | 'chamfer_45';
 
 export type SurfaceFinish = 'matte' | 'satin' | 'gloss';
 
-export type DrawerSlideType = 'none' | 'ball_26mm' | 'undermount_blum';
+export type DrawerSlideType = 'none' | 'ball_26mm' | 'undermount_blum' | 'tandembox_metabox';
 
 export type EditorTool = 'select' | 'move' | 'rotate' | 'resize' | 'screw' | 'measure';
 

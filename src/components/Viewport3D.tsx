@@ -43,6 +43,14 @@ import {
   type ScrewHoverFeedback,
 } from '../engine/carpentry';
 import { buildArchitecturalRoom3D } from '../engine/roomMesh3D';
+import {
+  buildCabinetHardwareScene,
+  buildFurnitureLegGroup,
+  buildSlidingDoorRollersGroup,
+  buildSlidingTrackGroup,
+  computeDrawerSlideTravelMap,
+  type CabinetHardwareRuntime,
+} from '../engine/hardware3D';
 import type { ContextMenuTarget } from './ContextMenu';
 
 export interface Viewport3DHandle {
@@ -489,10 +497,11 @@ export const Viewport3D = forwardRef<Viewport3DHandle, Viewport3DProps>(
       partExplodeDir: Map<string, THREE.Vector3>;
       partOpenMeta: Map<
         string,
-        | { kind: 'door'; axis: 'x' | 'y'; localPivot: THREE.Vector3; maxAngleRad: number }
+        | { kind: 'door'; axis: 'x' | 'y'; localPivot: THREE.Vector3; maxAngleRad: number; throwZ?: number }
         | { kind: 'drawer'; slideDistM: number }
         | { kind: 'sliding'; slideDistM: number }
       >;
+      hardwareRuntime: CabinetHardwareRuntime | null;
       screwPreview: THREE.Group;
       screwPreviewRingMat: THREE.MeshBasicMaterial;
       screwPreviewPinMat: THREE.MeshBasicMaterial;
@@ -884,7 +893,7 @@ export const Viewport3D = forwardRef<Viewport3DHandle, Viewport3DProps>(
       const partBaseQuat = new Map<string, THREE.Quaternion>();
       const partOpenMeta = new Map<
         string,
-        | { kind: 'door'; axis: 'x' | 'y'; localPivot: THREE.Vector3; maxAngleRad: number }
+        | { kind: 'door'; axis: 'x' | 'y'; localPivot: THREE.Vector3; maxAngleRad: number; throwZ?: number }
         | { kind: 'drawer'; slideDistM: number }
         | { kind: 'sliding'; slideDistM: number }
       >();
@@ -935,6 +944,11 @@ export const Viewport3D = forwardRef<Viewport3DHandle, Viewport3DProps>(
               _quatA.setFromAxisAngle(worldAxis, angle);
               const worldPivot = _vec3C.copy(meta.localPivot).applyQuaternion(baseQ).add(_vec3A);
               node.position.copy(_vec3A).sub(worldPivot).applyQuaternion(_quatA).add(worldPivot);
+              if (meta.throwZ) {
+                const throwAmt = meta.throwZ * Math.sin(Math.min(Math.PI * 0.5, Math.abs(angle)));
+                _vec3B.set(0, 0, 1).applyQuaternion(baseQ).normalize();
+                node.position.addScaledVector(_vec3B, throwAmt);
+              }
               node.quaternion.copy(_quatA).multiply(baseQ);
               return;
             } else if (meta.kind === 'sliding') {
@@ -952,6 +966,7 @@ export const Viewport3D = forwardRef<Viewport3DHandle, Viewport3DProps>(
           node.position.copy(_vec3A);
           node.quaternion.copy(baseQ);
         });
+        runtimeRef.current?.hardwareRuntime?.update(opnAmt, expAmt, partNodes);
       }
 
       function requestRender() {
@@ -1096,6 +1111,7 @@ export const Viewport3D = forwardRef<Viewport3DHandle, Viewport3DProps>(
         partBaseQuat,
         partExplodeDir,
         partOpenMeta,
+        hardwareRuntime: null,
         screwPreview,
         screwPreviewRingMat: ringMat,
         screwPreviewPinMat: pinMat,
@@ -2249,6 +2265,11 @@ export const Viewport3D = forwardRef<Viewport3DHandle, Viewport3DProps>(
       rt.partBaseQuat.clear();
       rt.partExplodeDir.clear();
       rt.partOpenMeta.clear();
+      rt.hardwareRuntime = null;
+
+      // Pre-compute exact per-drawer full-extension travel distances (proportional to real box depth)
+      const drawerTravelMap = computeDrawerSlideTravelMap(props.parts);
+      const visiblePartIds = new Set<string>();
 
       // Compute centroid for natural radial exploded-view separation
       const centroid = new THREE.Vector3();
@@ -2285,6 +2306,7 @@ export const Viewport3D = forwardRef<Viewport3DHandle, Viewport3DProps>(
         if (props.assemblyStep > 0 && partStep > props.assemblyStep) {
           continue;
         }
+        visiblePartIds.add(part.id);
 
         const group = new THREE.Group();
         group.userData.partId = part.id;
@@ -2324,17 +2346,18 @@ export const Viewport3D = forwardRef<Viewport3DHandle, Viewport3DProps>(
         } else if (isDrawerLike) {
           rt.partOpenMeta.set(part.id, {
             kind: 'drawer',
-            slideDistM: 0.34,
+            slideDistM: drawerTravelMap.get(part.id) ?? 0.34,
           });
         } else if (part.kind === 'door') {
           if (part.hingeSide === 'top') {
-            const pivotY = part.height * 0.5 * MM_TO_M;
-            const pivotZ = -part.depth * 0.5 * MM_TO_M;
+            const pivotY = (part.height * 0.5 - 2) * MM_TO_M;
+            const pivotZ = (-part.depth * 0.5 + 2) * MM_TO_M;
             rt.partOpenMeta.set(part.id, {
               kind: 'door',
               axis: 'x',
               localPivot: new THREE.Vector3(0, pivotY, pivotZ),
               maxAngleRad: -THREE.MathUtils.degToRad(88),
+              throwZ: 0.004,
             });
           } else {
             const hingeSide =
@@ -2343,13 +2366,19 @@ export const Viewport3D = forwardRef<Viewport3DHandle, Viewport3DProps>(
                 : part.handleSide === 'left'
                   ? 'right'
                   : 'left';
-            const pivotX = (hingeSide === 'left' ? -part.width * 0.5 : part.width * 0.5) * MM_TO_M;
-            const pivotZ = -part.depth * 0.5 * MM_TO_M;
+            const isOverlay = part.hardwareTag !== 'door_inset';
+            const edgeOffsetMm = isOverlay ? 3 : 0;
+            const pivotX =
+              (hingeSide === 'left'
+                ? -part.width * 0.5 + edgeOffsetMm
+                : part.width * 0.5 - edgeOffsetMm) * MM_TO_M;
+            const pivotZ = (-part.depth * 0.5 + (isOverlay ? 3 : 1)) * MM_TO_M;
             rt.partOpenMeta.set(part.id, {
               kind: 'door',
               axis: 'y',
               localPivot: new THREE.Vector3(pivotX, 0, pivotZ),
               maxAngleRad: hingeSide === 'left' ? -THREE.MathUtils.degToRad(102) : THREE.MathUtils.degToRad(102),
+              throwZ: isOverlay ? 0.004 : 0.001,
             });
           }
         }
@@ -2358,7 +2387,9 @@ export const Viewport3D = forwardRef<Viewport3DHandle, Viewport3DProps>(
         group.quaternion.copy(baseQuat);
 
         let geo: THREE.BufferGeometry;
-        if (part.kind === 'appliance') {
+        const slidingTrackGroup =
+          part.kind === 'profile' ? buildSlidingTrackGroup(part) : null;
+        if (part.kind === 'appliance' || part.hardwareTag === 'leg' || slidingTrackGroup) {
           geo = new THREE.BoxGeometry(
             Math.max(10, part.width) * MM_TO_M,
             Math.max(10, part.height) * MM_TO_M,
@@ -2376,9 +2407,14 @@ export const Viewport3D = forwardRef<Viewport3DHandle, Viewport3DProps>(
           hitMesh.userData.disposeMaterial = true;
           group.add(hitMesh);
 
-          const appGroup = buildApplianceGroup(part);
-          if (appGroup) {
-            appGroup.traverse((c) => {
+          const detailGroup =
+            part.kind === 'appliance'
+              ? buildApplianceGroup(part)
+              : part.hardwareTag === 'leg'
+                ? buildFurnitureLegGroup(part)
+                : slidingTrackGroup;
+          if (detailGroup) {
+            detailGroup.traverse((c) => {
               if (c instanceof THREE.Mesh) {
                 c.userData.disposeMaterial = true;
                 c.userData.partId = part.id;
@@ -2387,7 +2423,7 @@ export const Viewport3D = forwardRef<Viewport3DHandle, Viewport3DProps>(
                 c.receiveShadow = true;
               }
             });
-            group.add(appGroup);
+            group.add(detailGroup);
           }
         } else {
           geo = buildPartGeometry(part);
@@ -2409,7 +2445,7 @@ export const Viewport3D = forwardRef<Viewport3DHandle, Viewport3DProps>(
           mesh.receiveShadow = true;
           group.add(mesh);
 
-          // Cabinet door metallic handle
+          // Cabinet door metallic handle / Tip-On strike plate
           const handleGroup = buildDoorHandleGroup(part);
           if (handleGroup) {
             handleGroup.traverse((c) => {
@@ -2421,7 +2457,7 @@ export const Viewport3D = forwardRef<Viewport3DHandle, Viewport3DProps>(
             group.add(handleGroup);
           }
 
-          // Ø35 mm Cup Hinges on cabinet doors
+          // Ø35 mm Concealed Cup Hinges (door-side recessed cup + flange)
           const hingesGroup = buildDoorHingesGroup(part);
           if (hingesGroup) {
             hingesGroup.traverse((c) => {
@@ -2433,11 +2469,23 @@ export const Viewport3D = forwardRef<Viewport3DHandle, Viewport3DProps>(
             group.add(hingesGroup);
           }
 
-          // Board Machining visual indicators (Dado groove + 45° miters)
-          const machiningGroup = buildPartMachiningGroup(part);
+          // Sliding wardrobe door top guide carriages & bottom roller wheels
+          const rollersGroup = buildSlidingDoorRollersGroup(part);
+          if (rollersGroup) {
+            rollersGroup.traverse((c) => {
+              if (c instanceof THREE.Mesh) {
+                c.userData.disposeMaterial = true;
+                c.userData.partId = part.id;
+              }
+            });
+            group.add(rollersGroup);
+          }
+
+          // Board Machining visual indicators (Interior-only Dado grooves, LED strips, System 32 Ø5mm holes & 45° miters)
+          const machiningGroup = buildPartMachiningGroup(part, props.parts);
           if (machiningGroup) {
             machiningGroup.traverse((c) => {
-              if (c instanceof THREE.Mesh) {
+              if (c instanceof THREE.Mesh || c instanceof THREE.InstancedMesh) {
                 c.userData.disposeMaterial = true;
                 c.userData.partId = part.id;
               }
@@ -2529,6 +2577,19 @@ export const Viewport3D = forwardRef<Viewport3DHandle, Viewport3DProps>(
         rt.partsRoot.add(group);
         rt.partNodes.set(part.id, group);
       }
+
+      // Build carcass-mounted & articulated 3D hardware (hinge mounting plates + arms, flap gas struts,
+      // 3-stage telescopic drawer slides, stationary Tip-On latches, and nickel shelf support pins)
+      const hwRuntime = buildCabinetHardwareScene(
+        props.parts,
+        rt.partBasePos,
+        rt.partBaseQuat,
+        rt.partExplodeDir,
+        drawerTravelMap,
+        visiblePartIds
+      );
+      rt.partsRoot.add(hwRuntime.root);
+      rt.hardwareRuntime = hwRuntime;
 
       // Apply current exploded & open-door/drawer transforms immediately after rebuild
       rt.applyPartAnimations();
