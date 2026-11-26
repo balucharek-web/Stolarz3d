@@ -89,6 +89,8 @@ import { ShapeSketchModal } from './components/ShapeSketchModal';
 import { RoomSettingsModal } from './components/RoomSettingsModal';
 import { ContextMenu, type ContextMenuTarget } from './components/ContextMenu';
 import { ViewCube } from './components/ViewCube';
+import { PWAInstallButton, PWAStatusOverlays } from './components/PWAControls';
+import { usePWAUpdate } from './hooks/usePWAUpdate';
 
 const SNAP_STEPS = [10, 5, 25, 0];
 const LIGHTING_ORDER: StudioLighting[] = ['daylight', 'studio', 'warm', 'photoreal'];
@@ -99,6 +101,7 @@ function createDefaultProject(): FurnitureProject {
 
 export default function App() {
   const viewportRef = useRef<Viewport3DHandle | null>(null);
+  const pwa = usePWAUpdate();
 
   const [projectStore, setProjectStore] = useState<ProjectStoreState>(() =>
     loadProjectStore(createDefaultProject)
@@ -1492,6 +1495,12 @@ export default function App() {
 
         {/* Zone 3: Primary Actions */}
         <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
+          <PWAInstallButton
+            needRefresh={pwa.needRefresh}
+            checkStatus={pwa.checkStatus}
+            onApplyUpdate={() => void pwa.applyUpdate()}
+            onCheckForUpdate={() => void pwa.checkForUpdate()}
+          />
           <button
             type="button"
             onClick={() => setRoomModalOpen(true)}
@@ -2136,6 +2145,16 @@ export default function App() {
           showToast(`Zaimportowano jako nowy projekt: ${importedCopy.name}`);
         }}
         onImportError={(msg) => showToast(msg)}
+      />
+
+      <PWAStatusOverlays
+        needRefresh={pwa.needRefresh}
+        offlineReady={pwa.offlineReady}
+        isUpdating={pwa.isUpdating}
+        isOnline={pwa.isOnline}
+        onApplyUpdate={() => void pwa.applyUpdate()}
+        onDismissUpdate={pwa.dismissUpdate}
+        onDismissOfflineReady={pwa.dismissOfflineReady}
       />
     </div>
   );
