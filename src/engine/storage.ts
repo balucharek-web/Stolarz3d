@@ -1,4 +1,5 @@
 import {
+  APPLIANCE_CATALOG,
   DEFAULT_QUOTE_SETTINGS,
   MATERIAL_MAP,
   SCREW_MAP,
@@ -64,16 +65,9 @@ const VALID_KINDS = new Set<PartKind>([
   'appliance',
 ]);
 
-const VALID_APPLIANCES = new Set<ApplianceModel>([
-  'wardrobe_rod',
-  'induction_hob',
-  'kitchen_sink',
-  'builtin_oven',
-  'wire_cargo',
-  'wc_geberit',
-  'wc_low_cistern',
-  'wc_high_cistern',
-]);
+const VALID_APPLIANCES = new Set<ApplianceModel>(
+  APPLIANCE_CATALOG.map((item) => item.id)
+);
 
 const VALID_HANDLES = new Set<HandleSide>(['left', 'right', 'top', 'none']);
 
@@ -888,12 +882,14 @@ export function loadMaterialsConfig(): MaterialsCatalogConfig {
             category:
               m.category === 'Płyty konstrukcyjne' ||
               m.category === 'Blaty' ||
+              m.category === 'Budowa i ogród' ||
+              m.category === 'Izolacja i dach' ||
               m.category === 'Stal i szkło'
                 ? m.category
                 : 'Płyty meblowe',
-            defaultThicknessMm: toFiniteNumber(m.defaultThicknessMm, 18, 3, 60),
-            sheetWidthMm: toFiniteNumber(m.sheetWidthMm, 2800, 500, 6000),
-            sheetHeightMm: toFiniteNumber(m.sheetHeightMm, 2070, 500, 4000),
+            defaultThicknessMm: toFiniteNumber(m.defaultThicknessMm, 18, 3, 250),
+            sheetWidthMm: toFiniteNumber(m.sheetWidthMm, 2800, 200, 6000),
+            sheetHeightMm: toFiniteNumber(m.sheetHeightMm, 2070, 100, 4000),
             pricePerM2Pln: toFiniteNumber(m.pricePerM2Pln, 85, 1, 5000),
             swatchFallbackHex:
               typeof m.swatchFallbackHex === 'string' && /^#[0-9A-Fa-f]{6}$/.test(m.swatchFallbackHex)
@@ -901,6 +897,16 @@ export function loadMaterialsConfig(): MaterialsCatalogConfig {
                 : '#B89B72',
             isCustom: true,
             grainDirectional: Boolean(m.grainDirectional),
+            barLengthMm:
+              typeof m.barLengthMm === 'number' && Number.isFinite(m.barLengthMm) && m.barLengthMm >= 500
+                ? Math.round(Math.min(12000, m.barLengthMm))
+                : undefined,
+            pricePerLinearMPln:
+              typeof m.pricePerLinearMPln === 'number' &&
+              Number.isFinite(m.pricePerLinearMPln) &&
+              m.pricePerLinearMPln > 0
+                ? Math.round(Math.min(2000, m.pricePerLinearMPln))
+                : undefined,
           }))
       : [];
     const builtInOverrides =

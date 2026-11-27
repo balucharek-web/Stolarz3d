@@ -13,6 +13,7 @@ import {
   inferInnerFaceDirection,
 } from './hardware3D';
 import { buildSanitaryToilet3D, isSanitaryToiletType } from './sanitary3D';
+import { buildExtendedAppliance3D } from './appliances3D';
 
 export const MM_TO_M = 0.001;
 export const M_TO_MM = 1000;
@@ -1355,6 +1356,15 @@ export function buildApplianceGroup(part: FurniturePart): THREE.Group | null {
     const wcGroup = buildSanitaryToilet3D(part.applianceModel, w, h, d);
     wcGroup.position.set(0, -h / 2, -d / 2);
     group.add(wcGroup);
+  } else {
+    const extGroup = buildExtendedAppliance3D(part.applianceModel, w, h, d);
+    if (extGroup) {
+      // Dispose unused top-level materials created in buildApplianceGroup
+      chromeMat.dispose();
+      darkMetalMat.dispose();
+      glassBlackMat.dispose();
+      return extGroup;
+    }
   }
 
   return group;

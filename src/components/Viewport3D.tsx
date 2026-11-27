@@ -115,6 +115,7 @@ interface Viewport3DProps {
   ) => void;
   onRejectScrewPlacement: (reason: string) => void;
   onContextMenu: (target: ContextMenuTarget | null) => void;
+  onDoubleClickPart?: (id: string) => void;
   onSetClearanceDistance?: (
     partId: string,
     guide: ClearanceGuide,
@@ -1425,8 +1426,12 @@ export const Viewport3D = forwardRef<Viewport3DHandle, Viewport3DProps>(
             const hits = raycaster.intersectObjects(meshes, false);
             if (hits.length > 0) {
               const { partId } = resolveHitIds(hits[0].object);
+              const hitPart = partId
+                ? propsRef.current.parts.find((p) => p.id === partId)
+                : undefined;
               const canDirectDrag =
                 partId &&
+                !hitPart?.locked &&
                 (propsRef.current.tool === 'move' ||
                   propsRef.current.selectedPartIds.includes(partId) ||
                   propsRef.current.selectedPartId === partId);
@@ -2054,6 +2059,9 @@ export const Viewport3D = forwardRef<Viewport3DHandle, Viewport3DProps>(
         if (hits.length > 0) {
           const { partId } = resolveHitIds(hits[0].object);
           if (partId) {
+            if (propsRef.current.onDoubleClickPart) {
+              propsRef.current.onDoubleClickPart(partId);
+            }
             const node = partNodes.get(partId);
             if (node) {
               node.updateWorldMatrix(true, true);
@@ -2301,6 +2309,9 @@ export const Viewport3D = forwardRef<Viewport3DHandle, Viewport3DProps>(
       );
 
       for (const part of props.parts) {
+        if (part.hidden) {
+          continue;
+        }
         const partStep =
           props.assemblyPlan?.partStepMap.get(part.id) ?? 1;
         if (props.assemblyStep > 0 && partStep > props.assemblyStep) {
@@ -2869,13 +2880,17 @@ export const Viewport3D = forwardRef<Viewport3DHandle, Viewport3DProps>(
         }
       }
 
-      // Attach TransformControls gizmo if Move or Rotate tool is active on a selected part
+      // Attach TransformControls gizmo if Move or Rotate tool is active on a selected unlocked part
       if (
         props.selectedPartId &&
         (props.tool === 'move' || props.tool === 'rotate') &&
         props.explodedAmount < 0.01
       ) {
-        const selectedNode = rt.partNodes.get(props.selectedPartId);
+        const selPartObj = props.parts.find((p) => p.id === props.selectedPartId);
+        const selectedNode =
+          selPartObj && !selPartObj.locked && !selPartObj.hidden
+            ? rt.partNodes.get(props.selectedPartId)
+            : undefined;
         if (selectedNode) {
           rt.transform.setMode(props.tool === 'move' ? 'translate' : 'rotate');
           rt.transform.setTranslationSnap(

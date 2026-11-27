@@ -2913,6 +2913,18 @@ export function getMaterialDensityKgM3(materialId: string): number {
     case 'steel_black':
     case 'steel_galv':
       return 7850;
+    case 'pine_timber':
+      return 480; // Kiln-dried C24 pine/spruce structural timber
+    case 'spruce_plank':
+      return 470;
+    case 'larch_impregnated':
+      return 590;
+    case 'styrofoam_eps':
+      return 20; // Expanded polystyrene EPS 70/80
+    case 'mineral_wool':
+      return 45; // Stone / glass wool insulation slab
+    case 'roof_shingle':
+      return 1150; // Bitumen asphalt shingle / felt
     default:
       // Standard 18 mm furniture particleboard / MDF laminated
       return 690;
@@ -2928,6 +2940,14 @@ export function computePartWeightKg(part: FurniturePart): number {
     switch (part.applianceModel) {
       case 'builtin_oven':
         return 34;
+      case 'fridge_freezer':
+        return 66;
+      case 'dishwasher_60':
+        return 42;
+      case 'range_hood':
+        return 14;
+      case 'microwave_builtin':
+        return 18;
       case 'induction_hob':
         return 11.5;
       case 'kitchen_sink':
@@ -2936,8 +2956,44 @@ export function computePartWeightKg(part: FurniturePart): number {
         return 6.2;
       case 'wardrobe_rod':
         return 1.2;
+      case 'wc_geberit':
+        return 38;
+      case 'wc_low_cistern':
+        return 32;
+      case 'wc_high_cistern':
+        return 30;
+      case 'bathroom_sink':
+        return 12;
+      case 'shower_cabin':
+        return 52;
+      case 'bathtub_170':
+        return 36;
+      case 'washing_machine':
+        return 68;
+      case 'tumble_dryer':
+        return 49;
+      case 'towel_radiator':
+        return 11;
+      case 'led_mirror':
+        return 8.5;
+      case 'bed_double':
+        return 64;
+      case 'bed_single':
+        return 38;
+      case 'dressing_bench':
+        return 12;
+      case 'tv_65':
+        return 22;
+      case 'sofa_3seat':
+        return 56;
+      case 'office_chair':
+        return 16;
+      case 'desk_monitor_set':
+        return 6.5;
+      case 'coffee_table':
+        return 14;
       default:
-        return 2;
+        return 4;
     }
   }
 

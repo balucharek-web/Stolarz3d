@@ -2,27 +2,31 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   AlertTriangle,
   AppWindow,
+  Bath,
+  BedDouble,
   Check,
   ChevronDown,
   ChevronUp,
   Columns2,
   Compass,
+  Copy,
   Crosshair,
   DoorOpen,
-  Droplets,
   Eye,
   EyeOff,
   Flame,
-  Layers,
   Maximize2,
   MousePointer2,
   Pencil,
   PlugZap,
   Plus,
   RotateCcw,
+  RotateCw,
   Scissors,
+  Sofa,
   Trash2,
   Undo2,
+  UtensilsCrossed,
   Wrench,
   X,
   ZoomIn,
@@ -30,8 +34,16 @@ import {
 } from 'lucide-react';
 import { NumericInput } from './NumericInput';
 import {
+  APPLIANCE_SHORT_LABELS,
+  RoomAppliance2DSvg,
+} from './RoomAppliance2DSvg';
+import {
+  APPLIANCE_CATALOG,
   DEFAULT_ROOM_CONFIG,
   DEFAULT_ROOM_STYLE,
+  type ApplianceCategory,
+  type ApplianceMeta,
+  type ApplianceModel,
   type FurniturePart,
   type RoomConfig,
   type RoomCutawayMode,
@@ -78,7 +90,7 @@ interface RoomSettingsModalProps {
   room: RoomConfig | undefined;
   roomIssues: RoomClearanceIssue[];
   onClose: () => void;
-  onSaveRoom: (room: RoomConfig) => void;
+  onSaveRoom: (room: RoomConfig, nextParts?: FurniturePart[]) => void;
 }
 
 type CanvasTool =
@@ -93,7 +105,10 @@ type CanvasTool =
   | 'place_pipe'
   | 'place_wc_geberit'
   | 'place_wc_low_cistern'
-  | 'place_wc_high_cistern';
+  | 'place_wc_high_cistern'
+  | 'place_appliance';
+
+type PaletteCategory = 'openings' | 'installations' | ApplianceCategory;
 
 type InspectorTab = 'shape' | 'elements' | 'style' | 'audit';
 
@@ -102,7 +117,8 @@ type SelectionTarget =
   | { kind: 'wall'; wallIndex: number }
   | { kind: 'vertex'; vertexIndex: number }
   | { kind: 'opening'; id: string }
-  | { kind: 'obstacle'; id: string };
+  | { kind: 'obstacle'; id: string }
+  | { kind: 'appliance'; id: string };
 
 type DragMode =
   | { kind: 'pan'; startClientX: number; startClientY: number; startPanX: number; startPanZ: number }
@@ -117,7 +133,65 @@ type DragMode =
       nz: number;
     }
   | { kind: 'opening'; id: string }
-  | { kind: 'obstacle'; id: string };
+  | { kind: 'obstacle'; id: string }
+  | { kind: 'appliance'; id: string; grabOffX: number; grabOffZ: number };
+
+interface HistoryEntry {
+  room: RoomConfig;
+  parts: FurniturePart[];
+}
+
+const APPLIANCE_BY_ID: Record<ApplianceModel, ApplianceMeta> = APPLIANCE_CATALOG.reduce(
+  (acc, item) => {
+    acc[item.id] = item;
+    return acc;
+  },
+  {} as Record<ApplianceModel, ApplianceMeta>
+);
+
+const PALETTE_TABS: Array<{
+  id: PaletteCategory;
+  label: string;
+  icon: React.ComponentType<{ className?: string }>;
+  activeClass: string;
+}> = [
+  {
+    id: 'openings',
+    label: 'Otwory',
+    icon: DoorOpen,
+    activeClass: 'bg-sky-500/20 text-sky-300 border-sky-500/60',
+  },
+  {
+    id: 'installations',
+    label: 'Instalacje',
+    icon: Wrench,
+    activeClass: 'bg-zinc-700/60 text-zinc-100 border-zinc-500/70',
+  },
+  {
+    id: 'bathroom',
+    label: 'Łazienka',
+    icon: Bath,
+    activeClass: 'bg-cyan-500/20 text-cyan-300 border-cyan-500/60',
+  },
+  {
+    id: 'kitchen',
+    label: 'Kuchnia',
+    icon: UtensilsCrossed,
+    activeClass: 'bg-amber-500/20 text-amber-300 border-amber-500/60',
+  },
+  {
+    id: 'wardrobe',
+    label: 'Sypialnia',
+    icon: BedDouble,
+    activeClass: 'bg-violet-500/20 text-violet-300 border-violet-500/60',
+  },
+  {
+    id: 'living',
+    label: 'Salon',
+    icon: Sofa,
+    activeClass: 'bg-emerald-500/20 text-emerald-300 border-emerald-500/60',
+  },
+];
 
 const PRESET_CARDS: Array<{ id: RoomShapePresetId; label: string; desc: string }> = [
   { id: 'rectangle', label: 'Prostokąt', desc: 'Klasyczny pokój' },
@@ -173,10 +247,13 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
   onSaveRoom,
 }) => {
   const [draft, setDraft] = useState<RoomConfig>(() => createInitialDraft(room, parts));
-  const [history, setHistory] = useState<RoomConfig[]>([]);
+  const [draftParts, setDraftParts] = useState<FurniturePart[]>(() => structuredClone(parts));
+  const [history, setHistory] = useState<HistoryEntry[]>([]);
   const [lastOpen, setLastOpen] = useState(false);
 
   const [tool, setTool] = useState<CanvasTool>('select');
+  const [paletteTab, setPaletteTab] = useState<PaletteCategory>('openings');
+  const [placingAppliance, setPlacingAppliance] = useState<ApplianceMeta | null>(null);
   const [tab, setTab] = useState<InspectorTab>('shape');
   const [selection, setSelection] = useState<SelectionTarget>({ kind: 'none' });
   const [mobileInspectorOpen, setMobileInspectorOpen] = useState<boolean>(false);
@@ -196,7 +273,7 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
   const svgRef = useRef<SVGSVGElement | null>(null);
   const [svgSize, setSvgSize] = useState<{ w: number; h: number }>({ w: 800, h: 560 });
   const dragRef = useRef<DragMode | null>(null);
-  const dragSnapshotRef = useRef<RoomConfig | null>(null);
+  const dragSnapshotRef = useRef<HistoryEntry | null>(null);
   // Two-finger pinch-to-zoom & pan state for mobile/tablet touchscreens
   const activePointersRef = useRef<Map<number, { x: number; y: number }>>(new Map());
   const pinchStartRef = useRef<{
@@ -212,7 +289,7 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
     (targetRoom: RoomConfig, containerW: number, containerH: number) => {
       const pts = getRoomPolygonPoints(targetRoom);
       const rb = computeRoomBoundsXZ(pts);
-      const fb = computeFurnitureFootprintXZ(parts);
+      const fb = computeFurnitureFootprintXZ(draftParts);
       const minX = fb ? Math.min(rb.minX, fb.minX) : rb.minX;
       const maxX = fb ? Math.max(rb.maxX, fb.maxX) : rb.maxX;
       const minZ = fb ? Math.min(rb.minZ, fb.minZ) : rb.minZ;
@@ -226,7 +303,7 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
       setViewCenter({ x: (minX + maxX) / 2, z: (minZ + maxZ) / 2 });
       setPxPerMm(scale);
     },
-    [parts]
+    [draftParts]
   );
 
   // Reset state cleanly when modal opens
@@ -234,8 +311,10 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
     setLastOpen(true);
     const next = createInitialDraft(room, parts);
     setDraft(next);
+    setDraftParts(structuredClone(parts));
     setHistory([]);
     setTool('select');
+    setPlacingAppliance(null);
     setSelection({ kind: 'none' });
     setDrawPoints([]);
     setSnapGuides({});
@@ -281,9 +360,19 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
     [draft.hiddenWallIndices]
   );
 
+  const nonApplianceParts = useMemo(
+    () => draftParts.filter((p) => !(p.kind === 'appliance' && p.applianceModel)),
+    [draftParts]
+  );
+
+  const applianceParts = useMemo(
+    () => draftParts.filter((p) => p.kind === 'appliance' && Boolean(p.applianceModel)),
+    [draftParts]
+  );
+
   const furnitureBoxes = useMemo(() => {
     if (!open) return [];
-    return parts.map((p) => {
+    return nonApplianceParts.map((p) => {
       const b = getPartWorldBox(p);
       return {
         id: p.id,
@@ -295,32 +384,42 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
         maxZ: b.maxZ,
       };
     });
-  }, [open, parts]);
+  }, [open, nonApplianceParts]);
 
   const furnitureOverall = useMemo(
-    () => computeFurnitureFootprintXZ(parts),
-    [parts]
+    () => computeFurnitureFootprintXZ(nonApplianceParts),
+    [nonApplianceParts]
   );
 
   const liveIssues = useMemo(
-    () => (open ? auditRoomClearances(parts, draft) : roomIssues),
-    [open, parts, draft, roomIssues]
+    () => (open ? auditRoomClearances(draftParts, draft) : roomIssues),
+    [open, draftParts, draft, roomIssues]
   );
 
   const liveSwingIssues = useMemo(
-    () => (open ? analyzeDoorSwingCollisions(parts, draft) : []),
-    [open, parts, draft]
+    () => (open ? analyzeDoorSwingCollisions(draftParts, draft) : []),
+    [open, draftParts, draft]
   );
 
-  // Undo-aware room mutation
+  // Undo-aware room & parts mutations
   const commitDraft = useCallback(
     (updater: (prev: RoomConfig) => RoomConfig) => {
       setDraft((prev) => {
-        setHistory((h) => [...h.slice(-24), prev]);
+        setHistory((h) => [...h.slice(-24), { room: prev, parts: draftParts }]);
         return syncRoomWithPolygon(updater(prev));
       });
     },
-    []
+    [draftParts]
+  );
+
+  const commitParts = useCallback(
+    (updater: (prev: FurniturePart[]) => FurniturePart[]) => {
+      setDraftParts((prev) => {
+        setHistory((h) => [...h.slice(-24), { room: draft, parts: prev }]);
+        return updater(prev);
+      });
+    },
+    [draft]
   );
 
   const handleUndo = useCallback(() => {
@@ -331,7 +430,8 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
     setHistory((h) => {
       if (h.length === 0) return h;
       const previous = h[h.length - 1];
-      setDraft(previous);
+      setDraft(previous.room);
+      setDraftParts(previous.parts);
       return h.slice(0, -1);
     });
   }, [tool, drawPoints.length]);
@@ -410,7 +510,7 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
   // Compute wall placement target for any world coordinate (used for BOTH desktop hover & mobile direct tap!)
   const computeWallPlacementAt = useCallback(
     (worldPt: { x: number; z: number }, maxDistPx = 36) => {
-      if (tool === 'select' || tool === 'draw') return null;
+      if (tool === 'select' || tool === 'draw' || tool === 'place_appliance') return null;
       let bestSeg: WallSegment | null = null;
       let bestDist = Infinity;
       let bestOffset = 0;
@@ -471,9 +571,60 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
   );
 
   const hoverWallPlacement = useMemo(() => {
-    if (!cursorWorld || tool === 'select' || tool === 'draw') return null;
+    if (!cursorWorld || tool === 'select' || tool === 'draw' || tool === 'place_appliance') {
+      return null;
+    }
     return computeWallPlacementAt(cursorWorld, 36);
   }, [cursorWorld, tool, computeWallPlacementAt]);
+
+  // Compute smart wall-snapped position & inward orientation for room appliances
+  const computeAppliancePlacementAt = useCallback(
+    (item: ApplianceMeta, worldPt: { x: number; z: number }, allowWallSnap = true) => {
+      if (allowWallSnap) {
+        let bestSeg: WallSegment | null = null;
+        let bestDist = Infinity;
+        let bestOffset = 0;
+        for (const seg of segments) {
+          const proj = projectPointOntoWall(worldPt.x, worldPt.z, seg);
+          if (proj.clampedDistMm < bestDist) {
+            bestDist = proj.clampedDistMm;
+            bestSeg = seg;
+            bestOffset = proj.offsetMm;
+          }
+        }
+        const snapThresholdMm = Math.max(360, item.depth * 0.55);
+        if (bestSeg && bestDist <= snapThresholdMm) {
+          const halfW = item.width / 2;
+          const uClamped =
+            bestSeg.lengthMm >= item.width
+              ? Math.max(halfW, Math.min(bestSeg.lengthMm - halfW, snapCoord(bestOffset)))
+              : bestSeg.lengthMm / 2;
+          const wallX = bestSeg.start.xMm + bestSeg.tx * uClamped;
+          const wallZ = bestSeg.start.zMm + bestSeg.tz * uClamped;
+          const halfD = item.depth / 2;
+          const x = Math.round(wallX + bestSeg.inNx * halfD);
+          const z = Math.round(wallZ + bestSeg.inNz * halfD);
+          // Front (+Z) points along inward normal (inNx, inNz) -> atan2(inNx, inNz)
+          const rawDeg = ((Math.atan2(bestSeg.inNx, bestSeg.inNz) * 180) / Math.PI + 360) % 360;
+          const nearest90 = Math.round(rawDeg / 90) * 90;
+          const rotY = Math.abs(rawDeg - nearest90) <= 4 ? nearest90 % 360 : Math.round(rawDeg);
+          return { x, z, rotY, snappedWallLabel: bestSeg.label };
+        }
+      }
+      return {
+        x: snapCoord(worldPt.x),
+        z: snapCoord(worldPt.z),
+        rotY: 0,
+        snappedWallLabel: null as string | null,
+      };
+    },
+    [segments, snapCoord]
+  );
+
+  const hoverAppliancePlacement = useMemo(() => {
+    if (tool !== 'place_appliance' || !placingAppliance || !cursorWorld) return null;
+    return computeAppliancePlacementAt(placingAppliance, cursorWorld, true);
+  }, [tool, placingAppliance, cursorWorld, computeAppliancePlacementAt]);
 
   const finishDrawingPolygon = useCallback(() => {
     if (drawPoints.length < 3) return;
@@ -491,7 +642,7 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
     setSelection({ kind: 'none' });
   }, [drawPoints, commitDraft]);
 
-  // Keyboard shortcuts inside modal (Esc, Enter, Delete, Ctrl+Z)
+  // Keyboard shortcuts inside modal (Esc, Enter, Delete, R, Ctrl+Z)
   useEffect(() => {
     if (!open) return;
     const onKeyDown = (e: KeyboardEvent) => {
@@ -508,12 +659,22 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
           setTool('select');
         } else if (tool !== 'select') {
           setTool('select');
+          setPlacingAppliance(null);
         } else {
           setSelection({ kind: 'none' });
         }
       } else if (e.key === 'Enter' && tool === 'draw' && drawPoints.length >= 3) {
         e.preventDefault();
         finishDrawingPolygon();
+      } else if (e.key.toLowerCase() === 'r' && tool === 'select' && selection.kind === 'appliance') {
+        e.preventDefault();
+        commitParts((prev) =>
+          prev.map((p) =>
+            p.id === selection.id
+              ? { ...p, rotation: [p.rotation[0], (p.rotation[1] + 90) % 360, p.rotation[2]] }
+              : p
+          )
+        );
       } else if ((e.key === 'Delete' || e.key === 'Backspace') && tool === 'select') {
         if (selection.kind === 'opening') {
           commitDraft((prev) => ({
@@ -527,6 +688,9 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
             wallObstacles: (prev.wallObstacles ?? []).filter((o) => o.id !== selection.id),
           }));
           setSelection({ kind: 'none' });
+        } else if (selection.kind === 'appliance') {
+          commitParts((prev) => prev.filter((p) => p.id !== selection.id));
+          setSelection({ kind: 'none' });
         } else if (selection.kind === 'vertex' && points.length > 3) {
           commitDraft((prev) => deleteRoomVertex(prev, selection.vertexIndex));
           setSelection({ kind: 'none' });
@@ -535,7 +699,7 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [open, tool, drawPoints.length, selection, points.length, handleUndo, finishDrawingPolygon, commitDraft]);
+  }, [open, tool, drawPoints.length, selection, points.length, handleUndo, finishDrawingPolygon, commitDraft, commitParts]);
 
   const applyPresetImmediately = (presetId: RoomShapePresetId) => {
     const preset = buildRoomPreset(presetId, parts, draft.heightMm);
@@ -645,6 +809,35 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
     setTab('elements');
   };
 
+  const addAppliancePartAt = (
+    item: ApplianceMeta,
+    worldX: number,
+    worldZ: number,
+    allowWallSnap = true
+  ) => {
+    const placed = computeAppliancePlacementAt(item, { x: worldX, z: worldZ }, allowWallSnap);
+    const nextPart: FurniturePart = {
+      id: `app_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+      name: item.name,
+      kind: 'appliance',
+      applianceModel: item.id,
+      materialId: 'steel_black',
+      width: item.width,
+      height: item.height,
+      depth: item.depth,
+      position: [placed.x, item.defaultY, placed.z],
+      rotation: [0, placed.rotY, 0],
+      appliancePricePln: item.defaultPricePln,
+    };
+    setHistory((h) => [...h.slice(-24), { room: draft, parts: draftParts }]);
+    setDraft((prev) => (prev.enabled ? prev : syncRoomWithPolygon({ ...prev, enabled: true })));
+    setDraftParts((prev) => [...prev, nextPart]);
+    setSelection({ kind: 'appliance', id: nextPart.id });
+    setTool('select');
+    setPlacingAppliance(null);
+    setTab('elements');
+  };
+
   // Pointer handlers on 2D CAD Blueprint Canvas (supports mouse, touch tap-to-place & 2-finger pinch zoom)
   const handleCanvasPointerDown = (e: React.PointerEvent<SVGSVGElement>) => {
     if (e.button === 2) return;
@@ -683,6 +876,11 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
         ...prev,
         { id: `dv_${Date.now()}_${prev.length}`, xMm: snapped.x, zMm: snapped.z },
       ]);
+      return;
+    }
+
+    if (tool === 'place_appliance' && placingAppliance) {
+      addAppliancePartAt(placingAppliance, world.x, world.z, true);
       return;
     }
 
@@ -843,6 +1041,17 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
           ),
         };
       });
+      return;
+    }
+
+    if (drag.kind === 'appliance') {
+      const nextX = snapCoord(world.x - drag.grabOffX);
+      const nextZ = snapCoord(world.z - drag.grabOffZ);
+      setDraftParts((prev) =>
+        prev.map((p) =>
+          p.id === drag.id ? { ...p, position: [nextX, p.position[1], nextZ] } : p
+        )
+      );
     }
   };
 
@@ -873,12 +1082,15 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
     if (tool !== 'select') return;
     e.stopPropagation();
     setSelection(nextSel);
-    if (nextSel.kind === 'opening' || nextSel.kind === 'obstacle') {
+    if (nextSel.kind === 'opening' || nextSel.kind === 'obstacle' || nextSel.kind === 'appliance') {
       setTab('elements');
     } else if (nextSel.kind === 'wall' || nextSel.kind === 'vertex') {
       setTab('shape');
     }
-    dragSnapshotRef.current = structuredClone(draft);
+    dragSnapshotRef.current = {
+      room: structuredClone(draft),
+      parts: structuredClone(draftParts),
+    };
     dragRef.current = mode;
     svgRef.current?.setPointerCapture(e.pointerId);
   };
@@ -921,6 +1133,10 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
   const selectedObstacle =
     selection.kind === 'obstacle'
       ? (draft.wallObstacles ?? []).find((o) => o.id === selection.id) ?? null
+      : null;
+  const selectedAppliance =
+    selection.kind === 'appliance'
+      ? applianceParts.find((p) => p.id === selection.id) ?? null
       : null;
 
   const slope = draft.slopedCeiling ?? {
@@ -967,6 +1183,37 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
     }));
   };
 
+  const updateAppliancePart = (id: string, patch: Partial<FurniturePart>) => {
+    commitParts((prev) => prev.map((p) => (p.id === id ? { ...p, ...patch } : p)));
+  };
+
+  const rotateAppliance90 = (id: string) => {
+    commitParts((prev) =>
+      prev.map((p) =>
+        p.id === id
+          ? { ...p, rotation: [p.rotation[0], (p.rotation[1] + 90) % 360, p.rotation[2]] }
+          : p
+      )
+    );
+  };
+
+  const duplicateAppliancePart = (part: FurniturePart) => {
+    const copy: FurniturePart = {
+      ...structuredClone(part),
+      id: `app_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+      position: [part.position[0] + 150, part.position[1], part.position[2] + 150],
+    };
+    commitParts((prev) => [...prev, copy]);
+    setSelection({ kind: 'appliance', id: copy.id });
+  };
+
+  const deleteAppliancePart = (id: string) => {
+    commitParts((prev) => prev.filter((p) => p.id !== id));
+    if (selection.kind === 'appliance' && selection.id === id) {
+      setSelection({ kind: 'none' });
+    }
+  };
+
   const totalIssues = liveIssues.length + liveSwingIssues.length;
 
   const snappedCursorDraw =
@@ -1001,15 +1248,15 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
     })
     .join(' ');
 
-  const roomCentroid = (() => {
-    const cx = points.reduce((s, p) => s + p.xMm, 0) / Math.max(1, points.length);
-    const cz = points.reduce((s, p) => s + p.zMm, 0) / Math.max(1, points.length);
-    return worldToScreen(cx, cz);
-  })();
+  const roomCentroidWorld = {
+    x: points.reduce((s, p) => s + p.xMm, 0) / Math.max(1, points.length),
+    z: points.reduce((s, p) => s + p.zMm, 0) / Math.max(1, points.length),
+  };
+  const roomCentroid = worldToScreen(roomCentroidWorld.x, roomCentroidWorld.z);
 
   const handleSave = () => {
     const finalRoom = syncRoomWithPolygon(draft);
-    onSaveRoom(finalRoom);
+    onSaveRoom(finalRoom, draftParts);
     onClose();
   };
 
@@ -1180,106 +1427,136 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
                 </div>
               </div>
 
-              {/* Strip 2: Grouped Architectural & Sanitary Placement Tools (wraps cleanly on desktop, scrollable on mobile) */}
+              {/* Strip 2A: Room Category Tabs (Otwory, Instalacje, Łazienka, Kuchnia, Sypialnia, Salon) */}
+              <div className="flex items-center gap-1 overflow-x-auto cad-scroll pb-0.5">
+                {PALETTE_TABS.map((cat) => {
+                  const Icon = cat.icon;
+                  const active = paletteTab === cat.id;
+                  return (
+                    <button
+                      key={cat.id}
+                      type="button"
+                      onClick={() => setPaletteTab(cat.id)}
+                      className={`flex min-h-[30px] items-center gap-1.5 rounded-lg border px-2.5 text-[11px] font-medium transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                        active
+                          ? `${cat.activeClass} font-semibold`
+                          : 'border-zinc-800/90 bg-zinc-900/60 text-zinc-400 hover:border-zinc-700 hover:text-zinc-200'
+                      }`}
+                    >
+                      <Icon className="h-3.5 w-3.5 shrink-0" />
+                      <span>{cat.label}</span>
+                    </button>
+                  );
+                })}
+              </div>
+
+              {/* Strip 2B: Contextual Placement Items for Active Category */}
               <div className="flex lg:flex-wrap items-center gap-1 overflow-x-auto lg:overflow-visible cad-scroll pb-0.5 lg:pb-0">
-                <span className="text-[10px] font-semibold uppercase tracking-wide text-zinc-500 pr-0.5 shrink-0">
-                  Otwory:
-                </span>
-                {(
-                  [
-                    { id: 'place_door', label: 'Drzwi', icon: DoorOpen },
-                    { id: 'place_window', label: 'Okno', icon: AppWindow },
-                    { id: 'place_balcony', label: 'Balkon', icon: Columns2 },
-                    { id: 'place_arch', label: 'Przejście', icon: Maximize2 },
-                  ] as const
-                ).map((item) => {
-                  const Icon = item.icon;
-                  const active = tool === item.id;
-                  return (
-                    <button
-                      key={item.id}
-                      type="button"
-                      onClick={() => {
-                        setTool(active ? 'select' : item.id);
-                        setDrawPoints([]);
-                      }}
-                      className={`flex min-h-[30px] items-center gap-1 rounded-md px-2 text-[11px] font-medium transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
-                        active
-                          ? 'bg-sky-500 text-zinc-950 font-semibold'
-                          : 'bg-zinc-900/90 text-zinc-300 border border-zinc-800 hover:border-sky-500/50 hover:text-sky-300'
-                      }`}
-                    >
-                      <Icon className="h-3.5 w-3.5 shrink-0" />
-                      <span>{item.label}</span>
-                    </button>
-                  );
-                })}
+                {paletteTab === 'openings' &&
+                  (
+                    [
+                      { id: 'place_door', label: 'Drzwi 90', icon: DoorOpen },
+                      { id: 'place_window', label: 'Okno 120', icon: AppWindow },
+                      { id: 'place_balcony', label: 'Balkon', icon: Columns2 },
+                      { id: 'place_arch', label: 'Przejście', icon: Maximize2 },
+                    ] as const
+                  ).map((item) => {
+                    const Icon = item.icon;
+                    const active = tool === item.id;
+                    return (
+                      <button
+                        key={item.id}
+                        type="button"
+                        onClick={() => {
+                          setPlacingAppliance(null);
+                          setTool(active ? 'select' : item.id);
+                          setDrawPoints([]);
+                        }}
+                        className={`flex min-h-[32px] items-center gap-1.5 rounded-md px-2.5 text-[11px] font-medium transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                          active
+                            ? 'bg-sky-500 text-zinc-950 font-semibold'
+                            : 'bg-zinc-900/90 text-zinc-200 border border-zinc-800 hover:border-sky-500/50 hover:text-sky-300'
+                        }`}
+                      >
+                        <Icon className="h-3.5 w-3.5 shrink-0" />
+                        <span>{item.label}</span>
+                      </button>
+                    );
+                  })}
 
-                <span className="mx-1 h-4 w-px bg-zinc-800 shrink-0" aria-hidden="true" />
-                <span className="text-[10px] font-semibold uppercase tracking-wide text-zinc-500 pr-0.5 shrink-0">
-                  Inst.:
-                </span>
-                {(
-                  [
-                    { id: 'place_radiator', label: 'Grzejnik', icon: Flame },
-                    { id: 'place_socket', label: 'Gniazdko', icon: PlugZap },
-                    { id: 'place_pipe', label: 'Pion', icon: Wrench },
-                  ] as const
-                ).map((item) => {
-                  const Icon = item.icon;
-                  const active = tool === item.id;
-                  return (
-                    <button
-                      key={item.id}
-                      type="button"
-                      onClick={() => {
-                        setTool(active ? 'select' : item.id);
-                        setDrawPoints([]);
-                      }}
-                      className={`flex min-h-[30px] items-center gap-1 rounded-md px-2 text-[11px] font-medium transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
-                        active
-                          ? 'bg-sky-500 text-zinc-950 font-semibold'
-                          : 'bg-zinc-900/90 text-zinc-300 border border-zinc-800 hover:border-sky-500/50 hover:text-sky-300'
-                      }`}
-                    >
-                      <Icon className="h-3.5 w-3.5 shrink-0" />
-                      <span>{item.label}</span>
-                    </button>
-                  );
-                })}
+                {paletteTab === 'installations' &&
+                  (
+                    [
+                      { id: 'place_radiator', label: 'Grzejnik', icon: Flame },
+                      { id: 'place_socket', label: 'Gniazdko 230V', icon: PlugZap },
+                      { id: 'place_pipe', label: 'Pion / Rura', icon: Wrench },
+                    ] as const
+                  ).map((item) => {
+                    const Icon = item.icon;
+                    const active = tool === item.id;
+                    return (
+                      <button
+                        key={item.id}
+                        type="button"
+                        onClick={() => {
+                          setPlacingAppliance(null);
+                          setTool(active ? 'select' : item.id);
+                          setDrawPoints([]);
+                        }}
+                        className={`flex min-h-[32px] items-center gap-1.5 rounded-md px-2.5 text-[11px] font-medium transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                          active
+                            ? 'bg-sky-500 text-zinc-950 font-semibold'
+                            : 'bg-zinc-900/90 text-zinc-200 border border-zinc-800 hover:border-sky-500/50 hover:text-sky-300'
+                        }`}
+                      >
+                        <Icon className="h-3.5 w-3.5 shrink-0" />
+                        <span>{item.label}</span>
+                      </button>
+                    );
+                  })}
 
-                <span className="mx-1 h-4 w-px bg-zinc-800 shrink-0" aria-hidden="true" />
-                <span className="text-[10px] font-semibold uppercase tracking-wide text-zinc-500 pr-0.5 shrink-0">
-                  WC:
-                </span>
-                {(
-                  [
-                    { id: 'place_wc_geberit', label: 'Geberit', icon: Layers },
-                    { id: 'place_wc_low_cistern', label: 'Dolnopłuk', icon: Droplets },
-                    { id: 'place_wc_high_cistern', label: 'Górnopłuk', icon: Droplets },
-                  ] as const
-                ).map((item) => {
-                  const Icon = item.icon;
-                  const active = tool === item.id;
-                  return (
-                    <button
-                      key={item.id}
-                      type="button"
-                      onClick={() => {
-                        setTool(active ? 'select' : item.id);
-                        setDrawPoints([]);
-                      }}
-                      className={`flex min-h-[30px] items-center gap-1 rounded-md px-2 text-[11px] font-medium transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
-                        active
-                          ? 'bg-sky-500 text-zinc-950 font-semibold'
-                          : 'bg-zinc-900/90 text-zinc-300 border border-zinc-800 hover:border-sky-500/50 hover:text-sky-300'
-                      }`}
-                    >
-                      <Icon className="h-3.5 w-3.5 shrink-0" />
-                      <span>{item.label}</span>
-                    </button>
-                  );
-                })}
+                {(paletteTab === 'bathroom' ||
+                  paletteTab === 'kitchen' ||
+                  paletteTab === 'wardrobe' ||
+                  paletteTab === 'living') &&
+                  APPLIANCE_CATALOG.filter((a) => a.category === paletteTab).map((item) => {
+                    const active = tool === 'place_appliance' && placingAppliance?.id === item.id;
+                    const shortName = APPLIANCE_SHORT_LABELS[item.id] ?? item.name;
+                    const wCm = Math.round(item.width / 10);
+                    const dCm = Math.round(item.depth / 10);
+                    return (
+                      <button
+                        key={item.id}
+                        type="button"
+                        onClick={() => {
+                          if (active) {
+                            setTool('select');
+                            setPlacingAppliance(null);
+                          } else {
+                            setTool('place_appliance');
+                            setPlacingAppliance(item);
+                            setDrawPoints([]);
+                          }
+                        }}
+                        title={`${item.name} (${item.width}×${item.depth}×${item.height} mm)`}
+                        className={`flex min-h-[32px] items-center gap-1.5 rounded-md px-2.5 text-[11px] font-medium transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                          active
+                            ? 'bg-amber-500 text-zinc-950 font-semibold shadow-sm'
+                            : 'bg-zinc-900/90 text-zinc-200 border border-zinc-800 hover:border-amber-500/50 hover:text-white'
+                        }`}
+                      >
+                        <Plus className={`h-3 w-3 shrink-0 ${active ? 'text-zinc-950' : 'text-zinc-400'}`} />
+                        <span>{shortName}</span>
+                        <span
+                          className={`text-[10px] font-mono tabular-nums ${
+                            active ? 'text-zinc-900/80' : 'text-zinc-500'
+                          }`}
+                        >
+                          {wCm}×{dCm}
+                        </span>
+                      </button>
+                    );
+                  })}
               </div>
             </div>
 
@@ -1848,6 +2125,102 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
                     );
                   })}
 
+                  {/* Interactive Placed Room Equipment & Appliances (Draggable + 90° Rotatable) */}
+                  {applianceParts.map((part) => {
+                    if (!part.applianceModel) return null;
+                    const meta = APPLIANCE_BY_ID[part.applianceModel];
+                    const category: ApplianceCategory = meta?.category ?? 'bathroom';
+                    const isSelected = selection.kind === 'appliance' && selection.id === part.id;
+                    const pos = worldToScreen(part.position[0], part.position[2]);
+                    const wPx = part.width * pxPerMm;
+                    const dPx = part.depth * pxPerMm;
+                    const rotYDeg = part.rotation[1] ?? 0;
+                    const shortLabel = APPLIANCE_SHORT_LABELS[part.applianceModel] ?? part.name;
+                    return (
+                      <g
+                        key={part.id}
+                        transform={`translate(${pos.sx.toFixed(1)}, ${pos.sy.toFixed(1)}) rotate(${-rotYDeg})`}
+                        className={tool === 'select' ? 'cursor-grab active:cursor-grabbing' : undefined}
+                        onPointerDown={(e) => {
+                          if (tool !== 'select') return;
+                          const w = screenToWorld(e.clientX, e.clientY);
+                          startElementDrag(
+                            e,
+                            {
+                              kind: 'appliance',
+                              id: part.id,
+                              grabOffX: w.x - part.position[0],
+                              grabOffZ: w.z - part.position[2],
+                            },
+                            { kind: 'appliance', id: part.id }
+                          );
+                        }}
+                      >
+                        <RoomAppliance2DSvg
+                          model={part.applianceModel}
+                          category={category}
+                          wPx={wPx}
+                          dPx={dPx}
+                          selected={isSelected}
+                          shortLabel={shortLabel}
+                        />
+                      </g>
+                    );
+                  })}
+
+                  {/* Placement Hover Ghost for Room Appliances (auto-rotates flush along nearest wall!) */}
+                  {tool === 'place_appliance' && placingAppliance && hoverAppliancePlacement && (
+                    <g pointerEvents="none">
+                      {(() => {
+                        const pos = worldToScreen(hoverAppliancePlacement.x, hoverAppliancePlacement.z);
+                        const wPx = placingAppliance.width * pxPerMm;
+                        const dPx = placingAppliance.depth * pxPerMm;
+                        const shortLabel = APPLIANCE_SHORT_LABELS[placingAppliance.id] ?? placingAppliance.name;
+                        return (
+                          <>
+                            <g
+                              transform={`translate(${pos.sx.toFixed(1)}, ${pos.sy.toFixed(1)}) rotate(${-hoverAppliancePlacement.rotY})`}
+                            >
+                              <RoomAppliance2DSvg
+                                model={placingAppliance.id}
+                                category={placingAppliance.category}
+                                wPx={wPx}
+                                dPx={dPx}
+                                selected={false}
+                                ghost
+                                shortLabel={shortLabel}
+                              />
+                            </g>
+                            {hoverAppliancePlacement.snappedWallLabel && (
+                              <g>
+                                <rect
+                                  x={pos.sx - 56}
+                                  y={pos.sy - Math.max(wPx, dPx) / 2 - 24}
+                                  width={112}
+                                  height={18}
+                                  rx={4}
+                                  fill="#0F172A"
+                                  stroke="#38BDF8"
+                                  strokeWidth={1}
+                                />
+                                <text
+                                  x={pos.sx}
+                                  y={pos.sy - Math.max(wPx, dPx) / 2 - 12}
+                                  textAnchor="middle"
+                                  fill="#BAE6FD"
+                                  fontSize="9.5"
+                                  fontWeight="600"
+                                >
+                                  Dosunięto: {hoverAppliancePlacement.snappedWallLabel}
+                                </text>
+                              </g>
+                            )}
+                          </>
+                        );
+                      })()}
+                    </g>
+                  )}
+
                   {/* Placement Hover Ghost on Nearest Wall */}
                   {hoverWallPlacement && (
                     <g pointerEvents="none">
@@ -2066,23 +2439,101 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
                 </div>
               )}
 
-              {/* Subtle Bottom-Left Scale & Mode Hint */}
-              {tool !== 'draw' && (
-                <div className="pointer-events-none absolute bottom-2.5 left-3 flex items-center gap-3 text-[11px] text-zinc-400 bg-[#0D0F13]/85 px-2.5 py-1 rounded-md border border-zinc-800/80">
-                  <span className="flex items-center gap-1.5 font-mono tabular-nums">
-                    <span
-                      className="inline-block h-1.5 border-b border-l border-r border-zinc-400"
-                      style={{ width: `${Math.max(24, Math.min(120, Math.round(1000 * pxPerMm)))}px` }}
-                    />
-                    <span>1,0 m</span>
+              {/* Contextual Floating Action Bar when Placing a Room Appliance */}
+              {tool === 'place_appliance' && placingAppliance && (
+                <div className="absolute bottom-3 left-1/2 -translate-x-1/2 max-w-[calc(100%-24px)] flex flex-wrap items-center justify-center gap-2 rounded-xl border border-amber-500/50 bg-[#141518]/95 px-3 py-2 shadow-xl backdrop-blur-sm">
+                  <span className="text-xs text-zinc-200">
+                    Dotknij plan lub ścianę:{' '}
+                    <strong className="text-amber-300">
+                      {APPLIANCE_SHORT_LABELS[placingAppliance.id] ?? placingAppliance.name}
+                    </strong>
                   </span>
-                  <span className="text-zinc-400">
-                    {tool === 'select'
-                      ? 'Przeciągaj ściany i narożniki · 2 palce / kółko = zoom'
-                      : 'Kliknij lub tapnij wybraną ścianę, aby wstawić element'}
-                  </span>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      addAppliancePartAt(
+                        placingAppliance,
+                        roomCentroidWorld.x,
+                        roomCentroidWorld.z,
+                        false
+                      )
+                    }
+                    className="min-h-[30px] rounded-lg bg-amber-500 px-2.5 text-xs font-semibold text-zinc-950 hover:bg-amber-400 whitespace-nowrap cursor-pointer"
+                  >
+                    Wstaw na środek
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setTool('select');
+                      setPlacingAppliance(null);
+                    }}
+                    className="min-h-[30px] rounded-lg border border-zinc-700 bg-zinc-900 px-2.5 text-xs text-zinc-300 hover:text-white whitespace-nowrap cursor-pointer"
+                  >
+                    Anuluj
+                  </button>
                 </div>
               )}
+
+              {/* Contextual Floating Quick Actions when a 2D Appliance is Selected */}
+              {tool === 'select' && selectedAppliance && (
+                <div className="absolute bottom-3 left-1/2 -translate-x-1/2 max-w-[calc(100%-20px)] flex flex-wrap items-center justify-center gap-1.5 rounded-xl border border-amber-500/45 bg-[#141518]/95 px-2.5 py-1.5 shadow-xl backdrop-blur-sm">
+                  <span className="text-xs font-medium text-amber-200 px-1 truncate max-w-[140px]">
+                    {selectedAppliance.applianceModel
+                      ? APPLIANCE_SHORT_LABELS[selectedAppliance.applianceModel]
+                      : selectedAppliance.name}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => rotateAppliance90(selectedAppliance.id)}
+                    className="flex min-h-[32px] items-center gap-1 rounded-lg border border-zinc-700 bg-zinc-900 px-2.5 text-xs font-medium text-zinc-100 hover:border-amber-500/60 hover:text-amber-300 whitespace-nowrap cursor-pointer"
+                    title="Obróć o 90° (skrót R)"
+                  >
+                    <RotateCw className="h-3.5 w-3.5" />
+                    <span>Obróć 90°</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => duplicateAppliancePart(selectedAppliance)}
+                    className="flex min-h-[32px] items-center gap-1 rounded-lg border border-zinc-700 bg-zinc-900 px-2 text-xs text-zinc-200 hover:border-zinc-500 whitespace-nowrap cursor-pointer"
+                    title="Duplikuj sprzęt"
+                  >
+                    <Copy className="h-3.5 w-3.5" />
+                    <span className="hidden sm:inline">Duplikuj</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => deleteAppliancePart(selectedAppliance.id)}
+                    className="flex min-h-[32px] items-center gap-1 rounded-lg border border-red-500/40 bg-red-950/40 px-2 text-xs text-red-300 hover:bg-red-900/50 whitespace-nowrap cursor-pointer"
+                    title="Usuń sprzęt (Delete)"
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                    <span className="hidden sm:inline">Usuń</span>
+                  </button>
+                </div>
+              )}
+
+              {/* Subtle Bottom-Left Scale & Mode Hint */}
+              {tool !== 'draw' &&
+                tool !== 'place_appliance' &&
+                !(tool === 'select' && selectedAppliance) && (
+                  <div className="pointer-events-none absolute bottom-2.5 left-3 flex items-center gap-3 text-[11px] text-zinc-400 bg-[#0D0F13]/85 px-2.5 py-1 rounded-md border border-zinc-800/80">
+                    <span className="flex items-center gap-1.5 font-mono tabular-nums">
+                      <span
+                        className="inline-block h-1.5 border-b border-l border-r border-zinc-400"
+                        style={{
+                          width: `${Math.max(24, Math.min(120, Math.round(1000 * pxPerMm)))}px`,
+                        }}
+                      />
+                      <span>1,0 m</span>
+                    </span>
+                    <span className="text-zinc-400">
+                      {tool === 'select'
+                        ? 'Przeciągaj ściany, narożniki i sprzęty · 2 palce / kółko = zoom'
+                        : 'Kliknij lub tapnij wybraną ścianę, aby wstawić element'}
+                    </span>
+                  </div>
+                )}
             </div>
           </div>
 
@@ -2456,9 +2907,153 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
                 </>
               )}
 
-              {/* TAB 2: DOORS, WINDOWS & WALL OBSTACLES */}
+              {/* TAB 2: DOORS, WINDOWS, INSTALLATIONS & ROOM EQUIPMENT */}
               {tab === 'elements' && (
                 <>
+                  {/* Selected Room Appliance Editor */}
+                  {selectedAppliance && (
+                    <div className="space-y-3 rounded-xl border border-amber-500/45 bg-amber-500/5 p-3.5">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-xs font-semibold text-amber-300 truncate">
+                          {selectedAppliance.name}
+                        </span>
+                        <div className="flex items-center gap-1 shrink-0">
+                          <button
+                            type="button"
+                            onClick={() => duplicateAppliancePart(selectedAppliance)}
+                            className="text-zinc-400 hover:text-white p-1 cursor-pointer"
+                            title="Duplikuj sprzęt"
+                          >
+                            <Copy className="h-3.5 w-3.5" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => deleteAppliancePart(selectedAppliance.id)}
+                            className="text-zinc-400 hover:text-red-400 p-1 cursor-pointer"
+                            title="Usuń sprzęt"
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Quick 90° Rotation Selector */}
+                      <div className="space-y-1">
+                        <span className="text-[11px] text-zinc-400">Obrót w pokoju (oś Y)</span>
+                        <div className="grid grid-cols-4 gap-1">
+                          {[0, 90, 180, 270].map((deg) => {
+                            const cur = ((Math.round(selectedAppliance.rotation[1]) % 360) + 360) % 360;
+                            const active = cur === deg;
+                            return (
+                              <button
+                                key={deg}
+                                type="button"
+                                onClick={() =>
+                                  updateAppliancePart(selectedAppliance.id, {
+                                    rotation: [
+                                      selectedAppliance.rotation[0],
+                                      deg,
+                                      selectedAppliance.rotation[2],
+                                    ],
+                                  })
+                                }
+                                className={`min-h-[30px] rounded-md text-xs font-mono tabular-nums cursor-pointer transition-colors ${
+                                  active
+                                    ? 'bg-amber-500 text-zinc-950 font-semibold'
+                                    : 'border border-zinc-700 bg-zinc-900 text-zinc-300 hover:text-white'
+                                }`}
+                              >
+                                {deg}°
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-2">
+                        <label className="block">
+                          <span className="text-[11px] text-zinc-400">Szerokość (mm)</span>
+                          <input
+                            type="number"
+                            min={100}
+                            max={4000}
+                            step={10}
+                            value={Math.round(selectedAppliance.width)}
+                            onChange={(e) =>
+                              updateAppliancePart(selectedAppliance.id, {
+                                width: Math.max(100, Number(e.target.value) || selectedAppliance.width),
+                              })
+                            }
+                            className="mt-1 w-full rounded-lg border border-zinc-700 bg-zinc-900 px-2 py-1.5 text-xs font-mono tabular-nums text-white"
+                          />
+                        </label>
+                        <label className="block">
+                          <span className="text-[11px] text-zinc-400">Głębokość (mm)</span>
+                          <input
+                            type="number"
+                            min={30}
+                            max={3000}
+                            step={10}
+                            value={Math.round(selectedAppliance.depth)}
+                            onChange={(e) =>
+                              updateAppliancePart(selectedAppliance.id, {
+                                depth: Math.max(30, Number(e.target.value) || selectedAppliance.depth),
+                              })
+                            }
+                            className="mt-1 w-full rounded-lg border border-zinc-700 bg-zinc-900 px-2 py-1.5 text-xs font-mono tabular-nums text-white"
+                          />
+                        </label>
+                        <label className="block">
+                          <span className="text-[11px] text-zinc-400">Wysokość (mm)</span>
+                          <input
+                            type="number"
+                            min={20}
+                            max={3000}
+                            step={10}
+                            value={Math.round(selectedAppliance.height)}
+                            onChange={(e) => {
+                              const nextH = Math.max(20, Number(e.target.value) || selectedAppliance.height);
+                              const bottomY = Math.max(0, Math.round(selectedAppliance.position[1] - selectedAppliance.height / 2));
+                              updateAppliancePart(selectedAppliance.id, {
+                                height: nextH,
+                                position: [
+                                  selectedAppliance.position[0],
+                                  bottomY + nextH / 2,
+                                  selectedAppliance.position[2],
+                                ],
+                              });
+                            }}
+                            className="mt-1 w-full rounded-lg border border-zinc-700 bg-zinc-900 px-2 py-1.5 text-xs font-mono tabular-nums text-white"
+                          />
+                        </label>
+                        <label className="block">
+                          <span className="text-[11px] text-zinc-400">Dół od podłogi (mm)</span>
+                          <input
+                            type="number"
+                            min={0}
+                            max={2600}
+                            step={20}
+                            value={Math.max(
+                              0,
+                              Math.round(selectedAppliance.position[1] - selectedAppliance.height / 2)
+                            )}
+                            onChange={(e) => {
+                              const bottomMm = Math.max(0, Number(e.target.value) || 0);
+                              updateAppliancePart(selectedAppliance.id, {
+                                position: [
+                                  selectedAppliance.position[0],
+                                  bottomMm + selectedAppliance.height / 2,
+                                  selectedAppliance.position[2],
+                                ],
+                              });
+                            }}
+                            className="mt-1 w-full rounded-lg border border-zinc-700 bg-zinc-900 px-2 py-1.5 text-xs font-mono tabular-nums text-white"
+                          />
+                        </label>
+                      </div>
+                    </div>
+                  )}
+
                   {/* Selected Opening Editor */}
                   {selectedOpening && (
                     <div className="space-y-3 rounded-xl border border-sky-500/40 bg-sky-500/5 p-3.5">
@@ -2908,6 +3503,111 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
                               >
                                 <Trash2 className="h-3.5 w-3.5" />
                               </button>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Placed Room Equipment & Appliances List */}
+                  <div className="space-y-2 border-t border-zinc-800 pt-4">
+                    <div className="flex flex-wrap items-center justify-between gap-1.5">
+                      <h3 className="text-xs font-semibold text-zinc-200">
+                        Wyposażenie pomieszczenia ({applianceParts.length})
+                      </h3>
+                      <div className="flex flex-wrap gap-1.5 text-[11px]">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setPaletteTab('bathroom');
+                            setMobileInspectorOpen(false);
+                          }}
+                          className="text-cyan-400 hover:text-cyan-300 cursor-pointer"
+                        >
+                          + Łazienka
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setPaletteTab('kitchen');
+                            setMobileInspectorOpen(false);
+                          }}
+                          className="text-amber-400 hover:text-amber-300 cursor-pointer"
+                        >
+                          + Kuchnia
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setPaletteTab('wardrobe');
+                            setMobileInspectorOpen(false);
+                          }}
+                          className="text-violet-400 hover:text-violet-300 cursor-pointer"
+                        >
+                          + Sypialnia
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setPaletteTab('living');
+                            setMobileInspectorOpen(false);
+                          }}
+                          className="text-emerald-400 hover:text-emerald-300 cursor-pointer"
+                        >
+                          + Salon
+                        </button>
+                      </div>
+                    </div>
+
+                    {applianceParts.length === 0 ? (
+                      <p className="text-xs text-zinc-500">
+                        Wybierz zakładkę Łazienka, Kuchnia, Sypialnia lub Salon nad rzutem 2D, aby wstawić wannę, WC, pralkę, lodówkę, łóżko lub sofę.
+                      </p>
+                    ) : (
+                      <div className="space-y-1.5">
+                        {applianceParts.map((part) => {
+                          const isSel = selection.kind === 'appliance' && selection.id === part.id;
+                          return (
+                            <div
+                              key={part.id}
+                              onClick={() => setSelection({ kind: 'appliance', id: part.id })}
+                              className={`flex items-center justify-between gap-2 rounded-lg px-2.5 py-2 text-xs cursor-pointer transition-colors ${
+                                isSel
+                                  ? 'bg-amber-500/15 text-amber-200 border border-amber-500/40'
+                                  : 'bg-zinc-900/60 text-zinc-300 hover:bg-zinc-900 border border-transparent'
+                              }`}
+                            >
+                              <div className="min-w-0">
+                                <div className="font-medium truncate">{part.name}</div>
+                                <div className="text-[10px] text-zinc-500 tabular-nums">
+                                  {Math.round(part.width)}×{Math.round(part.depth)}×{Math.round(part.height)} mm · {Math.round(part.rotation[1])}°
+                                </div>
+                              </div>
+                              <div className="flex items-center gap-0.5 shrink-0">
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    rotateAppliance90(part.id);
+                                  }}
+                                  className="text-zinc-500 hover:text-amber-300 p-1 cursor-pointer"
+                                  title="Obróć 90°"
+                                >
+                                  <RotateCw className="h-3.5 w-3.5" />
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    deleteAppliancePart(part.id);
+                                  }}
+                                  className="text-zinc-500 hover:text-red-400 p-1 cursor-pointer"
+                                  title="Usuń"
+                                >
+                                  <Trash2 className="h-3.5 w-3.5" />
+                                </button>
+                              </div>
                             </div>
                           );
                         })}

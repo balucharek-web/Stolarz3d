@@ -4,7 +4,7 @@ export interface FurnitureTemplateMeta {
   id: string;
   name: string;
   subtitle: string;
-  category: 'Magazynowe i OSB' | 'Kuchenne' | 'Domowe' | 'Warsztat';
+  category: 'Ogród i DIY' | 'Magazynowe i OSB' | 'Kuchenne' | 'Domowe' | 'Warsztat';
   project: FurnitureProject;
 }
 
@@ -608,6 +608,43 @@ export const FURNITURE_TEMPLATES: FurnitureTemplateMeta[] = [
         { id: 'fw_5', partId: 'w_top', type: 'confirmat_7x50', localPosition: [-540, 18, -290], localNormal: [0, 1, 0], targetPartId: 'w_gusset_l' },
         { id: 'fw_6', partId: 'w_top', type: 'confirmat_7x50', localPosition: [540, 18, -290], localNormal: [0, 1, 0], targetPartId: 'w_gusset_r' },
       ],
+    },
+  },
+  {
+    id: 'insulated_doghouse_diy',
+    name: 'Ocieplana buda dla psa (Kantówka + Styropian)',
+    subtitle: '1100 × 850 × 850 mm · Szkielet C24, izolacja EPS 50 mm, deska elewacyjna i dach z gontem',
+    category: 'Ogród i DIY',
+    project: {
+      id: 'proj_doghouse_diy',
+      name: 'Ocieplana buda dla psa',
+      parts: [
+        // Legary modrzewiowe + podłoga OSB-3
+        { id: 'dh_skid_l', name: 'Legar modrzewiowy lewy 50×50', kind: 'profile', materialId: 'larch_impregnated', width: 50, height: 50, depth: 850, position: [-460, 25, 0], rotation: [0, 0, 0], groupId: 'Buda — podłoga i szkielet' },
+        { id: 'dh_skid_r', name: 'Legar modrzewiowy prawy 50×50', kind: 'profile', materialId: 'larch_impregnated', width: 50, height: 50, depth: 850, position: [460, 25, 0], rotation: [0, 0, 0], groupId: 'Buda — podłoga i szkielet' },
+        { id: 'dh_floor', name: 'Podłoga OSB-3 (22 mm)', kind: 'panel', materialId: 'osb3', width: 1100, height: 22, depth: 850, position: [0, 61, 0], rotation: [0, 0, 0], groupId: 'Buda — podłoga i szkielet' },
+        // Słupki narożne z kantówki sosnowej C24
+        { id: 'dh_post_fl', name: 'Kantówka narożna przód-lewo', kind: 'profile', materialId: 'pine_timber', width: 50, height: 780, depth: 50, position: [-480, 462, 360], rotation: [0, 0, 0], groupId: 'Buda — podłoga i szkielet' },
+        { id: 'dh_post_fr', name: 'Kantówka narożna przód-prawo', kind: 'profile', materialId: 'pine_timber', width: 50, height: 780, depth: 50, position: [480, 462, 360], rotation: [0, 0, 0], groupId: 'Buda — podłoga i szkielet' },
+        { id: 'dh_post_bl', name: 'Kantówka narożna tył-lewo', kind: 'profile', materialId: 'pine_timber', width: 50, height: 640, depth: 50, position: [-480, 392, -360], rotation: [0, 0, 0], groupId: 'Buda — podłoga i szkielet' },
+        { id: 'dh_post_br', name: 'Kantówka narożna tył-prawo', kind: 'profile', materialId: 'pine_timber', width: 50, height: 640, depth: 50, position: [480, 392, -360], rotation: [0, 0, 0], groupId: 'Buda — podłoga i szkielet' },
+        // Izolacja cieplna ze styropianu EPS 50 mm
+        { id: 'dh_eps_back', name: 'Ocieplenie tylne EPS 50 mm', kind: 'panel', materialId: 'styrofoam_eps', width: 910, height: 640, depth: 50, position: [0, 392, -360], rotation: [0, 0, 0], groupId: 'Buda — ściany i izolacja' },
+        { id: 'dh_eps_left', name: 'Ocieplenie lewe EPS 50 mm', kind: 'panel', materialId: 'styrofoam_eps', width: 670, height: 640, depth: 50, position: [-480, 392, 0], rotation: [0, 90, 0], groupId: 'Buda — ściany i izolacja' },
+        { id: 'dh_eps_right', name: 'Ocieplenie prawe EPS 50 mm', kind: 'panel', materialId: 'styrofoam_eps', width: 670, height: 640, depth: 50, position: [480, 392, 0], rotation: [0, 90, 0], groupId: 'Buda — ściany i izolacja' },
+        { id: 'dh_eps_front', name: 'Ocieplenie przedsionka EPS 50 mm', kind: 'panel', materialId: 'styrofoam_eps', width: 470, height: 740, depth: 50, position: [-220, 442, 360], rotation: [0, 0, 0], groupId: 'Buda — ściany i izolacja' },
+        // Elewacja z deski świerkowej / boazerii 20 mm
+        { id: 'dh_wall_back', name: 'Ściana tylna (Deska elewacyjna)', kind: 'panel', materialId: 'spruce_plank', width: 1050, height: 640, depth: 20, position: [0, 392, -395], rotation: [0, 0, 0], groupId: 'Buda — ściany i izolacja' },
+        { id: 'dh_wall_left', name: 'Ściana lewa ze skosem (Deska)', kind: 'sloped', materialId: 'spruce_plank', width: 770, height: 780, depth: 20, position: [-515, 462, 0], rotation: [0, 90, 0], slopeTopRight: 140, groupId: 'Buda — ściany i izolacja' },
+        { id: 'dh_wall_right', name: 'Ściana prawa ze skosem (Deska)', kind: 'sloped', materialId: 'spruce_plank', width: 770, height: 780, depth: 20, position: [515, 462, 0], rotation: [0, 90, 0], slopeTopRight: 140, groupId: 'Buda — ściany i izolacja' },
+        { id: 'dh_wall_fl', name: 'Ściana frontowa lewa (osłona wiatru)', kind: 'panel', materialId: 'spruce_plank', width: 540, height: 780, depth: 20, position: [-255, 462, 395], rotation: [0, 0, 0], groupId: 'Buda — ściany i izolacja' },
+        { id: 'dh_wall_fr', name: 'Ściana frontowa prawa', kind: 'panel', materialId: 'spruce_plank', width: 150, height: 780, depth: 20, position: [450, 462, 395], rotation: [0, 0, 0], groupId: 'Buda — ściany i izolacja' },
+        { id: 'dh_wall_head', name: 'Nadproże nad wejściem (Deska)', kind: 'panel', materialId: 'spruce_plank', width: 360, height: 280, depth: 20, position: [195, 712, 395], rotation: [0, 0, 0], groupId: 'Buda — ściany i izolacja' },
+        // Dach jednospadowy (OSB + gont bitumiczny) — osobna grupa, łatwa do ukrycia (oczko) przy edycji wnętrza
+        { id: 'dh_roof_osb', name: 'Poszycie dachu OSB-3 (18 mm)', kind: 'panel', materialId: 'osb3', width: 1280, height: 18, depth: 1020, position: [0, 795, 0], rotation: [-11, 0, 0], groupId: 'Buda — dach' },
+        { id: 'dh_roof_shingle', name: 'Pokrycie dachu (Gont bitumiczny)', kind: 'panel', materialId: 'roof_shingle', width: 1300, height: 8, depth: 1040, position: [0, 809, 0], rotation: [-11, 0, 0], groupId: 'Buda — dach' },
+      ],
+      fasteners: [],
     },
   },
   {

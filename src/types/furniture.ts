@@ -10,7 +10,13 @@ export type BuiltInMaterialId =
   | 'concrete_top'
   | 'steel_black'
   | 'steel_galv'
-  | 'glass_clear';
+  | 'glass_clear'
+  | 'pine_timber'
+  | 'spruce_plank'
+  | 'larch_impregnated'
+  | 'styrofoam_eps'
+  | 'mineral_wool'
+  | 'roof_shingle';
 
 export type MaterialId = BuiltInMaterialId | (string & {});
 
@@ -23,15 +29,36 @@ export type PartKind =
   | 'custom'
   | 'appliance';
 
+export type ApplianceCategory = 'kitchen' | 'bathroom' | 'wardrobe' | 'living';
+
 export type ApplianceModel =
   | 'wardrobe_rod'
   | 'induction_hob'
   | 'kitchen_sink'
   | 'builtin_oven'
   | 'wire_cargo'
+  | 'fridge_freezer'
+  | 'dishwasher_60'
+  | 'range_hood'
+  | 'microwave_builtin'
   | 'wc_geberit'
   | 'wc_low_cistern'
-  | 'wc_high_cistern';
+  | 'wc_high_cistern'
+  | 'bathroom_sink'
+  | 'shower_cabin'
+  | 'bathtub_170'
+  | 'washing_machine'
+  | 'tumble_dryer'
+  | 'towel_radiator'
+  | 'led_mirror'
+  | 'bed_double'
+  | 'bed_single'
+  | 'dressing_bench'
+  | 'tv_65'
+  | 'sofa_3seat'
+  | 'office_chair'
+  | 'desk_monitor_set'
+  | 'coffee_table';
 
 export type AlignMode =
   | 'left'
@@ -63,11 +90,19 @@ export type CameraPreset = 'iso' | 'front' | 'back' | 'left' | 'right' | 'side' 
 
 export type StudioLighting = 'daylight' | 'studio' | 'warm' | 'photoreal';
 
+export type MaterialCategory =
+  | 'Płyty konstrukcyjne'
+  | 'Płyty meblowe'
+  | 'Blaty'
+  | 'Budowa i ogród'
+  | 'Izolacja i dach'
+  | 'Stal i szkło';
+
 export interface MaterialMeta {
   id: MaterialId;
   name: string;
   shortName: string;
-  category: 'Płyty konstrukcyjne' | 'Płyty meblowe' | 'Blaty' | 'Stal i szkło';
+  category: MaterialCategory;
   defaultThicknessMm: number;
   sheetWidthMm: number;
   sheetHeightMm: number;
@@ -86,6 +121,8 @@ export interface BuiltInMaterialOverride {
   sheetWidthMm?: number;
   sheetHeightMm?: number;
   defaultThicknessMm?: number;
+  barLengthMm?: number;
+  pricePerLinearMPln?: number;
 }
 
 export interface MaterialsCatalogConfig {
@@ -247,6 +284,10 @@ export interface FurniturePart {
   applianceModel?: ApplianceModel;
   /** Optional unit price in PLN for appliance/interior accessory BOM */
   appliancePricePln?: number;
+  /** Outliner visibility toggle (when true, hidden from 3D viewport & raycasting) */
+  hidden?: boolean;
+  /** Outliner lock toggle (when true, cannot be moved, rotated, or resized) */
+  locked?: boolean;
 }
 
 export interface Fastener {
@@ -695,11 +736,93 @@ export const MATERIAL_CATALOG: MaterialMeta[] = [
     pricePerM2Pln: 195,
     swatchFallbackHex: '#BFD6D8',
   },
+  // ==================== BUDOWA I OGRÓD (KANTÓWKI, DESKI, IZOLACJA, DACH) ====================
+  {
+    id: 'pine_timber',
+    name: 'Kantówka sosnowa C24',
+    shortName: 'Kantówka C24',
+    category: 'Budowa i ogród',
+    defaultThicknessMm: 50,
+    sheetWidthMm: 3000,
+    sheetHeightMm: 100,
+    pricePerM2Pln: 95,
+    swatchFallbackHex: '#DAB57E',
+    grainDirectional: true,
+    barLengthMm: 3000,
+    pricePerLinearMPln: 14,
+  },
+  {
+    id: 'spruce_plank',
+    name: 'Deska elewacyjna / Boazeria',
+    shortName: 'Deska / Boaz.',
+    category: 'Budowa i ogród',
+    defaultThicknessMm: 19,
+    sheetWidthMm: 2400,
+    sheetHeightMm: 145,
+    pricePerM2Pln: 68,
+    swatchFallbackHex: '#CCA068',
+    grainDirectional: true,
+    barLengthMm: 2400,
+    pricePerLinearMPln: 11,
+  },
+  {
+    id: 'larch_impregnated',
+    name: 'Drewno impregnowane (modrzew)',
+    shortName: 'Impregnowane',
+    category: 'Budowa i ogród',
+    defaultThicknessMm: 28,
+    sheetWidthMm: 3000,
+    sheetHeightMm: 140,
+    pricePerM2Pln: 115,
+    swatchFallbackHex: '#9C6D3E',
+    grainDirectional: true,
+    barLengthMm: 3000,
+    pricePerLinearMPln: 19,
+  },
+  {
+    id: 'styrofoam_eps',
+    name: 'Styropian EPS 50 mm',
+    shortName: 'Styropian EPS',
+    category: 'Izolacja i dach',
+    defaultThicknessMm: 50,
+    sheetWidthMm: 1000,
+    sheetHeightMm: 500,
+    pricePerM2Pln: 26,
+    swatchFallbackHex: '#F2F4F7',
+  },
+  {
+    id: 'mineral_wool',
+    name: 'Wełna mineralna 50 mm',
+    shortName: 'Wełna min.',
+    category: 'Izolacja i dach',
+    defaultThicknessMm: 50,
+    sheetWidthMm: 1200,
+    sheetHeightMm: 600,
+    pricePerM2Pln: 28,
+    swatchFallbackHex: '#D8B85C',
+  },
+  {
+    id: 'roof_shingle',
+    name: 'Papa / Gont bitumiczny',
+    shortName: 'Papa / Gont',
+    category: 'Izolacja i dach',
+    defaultThicknessMm: 4,
+    sheetWidthMm: 1000,
+    sheetHeightMm: 1000,
+    pricePerM2Pln: 39,
+    swatchFallbackHex: '#2E3136',
+  },
 ];
 
 export const DEFAULT_MATERIAL_CATALOG: MaterialMeta[] = MATERIAL_CATALOG.map((m) => ({
   ...m,
-  grainDirectional: m.id === 'oak_craft' || m.id === 'walnut',
+  grainDirectional:
+    m.grainDirectional ??
+    (m.id === 'oak_craft' ||
+      m.id === 'walnut' ||
+      m.id === 'pine_timber' ||
+      m.id === 'spruce_plank' ||
+      m.id === 'larch_impregnated'),
 }));
 
 export const MATERIAL_MAP: Record<string, MaterialMeta> = MATERIAL_CATALOG.reduce(
@@ -726,6 +849,8 @@ export function syncCatalogMaterials(config: MaterialsCatalogConfig): void {
           sheetWidthMm: ov.sheetWidthMm ?? base.sheetWidthMm,
           sheetHeightMm: ov.sheetHeightMm ?? base.sheetHeightMm,
           defaultThicknessMm: ov.defaultThicknessMm ?? base.defaultThicknessMm,
+          barLengthMm: ov.barLengthMm ?? base.barLengthMm,
+          pricePerLinearMPln: ov.pricePerLinearMPln ?? base.pricePerLinearMPln,
         }
       : { ...base };
   });
@@ -747,97 +872,378 @@ export function syncCatalogMaterials(config: MaterialsCatalogConfig): void {
 
 export interface ApplianceMeta {
   id: ApplianceModel;
+  category: ApplianceCategory;
   name: string;
   desc: string;
+  mountHint: string;
   width: number;
   height: number;
   depth: number;
   defaultY: number;
   defaultPricePln: number;
   slidesOut?: boolean;
+  tags?: string[];
 }
 
 export const APPLIANCE_CATALOG: ApplianceMeta[] = [
+  // ==================== KUCHNIA (AGD & WYPOSAŻENIE) ====================
   {
-    id: 'wardrobe_rod',
-    name: 'Drążek na wieszaki (chrom)',
-    desc: '764 × 35 × 35 mm · Z rozetami i 3 wieszakami',
-    width: 764,
-    height: 35,
-    depth: 35,
-    defaultY: 1650,
-    defaultPricePln: 65,
+    id: 'fridge_freezer',
+    category: 'kitchen',
+    name: 'Lodówka wolnostojąca No-Frost',
+    desc: 'Stal szczotkowana inox, 2 skrzydła, wyświetlacz LED',
+    mountHint: 'Wolnostojąca',
+    width: 600,
+    height: 1860,
+    depth: 650,
+    defaultY: 930,
+    defaultPricePln: 2690,
+    tags: ['chłodziarka', 'zamrażarka', 'inox', 'agd'],
+  },
+  {
+    id: 'induction_hob',
+    category: 'kitchen',
+    name: 'Płyta indukcyjna 60 cm',
+    desc: 'Szkło ceramiczne, 4 pola grzewcze, sterowanie dotykowe',
+    mountHint: 'W blat',
+    width: 590,
+    height: 45,
+    depth: 520,
+    defaultY: 855,
+    defaultPricePln: 1450,
+    tags: ['indukcja', 'kuchenka', 'palniki', 'blat'],
+  },
+  {
+    id: 'kitchen_sink',
+    category: 'kitchen',
+    name: 'Zlewozmywak z baterią',
+    desc: 'Komora stalowa 1-komorowa + wysoka bateria łukowa',
+    mountHint: 'W blat',
+    width: 580,
+    height: 210,
+    depth: 480,
+    defaultY: 790,
+    defaultPricePln: 890,
+    tags: ['zlew', 'kran', 'bateria', 'woda'],
+  },
+  {
+    id: 'builtin_oven',
+    category: 'kitchen',
+    name: 'Piekarnik do zabudowy 60',
+    desc: 'Front czarne szkło + stal, pokrętła i zegar LED',
+    mountHint: 'Zabudowa 60',
+    width: 595,
+    height: 595,
+    depth: 550,
+    defaultY: 500,
+    defaultPricePln: 1850,
+    tags: ['piec', 'słupek', 'agd'],
+  },
+  {
+    id: 'dishwasher_60',
+    category: 'kitchen',
+    name: 'Zmywarka 60 cm',
+    desc: 'Panel sterowania, wyświetlacz czasu i cofnięty cokół',
+    mountHint: 'Pod blat / wolnostojąca',
+    width: 598,
+    height: 845,
+    depth: 600,
+    defaultY: 423,
+    defaultPricePln: 1990,
+    tags: ['zmywanie', 'agd', '60'],
+  },
+  {
+    id: 'range_hood',
+    category: 'kitchen',
+    name: 'Okap kominowy 60 cm',
+    desc: 'Komin ze stali inox, filtry tłuszczu i 2 punkty LED',
+    mountHint: 'Na ścianę',
+    width: 600,
+    height: 760,
+    depth: 480,
+    defaultY: 1880,
+    defaultPricePln: 980,
+    tags: ['pochłaniacz', 'wyciąg', 'wentylacja'],
+  },
+  {
+    id: 'microwave_builtin',
+    category: 'kitchen',
+    name: 'Mikrofalówka do zabudowy',
+    desc: 'Czarne szkło z ramką i panelem dotykowym',
+    mountHint: 'Zabudowa 60',
+    width: 595,
+    height: 385,
+    depth: 390,
+    defaultY: 1380,
+    defaultPricePln: 1190,
+    tags: ['mikrofala', 'słupek', 'agd'],
   },
   {
     id: 'wire_cargo',
-    name: 'Kosz cargo / wysuwany',
-    desc: '360 × 520 × 460 mm · 2 poziomy, wysuwa się z szufladami',
+    category: 'kitchen',
+    name: 'Kosz cargo wysuwany',
+    desc: '2 poziomy chromowane, wysuwa się razem z suwakiem Otwórz',
+    mountHint: 'Wnętrze szafki',
     width: 360,
     height: 520,
     depth: 460,
     defaultY: 420,
     defaultPricePln: 340,
     slidesOut: true,
+    tags: ['koszyk', 'szafka', 'wysuwany'],
   },
-  {
-    id: 'induction_hob',
-    name: 'Płyta indukcyjna 60 cm',
-    desc: '590 × 45 × 520 mm · Szkło ceramiczne, 4 pola grzewcze',
-    width: 590,
-    height: 45,
-    depth: 520,
-    defaultY: 855,
-    defaultPricePln: 1450,
-  },
-  {
-    id: 'kitchen_sink',
-    name: 'Zlewozmywak z baterią',
-    desc: '580 × 210 × 480 mm · Komora stalowa + bateria łukowa',
-    width: 580,
-    height: 210,
-    depth: 480,
-    defaultY: 790,
-    defaultPricePln: 890,
-  },
-  {
-    id: 'builtin_oven',
-    name: 'Piekarnik do zabudowy 60',
-    desc: '595 × 595 × 550 mm · Front czarny + stal, wyświetlacz',
-    width: 595,
-    height: 595,
-    depth: 550,
-    defaultY: 500,
-    defaultPricePln: 1850,
-  },
+
+  // ==================== ŁAZIENKA (SANITARIATY & PRALNIA) ====================
   {
     id: 'wc_geberit',
+    category: 'bathroom',
     name: 'WC podtynkowe (Geberit)',
-    desc: '500 × 1200 × 720 mm · Stelaż z zabudową, przycisk i miska wisząca',
+    desc: 'Zabudowa stelaża, przycisk dwudzielny i miska wisząca',
+    mountHint: 'Przy ścianie',
     width: 500,
     height: 1200,
     depth: 720,
     defaultY: 600,
     defaultPricePln: 1950,
+    tags: ['toaleta', 'kibel', 'stelaż', 'miska', 'sanitariat'],
   },
   {
     id: 'wc_low_cistern',
+    category: 'bathroom',
     name: 'Muszla WC dolnopłukowa (kompakt)',
-    desc: '380 × 790 × 650 mm · Klasyczny kompakt WC stojący ze spłuczką',
+    desc: 'Klasyczny kompakt stojący ze spłuczką ceramiczną',
+    mountHint: 'Stojąca',
     width: 380,
     height: 790,
     depth: 650,
     defaultY: 395,
     defaultPricePln: 790,
+    tags: ['toaleta', 'kompakt', 'dolnopłuk', 'muszla'],
   },
   {
     id: 'wc_high_cistern',
+    category: 'bathroom',
     name: 'Muszla WC górnopłukowa',
-    desc: '380 × 2050 × 580 mm · Muszla stojąca + górna spłuczka z rurą',
+    desc: 'Muszla stojąca + wysoka spłuczka z chromowaną rurą',
+    mountHint: 'Stojąca + ściana',
     width: 380,
     height: 2050,
     depth: 580,
     defaultY: 1025,
     defaultPricePln: 980,
+    tags: ['toaleta', 'górnopłuk', 'retro', 'spłuczka'],
+  },
+  {
+    id: 'bathroom_sink',
+    category: 'bathroom',
+    name: 'Umywalka nablatowa z baterią',
+    desc: 'Ceramiczna misa z korkiem klik-klak i baterią sztorcową',
+    mountHint: 'Na blat / szafkę',
+    width: 520,
+    height: 260,
+    depth: 410,
+    defaultY: 960,
+    defaultPricePln: 680,
+    tags: ['umywalka', 'zlew', 'bateria', 'ceramika'],
+  },
+  {
+    id: 'shower_cabin',
+    category: 'bathroom',
+    name: 'Kabina prysznicowa Walk-In 90×90',
+    desc: 'Niski brodzik z odpływem, szkło hartowane i deszczownica',
+    mountHint: 'Narożna',
+    width: 900,
+    height: 2050,
+    depth: 900,
+    defaultY: 1025,
+    defaultPricePln: 2250,
+    tags: ['prysznic', 'brodzik', 'natrysk', 'deszczownica'],
+  },
+  {
+    id: 'bathtub_170',
+    category: 'bathroom',
+    name: 'Wanna prostokątna 170×75',
+    desc: 'Akrylowa wanna z wyprofilowanym wnętrzem i baterią',
+    mountHint: 'Stojąca / przy ścianie',
+    width: 1700,
+    height: 580,
+    depth: 750,
+    defaultY: 290,
+    defaultPricePln: 1690,
+    tags: ['wanna', 'kąpiel', 'akryl'],
+  },
+  {
+    id: 'washing_machine',
+    category: 'bathroom',
+    name: 'Pralka 60 cm (ładowana od frontu)',
+    desc: 'Przeszklony bulaj z bębnem inox, szuflada i pokrętło',
+    mountHint: 'Wolnostojąca',
+    width: 600,
+    height: 850,
+    depth: 560,
+    defaultY: 425,
+    defaultPricePln: 1890,
+    tags: ['pranie', 'pralnia', 'agd'],
+  },
+  {
+    id: 'tumble_dryer',
+    category: 'bathroom',
+    name: 'Suszarka bębnowa 60 cm',
+    desc: 'Dopasowana wymiarem do ustawienia w słupku na pralce',
+    mountHint: 'Wolnostojąca / słupek',
+    width: 600,
+    height: 850,
+    depth: 600,
+    defaultY: 425,
+    defaultPricePln: 2290,
+    tags: ['suszenie', 'pralnia', 'słupek', 'agd'],
+  },
+  {
+    id: 'towel_radiator',
+    category: 'bathroom',
+    name: 'Grzejnik łazienkowy drabinkowy',
+    desc: 'Antracytowa drabinka 50×120 cm z zaworami dolnymi',
+    mountHint: 'Na ścianę',
+    width: 500,
+    height: 1200,
+    depth: 95,
+    defaultY: 1350,
+    defaultPricePln: 590,
+    tags: ['kaloryfer', 'grzejnik', 'drabinka', 'ręczniki'],
+  },
+  {
+    id: 'led_mirror',
+    category: 'bathroom',
+    name: 'Lustro łazienkowe LED 80×70',
+    desc: 'Bezramowa tafla lustrzana z ciepłym podświetleniem tylnym',
+    mountHint: 'Na ścianę',
+    width: 800,
+    height: 700,
+    depth: 35,
+    defaultY: 1520,
+    defaultPricePln: 490,
+    tags: ['lustro', 'światło', 'led', 'nad umywalkę'],
+  },
+
+  // ==================== GARDEROBA I SYPIALNIA ====================
+  {
+    id: 'wardrobe_rod',
+    category: 'wardrobe',
+    name: 'Drążek na wieszaki (chrom)',
+    desc: 'Owalny drążek z rozetami bocznymi i 3 wieszakami',
+    mountHint: 'Wnętrze szafy',
+    width: 764,
+    height: 35,
+    depth: 35,
+    defaultY: 1650,
+    defaultPricePln: 65,
+    tags: ['szafa', 'wieszak', 'ubrania'],
+  },
+  {
+    id: 'bed_double',
+    category: 'wardrobe',
+    name: 'Łóżko dwuosobowe 160×200',
+    desc: 'Tapicerowany zagłówek, materac, 2 poduszki i narzuta',
+    mountHint: 'Stojące',
+    width: 1680,
+    height: 950,
+    depth: 2120,
+    defaultY: 475,
+    defaultPricePln: 2850,
+    tags: ['sypialnia', 'materac', 'małżeńskie'],
+  },
+  {
+    id: 'bed_single',
+    category: 'wardrobe',
+    name: 'Łóżko jednoosobowe 90×200',
+    desc: 'Kompaktowe łóżko z zagłówkiem, materacem i poduszką',
+    mountHint: 'Stojące',
+    width: 980,
+    height: 880,
+    depth: 2100,
+    defaultY: 440,
+    defaultPricePln: 1590,
+    tags: ['sypialnia', 'pokój dziecięcy', 'materac'],
+  },
+  {
+    id: 'dressing_bench',
+    category: 'wardrobe',
+    name: 'Ławka / Pufa do garderoby',
+    desc: 'Stalowa podstawa loft + tapicerowane siedzisko',
+    mountHint: 'Stojąca',
+    width: 900,
+    height: 450,
+    depth: 380,
+    defaultY: 225,
+    defaultPricePln: 480,
+    tags: ['przedpokój', 'siedzisko', 'pufa', 'garderoba'],
+  },
+
+  // ==================== SALON I BIURO ====================
+  {
+    id: 'tv_65',
+    category: 'living',
+    name: 'Telewizor 65" OLED / QLED',
+    desc: 'Ultracienka ramka, szklana matryca i metalowa podstawa',
+    mountHint: 'Na szafkę RTV / ścianę',
+    width: 1450,
+    height: 860,
+    depth: 240,
+    defaultY: 950,
+    defaultPricePln: 4990,
+    tags: ['tv', 'ekran', 'rtv', 'kino'],
+  },
+  {
+    id: 'sofa_3seat',
+    category: 'living',
+    name: 'Sofa 3-osobowa (210 cm)',
+    desc: 'Nowoczesna kanapa z 3 poduchami na dębowych nóżkach',
+    mountHint: 'Stojąca',
+    width: 2100,
+    height: 820,
+    depth: 920,
+    defaultY: 410,
+    defaultPricePln: 3690,
+    tags: ['kanapa', 'wypoczynek', 'salon'],
+  },
+  {
+    id: 'office_chair',
+    category: 'living',
+    name: 'Fotel biurowy ergonomiczny',
+    desc: 'Podstawa na kółkach, wyprofilowane oparcie i podłokietniki',
+    mountHint: 'Stojący',
+    width: 640,
+    height: 1120,
+    depth: 640,
+    defaultY: 560,
+    defaultPricePln: 990,
+    tags: ['krzesło', 'biurko', 'praca', 'gabinet'],
+  },
+  {
+    id: 'desk_monitor_set',
+    category: 'living',
+    name: 'Monitor 27" + klawiatura i mysz',
+    desc: 'Cienkoramkowy ekran na stopce + zestaw bezprzewodowy',
+    mountHint: 'Na biurko',
+    width: 620,
+    height: 450,
+    depth: 260,
+    defaultY: 975,
+    defaultPricePln: 1350,
+    tags: ['komputer', 'biurko', 'ekran', 'praca'],
+  },
+  {
+    id: 'coffee_table',
+    category: 'living',
+    name: 'Stolik kawowy okrągły Ø80',
+    desc: 'Okrągły blat dębowy + czarna stalowa podstawa',
+    mountHint: 'Stojący',
+    width: 800,
+    height: 420,
+    depth: 800,
+    defaultY: 210,
+    defaultPricePln: 640,
+    tags: ['ława', 'stolik', 'salon'],
   },
 ];
 

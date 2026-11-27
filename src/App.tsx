@@ -79,7 +79,12 @@ import {
   type ProjectStoreState,
 } from './engine/storage';
 import { Viewport3D, Viewport3DHandle } from './components/Viewport3D';
-import { BottomDock } from './components/BottomDock';
+import {
+  BottomDock,
+  type SelectionScope,
+  type UiMode,
+} from './components/BottomDock';
+import { PrecisionNudgePad } from './components/PrecisionNudgePad';
 import { InspectorDrawer } from './components/InspectorDrawer';
 import { AddPartDrawer } from './components/AddPartDrawer';
 import { CabinetBuilderModal } from './components/CabinetBuilderModal';
@@ -101,6 +106,7 @@ import { usePWAUpdate } from './hooks/usePWAUpdate';
 const SNAP_STEPS = [10, 5, 25, 0];
 const LIGHTING_ORDER: StudioLighting[] = ['daylight', 'studio', 'warm', 'photoreal'];
 const SKIP_START_MODAL_KEY = 'stolarz3d_skip_start_modal';
+const UI_MODE_STORAGE_KEY = 'stolarz3d_ui_mode';
 
 function createDefaultProject(): FurnitureProject {
   return {
@@ -205,7 +211,27 @@ export default function App() {
   const [contextMenu, setContextMenu] = useState<ContextMenuTarget | null>(null);
   const [shortcutsOpen, setShortcutsOpen] = useState<boolean>(false);
   const [multiSelectMode, setMultiSelectMode] = useState<boolean>(false);
+  const [uiMode, setUiMode] = useState<UiMode>(() => {
+    try {
+      const saved = window.localStorage.getItem(UI_MODE_STORAGE_KEY);
+      return saved === 'expert' ? 'expert' : 'simple';
+    } catch {
+      return 'simple';
+    }
+  });
+  const [selectionScope, setSelectionScope] = useState<SelectionScope>('group');
+  const [activeGroupEditId, setActiveGroupEditId] = useState<string | null>(null);
+  const [nudgePadOpen, setNudgePadOpen] = useState<boolean>(false);
   const [toastMsg, setToastMsg] = useState<string | null>(null);
+
+  const handleChangeUiMode = useCallback((next: UiMode) => {
+    setUiMode(next);
+    try {
+      window.localStorage.setItem(UI_MODE_STORAGE_KEY, next);
+    } catch {
+      // ignore storage errors
+    }
+  }, []);
 
   const toastTimerRef = useRef<number | null>(null);
   const showToast = useCallback((msg: string) => {
@@ -438,9 +464,12 @@ export default function App() {
       if (!id) {
         setSelectedPartId(null);
         setSelectedPartIds([]);
+        setActiveGroupEditId(null);
         setInspectorOpen(false);
+        setNudgePadOpen(false);
         return;
       }
+      const clicked = project.parts.find((p) => p.id === id);
       if (additive || multiSelectMode) {
         setSelectedPartIds((prev) => {
           const exists = prev.includes(id);
@@ -448,12 +477,88 @@ export default function App() {
           setSelectedPartId(next.length > 0 ? next[next.length - 1] : null);
           return next;
         });
-      } else {
+        return;
+      }
+
+      // SketchUp / PRO100 group selection: 1 click selects entire group unless drilled into it
+      if (
+        selectionScope === 'group' &&
+        clicked?.groupId &&
+        clicked.groupId !== activeGroupEditId
+      ) {
+        const groupMembers = project.parts
+          .filter((p) => p.groupId === clicked.groupId && !p.hidden)
+          .map((p) => p.id);
+        setActiveGroupEditId(null);
+        setSelectedPartId(id);
+        setSelectedPartIds(groupMembers.length > 0 ? groupMembers : [id]);
+        return;
+      }
+
+      if (activeGroupEditId && clicked?.groupId !== activeGroupEditId) {
+        setActiveGroupEditId(null);
+      }
+      setSelectedPartId(id);
+      setSelectedPartIds([id]);
+    },
+    [multiSelectMode, project.parts, selectionScope, activeGroupEditId]
+  );
+
+  const handleDoubleClickPart = useCallback(
+    (id: string) => {
+      const clicked = project.parts.find((p) => p.id === id);
+      if (!clicked) return;
+      if (clicked.groupId && selectionScope === 'group' && activeGroupEditId !== clicked.groupId) {
+        setActiveGroupEditId(clicked.groupId);
         setSelectedPartId(id);
         setSelectedPartIds([id]);
+        showToast('Edycja pojedynczej płyty w grupie (kliknij tło, aby wyjść)');
       }
     },
-    [multiSelectMode]
+    [project.parts, selectionScope, activeGroupEditId, showToast]
+  );
+
+  const handleSelectGroup = useCallback(
+    (groupId: string) => {
+      const members = project.parts.filter((p) => p.groupId === groupId);
+      if (members.length === 0) return;
+      setSelectedFastenerId(null);
+      setActiveGroupEditId(null);
+      setSelectedPartId(members[0].id);
+      setSelectedPartIds(members.map((p) => p.id));
+    },
+    [project.parts]
+  );
+
+  const handleTogglePartsHidden = useCallback(
+    (ids: string[], hidden: boolean) => {
+      if (ids.length === 0) return;
+      const idSet = new Set(ids);
+      commitProject((prev) => ({
+        ...prev,
+        parts: prev.parts.map((p) => (idSet.has(p.id) ? { ...p, hidden } : p)),
+      }));
+      if (hidden && selectedPartId && idSet.has(selectedPartId)) {
+        setSelectedPartId(null);
+        setSelectedPartIds([]);
+        setNudgePadOpen(false);
+      }
+      showToast(hidden ? `Ukryto (${ids.length})` : `Pokazano (${ids.length})`);
+    },
+    [commitProject, selectedPartId, showToast]
+  );
+
+  const handleTogglePartsLocked = useCallback(
+    (ids: string[], locked: boolean) => {
+      if (ids.length === 0) return;
+      const idSet = new Set(ids);
+      commitProject((prev) => ({
+        ...prev,
+        parts: prev.parts.map((p) => (idSet.has(p.id) ? { ...p, locked } : p)),
+      }));
+      showToast(locked ? `Zablokowano ruch (${ids.length})` : `Odblokowano (${ids.length})`);
+    },
+    [commitProject, showToast]
   );
 
   const handleSelectFastener = useCallback((id: string | null) => {
@@ -462,10 +567,11 @@ export default function App() {
       setSelectedPartId(null);
       setSelectedPartIds([]);
       setInspectorOpen(false);
+      setNudgePadOpen(false);
     }
   }, []);
 
-  // Group + Multiselect aware 3D transform with LIVE relational fastener synchronization!
+  // Group + Multiselect aware 3D transform with LIVE relational fastener synchronization & lock respect
   const handleTransformPart = useCallback(
     (
       id: string,
@@ -474,11 +580,10 @@ export default function App() {
     ) => {
       commitProject((prev) => {
         const target = prev.parts.find((p) => p.id === id);
-        if (!target) return prev;
+        if (!target || target.locked) return prev;
         const dx = position[0] - target.position[0];
         const dy = position[1] - target.position[1];
         const dz = position[2] - target.position[2];
-        const groupId = target.groupId;
         const multiSet = new Set(selectedPartIds.includes(id) ? selectedPartIds : [id]);
         const changedIds = new Set<string>([id]);
 
@@ -486,8 +591,7 @@ export default function App() {
           if (p.id === id) {
             return { ...p, position, rotation };
           }
-          const shouldCoMove =
-            (groupId && p.groupId === groupId) || multiSet.has(p.id);
+          const shouldCoMove = multiSet.has(p.id) && !p.locked;
           if (shouldCoMove && (dx !== 0 || dy !== 0 || dz !== 0)) {
             changedIds.add(p.id);
             return {
@@ -905,13 +1009,10 @@ export default function App() {
     [project.parts, commitProject, showToast]
   );
 
-  const handleDeletePart = useCallback(
-    (id: string) => {
-      const toRemove = new Set(
-        selectedPartIds.length > 1 && selectedPartIds.includes(id)
-          ? selectedPartIds
-          : [id]
-      );
+  const handleDeleteParts = useCallback(
+    (ids: string[]) => {
+      if (ids.length === 0) return;
+      const toRemove = new Set(ids);
       commitProject((prev) => ({
         ...prev,
         parts: prev.parts.filter((p) => !toRemove.has(p.id)),
@@ -923,12 +1024,24 @@ export default function App() {
         setSelectedPartId(null);
         setSelectedPartIds([]);
         setInspectorOpen(false);
+        setNudgePadOpen(false);
       }
       showToast(
         toRemove.size > 1 ? `Usunięto ${toRemove.size} elementów` : 'Usunięto element'
       );
     },
-    [commitProject, selectedPartId, selectedPartIds, showToast]
+    [commitProject, selectedPartId, showToast]
+  );
+
+  const handleDeletePart = useCallback(
+    (id: string) => {
+      const ids =
+        selectedPartIds.length > 1 && selectedPartIds.includes(id)
+          ? selectedPartIds
+          : [id];
+      handleDeleteParts(ids);
+    },
+    [selectedPartIds, handleDeleteParts]
   );
 
   const handlePlaceFastener = useCallback(
@@ -1030,33 +1143,96 @@ export default function App() {
     [selectedPartId, project.parts, handleTransformPart]
   );
 
+  // Group-aware 90-degree Y rotation around shared XZ center
   const handleRotate90Y = useCallback(
     (partId: string) => {
-      const target = project.parts.find((p) => p.id === partId);
-      if (!target) return;
-      const nextY = (target.rotation[1] + 90) % 360;
-      handleUpdatePart(partId, {
-        rotation: [target.rotation[0], nextY, target.rotation[2]],
+      const ids =
+        selectedPartIds.length > 1 && selectedPartIds.includes(partId)
+          ? selectedPartIds
+          : [partId];
+      const targets = project.parts.filter((p) => ids.includes(p.id) && !p.locked);
+      if (targets.length === 0) {
+        showToast('Element jest zablokowany — odblokuj, aby obrócić');
+        return;
+      }
+      if (targets.length === 1) {
+        const target = targets[0];
+        const nextY = (target.rotation[1] + 90) % 360;
+        handleUpdatePart(target.id, {
+          rotation: [target.rotation[0], nextY, target.rotation[2]],
+        });
+        showToast('Obrócono element o 90°');
+        return;
+      }
+      // Compute shared XZ center across all selected group members
+      let minX = Infinity;
+      let maxX = -Infinity;
+      let minZ = Infinity;
+      let maxZ = -Infinity;
+      for (const p of targets) {
+        const b = getPartWorldBox(p);
+        minX = Math.min(minX, b.minX);
+        maxX = Math.max(maxX, b.maxX);
+        minZ = Math.min(minZ, b.minZ);
+        maxZ = Math.max(maxZ, b.maxZ);
+      }
+      const cx = (minX + maxX) / 2;
+      const cz = (minZ + maxZ) / 2;
+      const idSet = new Set(targets.map((p) => p.id));
+
+      commitProject((prev) => {
+        const nextParts = prev.parts.map((p) => {
+          if (!idSet.has(p.id)) return p;
+          const relX = p.position[0] - cx;
+          const relZ = p.position[2] - cz;
+          // Three.js +90° around Y: x' = z, z' = -x
+          const nextX = Math.round((cx + relZ) * 10) / 10;
+          const nextZ = Math.round((cz - relX) * 10) / 10;
+          return {
+            ...p,
+            position: [nextX, p.position[1], nextZ] as [number, number, number],
+            rotation: [p.rotation[0], (p.rotation[1] + 90) % 360, p.rotation[2]] as [
+              number,
+              number,
+              number,
+            ],
+          };
+        });
+        const synced = syncFastenersWithParts(prev.parts, nextParts, prev.fasteners, idSet);
+        return { ...prev, parts: nextParts, fasteners: synced.fasteners };
       });
-      showToast('Obrócono płytę o 90°');
+      showToast(`Obrócono grupę (${targets.length} elem.) o 90°`);
     },
-    [project.parts, handleUpdatePart, showToast]
+    [project.parts, selectedPartIds, handleUpdatePart, commitProject, showToast]
   );
 
   const handleDropToFloor = useCallback(
     (partId: string) => {
       const target = project.parts.find((p) => p.id === partId);
-      if (!target) return;
-      const box = getPartWorldBox(target);
-      const nextY = Math.round((target.position[1] - box.minY) * 10) / 10;
+      if (!target || target.locked) return;
+      const ids =
+        selectedPartIds.length > 1 && selectedPartIds.includes(partId)
+          ? selectedPartIds
+          : [partId];
+      const targets = project.parts.filter((p) => ids.includes(p.id));
+      let minY = Infinity;
+      for (const p of targets) {
+        minY = Math.min(minY, getPartWorldBox(p).minY);
+      }
+      if (!Number.isFinite(minY)) return;
+      const nextY = Math.round((target.position[1] - minY) * 10) / 10;
       handleTransformPart(
         partId,
         [target.position[0], nextY, target.position[2]],
         target.rotation
       );
-      showToast('Postawiono płytę na podłodze (Y = 0)');
+      showToast(
+        targets.length > 1
+          ? 'Postawiono całą grupę na podłodze (Y = 0)'
+          : 'Postawiono element na podłodze (Y = 0)'
+      );
     },
-    [project.parts, handleTransformPart, showToast]
+    [project.parts, selectedPartIds, handleTransformPart, showToast]
   );
 
   const handleLoadTemplate = useCallback(
@@ -1579,7 +1755,7 @@ export default function App() {
               leftDrawerMode === 'parts' ? 'text-amber-400' : ''
             }`}
           >
-            Płyty ({project.parts.length})
+            Scena ({project.parts.length})
           </button>
           <button
             type="button"
@@ -1595,16 +1771,9 @@ export default function App() {
           >
             Rozkrój
           </button>
-          <button
-            type="button"
-            onClick={handleSnapshot}
-            className="hover:text-white transition-colors whitespace-nowrap shrink-0 cursor-pointer"
-          >
-            PNG
-          </button>
         </nav>
 
-        {/* Zone 3: Primary Actions */}
+        {/* Zone 3: Clean Primary Actions (spacious on mobile, complete on desktop) */}
         <div className="flex items-center gap-1 sm:gap-1.5 shrink-0">
           <PWAInstallButton
             needRefresh={pwa.needRefresh}
@@ -1632,7 +1801,7 @@ export default function App() {
               setEditingCabinetGroupId(null);
               setCabinetBuilderOpen(true);
             }}
-            className="flex min-h-[34px] items-center gap-1 rounded-lg border border-emerald-500/50 bg-emerald-500/12 px-2 sm:px-2.5 text-xs font-medium text-emerald-300 hover:bg-emerald-500/20 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+            className="hidden sm:flex min-h-[34px] items-center gap-1 rounded-lg border border-emerald-500/50 bg-emerald-500/12 px-2.5 text-xs font-medium text-emerald-300 hover:bg-emerald-500/20 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
             title="Kreator parametrycznej szafki, szuflad i frontów"
           >
             <LayoutPanelTop className="h-3.5 w-3.5 shrink-0" />
@@ -1644,11 +1813,11 @@ export default function App() {
               setSketchEditingPart(null);
               setSketchOpen(true);
             }}
-            className="hidden sm:flex min-h-[34px] items-center gap-1 rounded-lg border border-zinc-700 bg-zinc-900 px-2 sm:px-2.5 text-xs font-medium text-zinc-100 hover:border-amber-500/70 hover:text-amber-300 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+            className="hidden lg:flex min-h-[34px] items-center gap-1 rounded-lg border border-zinc-700 bg-zinc-900 px-2.5 text-xs font-medium text-zinc-100 hover:border-amber-500/70 hover:text-amber-300 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
             title="Narysuj własny kształt płyty 2D"
           >
             <PenTool className="h-3.5 w-3.5 text-amber-400 shrink-0" />
-            <span className="hidden lg:inline">Rysuj płytę</span>
+            <span>Szkic 2D</span>
           </button>
           <button
             type="button"
@@ -1658,20 +1827,11 @@ export default function App() {
             <Plus className="h-4 w-4 shrink-0" />
             <span>Dodaj</span>
           </button>
-          <button
-            type="button"
-            onClick={() => setShortcutsOpen(true)}
-            className="hidden md:flex min-h-[34px] min-w-[34px] items-center justify-center rounded-lg border border-zinc-800 bg-zinc-900 text-zinc-400 hover:border-zinc-700 hover:text-white transition-colors shrink-0 cursor-pointer"
-            title="Pomoc i skróty klawiszowe (?)"
-            aria-label="Pomoc i skróty klawiszowe"
-          >
-            <HelpCircle className="h-4 w-4" />
-          </button>
         </div>
       </header>
 
-      {/* Quiet Unboxed Dimension Readout + Actionable Carpentry Warnings */}
-      <div className="pointer-events-none fixed top-14 left-3.5 sm:left-5 z-20 flex flex-col gap-0.5 text-zinc-700">
+      {/* Quiet Unboxed Dimension Readout + Actionable Carpentry Warnings (offset right of Left CAD Rail on desktop) */}
+      <div className="pointer-events-none fixed top-14 left-3.5 md:left-16 z-20 flex flex-col gap-0.5 text-zinc-700">
         <button
           type="button"
           onClick={() => setLeftDrawerMode((m) => (m === 'projects' ? null : 'projects'))}
@@ -1688,10 +1848,10 @@ export default function App() {
                   Pokój {project.room.widthMm} × {project.room.depthMm} × {project.room.heightMm} mm
                 </span>
                 <span aria-hidden="true">·</span>
-                <span className="font-sans">brak mebli</span>
+                <span className="font-sans">brak elementów</span>
               </>
             ) : (
-              <span className="font-sans">Pusta scena · dodaj pokój lub mebel</span>
+              <span className="font-sans">Pusta scena · dodaj pokój, szafkę lub element</span>
             )}
           </div>
         ) : (
@@ -1701,22 +1861,12 @@ export default function App() {
             </span>
             <span aria-hidden="true">·</span>
             <span className="font-sans">{project.parts.length} elem.</span>
-            <span aria-hidden="true">·</span>
-            <span className="font-sans">{project.fasteners.length} wkręt.</span>
-          </div>
-        )}
-
-        {project.room?.enabled && (
-          <div className="pointer-events-auto mt-1 flex items-center gap-1.5">
-            <button
-              type="button"
-              onClick={() => setRoomModalOpen(true)}
-              className="flex items-center gap-1.5 rounded-lg border border-sky-600/40 bg-[#141518]/90 px-2.5 py-1 text-[11px] font-semibold text-sky-300 shadow-sm hover:bg-[#141518] hover:text-sky-200 transition-colors cursor-pointer"
-              title="Wróć do edytora rzutu 2D pomieszczenia, ścian, drzwi i sanitariatów"
-            >
-              <Home className="h-3.5 w-3.5 text-sky-400 shrink-0" />
-              <span>Edytuj rzut 2D pomieszczenia</span>
-            </button>
+            {project.fasteners.length > 0 && (
+              <>
+                <span aria-hidden="true">·</span>
+                <span className="font-sans">{project.fasteners.length} wkręt.</span>
+              </>
+            )}
           </div>
         )}
 
@@ -2012,7 +2162,7 @@ export default function App() {
             className="flex min-h-[34px] items-center gap-1.5 rounded-xl bg-amber-500 px-3 text-xs font-semibold text-zinc-950 hover:bg-amber-400 transition-colors whitespace-nowrap cursor-pointer"
           >
             <Plus className="h-3.5 w-3.5" />
-            <span>Dodaj płytę / WC</span>
+            <span>Płyty i urządzenia</span>
           </button>
           {!project.room?.enabled && (
             <button
@@ -2076,9 +2226,32 @@ export default function App() {
             showToast(`Wkręt zablokowany: ${reason} (wyłącz „Styki”, aby wymusić)`)
           }
           onContextMenu={setContextMenu}
+          onDoubleClickPart={handleDoubleClickPart}
           onSetClearanceDistance={handleSetClearanceDistance}
         />
       </main>
+
+      {/* Floating Thumb-Friendly Precision Nudge Pad (Mobile & Desktop) */}
+      <PrecisionNudgePad
+        open={nudgePadOpen && Boolean(selectedPart) && !anyModalOpen && !inspectorOpen}
+        label={selectedPart?.name ?? ''}
+        selectedCount={selectedPartIds.length}
+        locked={Boolean(selectedPart?.locked)}
+        onNudge={handleNudgeSelected}
+        onRotate90={() => {
+          if (selectedPartId) handleRotate90Y(selectedPartId);
+        }}
+        onDropToFloor={() => {
+          if (selectedPartId) handleDropToFloor(selectedPartId);
+        }}
+        onToggleLock={() => {
+          const ids = selectedPartIds.length > 0 ? selectedPartIds : selectedPartId ? [selectedPartId] : [];
+          if (ids.length > 0) {
+            handleTogglePartsLocked(ids, !Boolean(selectedPart?.locked));
+          }
+        }}
+        onClose={() => setNudgePadOpen(false)}
+      />
 
       {/* Right-Click Commercial CAD Context Menu */}
       <ContextMenu
@@ -2118,10 +2291,59 @@ export default function App() {
         onFocusAll={() => viewportRef.current?.focusAll()}
       />
 
-      {/* Unified Collapsible Bottom Control Dock */}
+      {/* Commercial CAD Left Tool Rail + Slim View Dock + 3-Tab Mobile Sheet */}
       <BottomDock
         collapsed={dockCollapsed}
         onToggleCollapse={() => setDockCollapsed((c) => !c)}
+        uiMode={uiMode}
+        onChangeUiMode={(mode) => {
+          handleChangeUiMode(mode);
+          showToast(
+            mode === 'expert'
+              ? 'Tryb Ekspert: odblokowano wkręty, miarkę 3D, RTG i obróbki CNC'
+              : 'Tryb Prosty: uproszczony interfejs projektowania'
+          );
+        }}
+        selectionScope={selectionScope}
+        onToggleSelectionScope={() => {
+          setSelectionScope((prev) => {
+            const next = prev === 'group' ? 'part' : 'group';
+            setActiveGroupEditId(null);
+            showToast(
+              next === 'group'
+                ? 'Klik zaznacza całą szafkę / grupę (2× klik = pojedyncza płyta)'
+                : 'Klik zaznacza zawsze pojedynczą płytę'
+            );
+            return next;
+          });
+        }}
+        activeGroupEditLabel={
+          activeGroupEditId
+            ? project.cabinetConfigs?.[activeGroupEditId]?.name ||
+              (activeGroupEditId.startsWith('cab_') ? 'Szafka' : activeGroupEditId)
+            : null
+        }
+        onExitGroupEdit={() => {
+          if (activeGroupEditId) {
+            handleSelectGroup(activeGroupEditId);
+          }
+          setActiveGroupEditId(null);
+        }}
+        selectedInGroup={Boolean(selectedPart?.groupId)}
+        onSelectWholeGroup={() => {
+          if (selectedPart?.groupId) {
+            handleSelectGroup(selectedPart.groupId);
+          }
+        }}
+        onEnterSinglePartEdit={() => {
+          if (selectedPart?.groupId) {
+            setActiveGroupEditId(selectedPart.groupId);
+            setSelectedPartIds([selectedPart.id]);
+            showToast(`Edycja pojedynczej płyty: ${selectedPart.name}`);
+          }
+        }}
+        nudgePadOpen={nudgePadOpen}
+        onToggleNudgePad={() => setNudgePadOpen((v) => !v)}
         tool={tool}
         onChangeTool={(nextTool) => {
           setTool(nextTool);
@@ -2199,8 +2421,14 @@ export default function App() {
         onDeleteSelectedFastener={() => {
           if (selectedFastenerId) handleDeleteFastener(selectedFastenerId);
         }}
+        onOpenProjects={() => setLeftDrawerMode('projects')}
         onOpenTemplates={() => setLeftDrawerMode('templates')}
         onOpenPartsList={() => setLeftDrawerMode('parts')}
+        onOpenMaterials={() => setMaterialsModalOpen(true)}
+        onOpenCabinetBuilder={() => {
+          setEditingCabinetGroupId(null);
+          setCabinetBuilderOpen(true);
+        }}
         onOpenCutList={() => setCutListOpen(true)}
         onOpenSketch2D={() => {
           setSketchEditingPart(null);
@@ -2212,13 +2440,15 @@ export default function App() {
         onOpenRoom={() => setRoomModalOpen(true)}
       />
 
-      {/* Contextual On-Demand Drawers & Modals */}
+      {/* Contextual On-Demand Scene Outliner, Templates & Projects Drawer */}
       <PartsTemplatesDrawer
         mode={leftDrawerMode}
         projects={projectStore.projects}
         activeProjectId={projectStore.activeProjectId}
         parts={project.parts}
+        cabinetConfigs={project.cabinetConfigs}
         selectedPartId={selectedPartId}
+        selectedPartIds={selectedPartIds}
         fastenerCountsByPart={fastenerCountsByPart}
         collidingPartIds={collisionReport.collidingIds}
         onClose={() => setLeftDrawerMode(null)}
@@ -2230,6 +2460,10 @@ export default function App() {
         onDeleteProject={handleDeleteProject}
         onLoadTemplate={handleLoadTemplate}
         onSelectPart={(id) => {
+          const p = project.parts.find((x) => x.id === id);
+          if (p?.groupId) {
+            setActiveGroupEditId(p.groupId);
+          }
           setSelectedPartId(id);
           setSelectedPartIds([id]);
           setSelectedFastenerId(null);
@@ -2238,11 +2472,22 @@ export default function App() {
             setLeftDrawerMode(null);
           }
         }}
+        onSelectGroup={(groupId) => {
+          handleSelectGroup(groupId);
+          setInspectorOpen(true);
+          if (window.innerWidth < 640) {
+            setLeftDrawerMode(null);
+          }
+        }}
+        onTogglePartsHidden={handleTogglePartsHidden}
+        onTogglePartsLocked={handleTogglePartsLocked}
         onDeletePart={handleDeletePart}
+        onDeleteParts={handleDeleteParts}
       />
 
       <InspectorDrawer
         open={inspectorOpen && Boolean(selectedPart)}
+        uiMode={uiMode}
         part={selectedPart}
         selectedParts={selectedParts}
         allParts={project.parts}
@@ -2356,14 +2601,24 @@ export default function App() {
         room={project.room}
         roomIssues={roomIssues}
         onClose={() => setRoomModalOpen(false)}
-        onSaveRoom={(nextRoom) => {
+        onSaveRoom={(nextRoom, nextParts) => {
+          const prevPartsCount = project.parts.length;
           commitProject((prev) => ({
             ...prev,
             room: nextRoom,
+            parts: nextParts ?? prev.parts,
           }));
+          if (nextParts && nextParts.length > 0 && prevPartsCount === 0) {
+            setTimeout(() => viewportRef.current?.focusAll(), 50);
+          }
+          const appCount = (nextParts ?? project.parts).filter(
+            (p) => p.kind === 'appliance'
+          ).length;
           showToast(
             nextRoom.enabled
-              ? `Zapisano pomieszczenie ${nextRoom.widthMm}×${nextRoom.depthMm} mm (wys. ${nextRoom.heightMm} mm)`
+              ? appCount > 0
+                ? `Zapisano pomieszczenie ${nextRoom.widthMm}×${nextRoom.depthMm} mm (${appCount} szt. wyposażenia 3D)`
+                : `Zapisano pomieszczenie ${nextRoom.widthMm}×${nextRoom.depthMm} mm (wys. ${nextRoom.heightMm} mm)`
               : 'Wyłączono podgląd pomieszczenia 3D'
           );
         }}

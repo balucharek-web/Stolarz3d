@@ -810,6 +810,256 @@ function generateProceduralWoodPBR(
   return { albedo, height, roughness };
 }
 
+/**
+ * Authentic Expanded Polystyrene (EPS Styrofoam) PBR texture:
+ * Toroidal Voronoi fused foam beads (4-7 mm scale) with micro-crevice normal relief.
+ */
+function generateStyrofoamEpsPBR(size = 256): PBRCanvasSet {
+  const rng = createRng(7741);
+  const [albedo, ctx] = createCanvas(size);
+  const [height, hctx] = createCanvas(size);
+  const [roughness, rctx] = createCanvas(size);
+
+  // Jittered toroidal Voronoi grid (16x16 beads per tile -> crisp unmistakable EPS styrofoam cells)
+  const cells = 16;
+  const ptsX = new Float32Array(cells * cells);
+  const ptsY = new Float32Array(cells * cells);
+  const cellTint = new Float32Array(cells * cells);
+  for (let cy = 0; cy < cells; cy++) {
+    for (let cx = 0; cx < cells; cx++) {
+      const i = cy * cells + cx;
+      ptsX[i] = cx + 0.18 + rng() * 0.64;
+      ptsY[i] = cy + 0.18 + rng() * 0.64;
+      cellTint[i] = (rng() - 0.5) * 10;
+    }
+  }
+
+  const aImg = ctx.createImageData(size, size);
+  const hImg = hctx.createImageData(size, size);
+  const rImg = rctx.createImageData(size, size);
+
+  for (let y = 0; y < size; y++) {
+    const gy = (y / size) * cells;
+    const cy0 = Math.floor(gy);
+    for (let x = 0; x < size; x++) {
+      const gx = (x / size) * cells;
+      const cx0 = Math.floor(gx);
+
+      let d1 = 999;
+      let d2 = 999;
+      let bestIdx = 0;
+
+      for (let oy = -1; oy <= 1; oy++) {
+        const ny = ((cy0 + oy) % cells + cells) % cells;
+        for (let ox = -1; ox <= 1; ox++) {
+          const nx = ((cx0 + ox) % cells + cells) % cells;
+          const idxCell = ny * cells + nx;
+          let px = ptsX[idxCell] - gx;
+          let py = ptsY[idxCell] - gy;
+          if (px > cells * 0.5) px -= cells;
+          else if (px < -cells * 0.5) px += cells;
+          if (py > cells * 0.5) py -= cells;
+          else if (py < -cells * 0.5) py += cells;
+          const dist = Math.sqrt(px * px + py * py);
+          if (dist < d1) {
+            d2 = d1;
+            d1 = dist;
+            bestIdx = idxCell;
+          } else if (dist < d2) {
+            d2 = dist;
+          }
+        }
+      }
+
+      // Edge distance between adjacent fused beads (0 right at seam, >0.14 inside flat bead)
+      const edgeDist = Math.min(1, (d2 - d1) * 5.2);
+      const beadDome = Math.pow(edgeDist, 0.45);
+      const seamShadow = edgeDist < 0.25 ? (0.25 - edgeDist) * 140 : 0;
+      const tint = cellTint[bestIdx];
+
+      const idx = (y * size + x) * 4;
+      const r = Math.max(198, Math.min(252, Math.round(244 + tint - seamShadow)));
+      const g = Math.max(202, Math.min(253, Math.round(246 + tint - seamShadow * 0.96)));
+      const b = Math.max(208, Math.min(255, Math.round(250 + tint - seamShadow * 0.9)));
+      aImg.data[idx] = r;
+      aImg.data[idx + 1] = g;
+      aImg.data[idx + 2] = b;
+      aImg.data[idx + 3] = 255;
+
+      const hv = Math.max(20, Math.min(245, Math.round(55 + beadDome * 182)));
+      hImg.data[idx] = hv;
+      hImg.data[idx + 1] = hv;
+      hImg.data[idx + 2] = hv;
+      hImg.data[idx + 3] = 255;
+
+      const rv = Math.max(175, Math.min(245, Math.round(196 + (1 - beadDome) * 42)));
+      rImg.data[idx] = rv;
+      rImg.data[idx + 1] = rv;
+      rImg.data[idx + 2] = rv;
+      rImg.data[idx + 3] = 255;
+    }
+  }
+
+  ctx.putImageData(aImg, 0, 0);
+  hctx.putImageData(hImg, 0, 0);
+  rctx.putImageData(rImg, 0, 0);
+  return { albedo, height, roughness };
+}
+
+/** Fibrous golden-ochre mineral / rock wool insulation mat PBR */
+function generateMineralWoolPBR(size = 256): PBRCanvasSet {
+  const rng = createRng(6219);
+  const [albedo, ctx] = createCanvas(size);
+  const [height, hctx] = createCanvas(size);
+  const [roughness, rctx] = createCanvas(size);
+
+  ctx.fillStyle = '#CFAF52';
+  ctx.fillRect(0, 0, size, size);
+  hctx.fillStyle = '#808080';
+  hctx.fillRect(0, 0, size, size);
+  rctx.fillStyle = '#F2F2F2';
+  rctx.fillRect(0, 0, size, size);
+
+  const woolColors = [
+    'rgba(232, 206, 120, 0.42)',
+    'rgba(196, 162, 68, 0.38)',
+    'rgba(164, 132, 54, 0.34)',
+    'rgba(244, 224, 152, 0.32)',
+    'rgba(136, 108, 44, 0.28)',
+  ];
+
+  for (let i = 0; i < 1400; i++) {
+    const x = rng() * size;
+    const y = rng() * size;
+    const len = 10 + rng() * 36;
+    const ang = (rng() - 0.5) * Math.PI * 2;
+    const x2 = x + Math.cos(ang) * len;
+    const y2 = y + Math.sin(ang) * len;
+    const lw = 0.8 + rng() * 2.2;
+    ctx.strokeStyle = woolColors[Math.floor(rng() * woolColors.length)];
+    ctx.lineWidth = lw;
+    ctx.beginPath();
+    ctx.moveTo(x, y);
+    ctx.lineTo(x2, y2);
+    ctx.stroke();
+
+    const hv = Math.floor(70 + rng() * 140);
+    hctx.strokeStyle = `rgba(${hv},${hv},${hv},0.5)`;
+    hctx.lineWidth = lw;
+    hctx.beginPath();
+    hctx.moveTo(x, y);
+    hctx.lineTo(x2, y2);
+    hctx.stroke();
+  }
+
+  return { albedo, height, roughness };
+}
+
+/** Bitumen roof shingle / asphalt felt (papa / gont bitumiczny) with staggered courses & mineral grit */
+function generateRoofShinglePBR(size = 256): PBRCanvasSet {
+  const rng = createRng(8843);
+  const [albedo, ctx] = createCanvas(size);
+  const [height, hctx] = createCanvas(size);
+  const [roughness, rctx] = createCanvas(size);
+
+  ctx.fillStyle = '#2B2E33';
+  ctx.fillRect(0, 0, size, size);
+  hctx.fillStyle = '#909090';
+  hctx.fillRect(0, 0, size, size);
+  rctx.fillStyle = '#DCDBD8';
+  rctx.fillRect(0, 0, size, size);
+
+  const rows = 4;
+  const cols = 3;
+  const rowH = size / rows;
+  const colW = size / cols;
+
+  for (let r = 0; r < rows; r++) {
+    const y = r * rowH;
+    const offset = (r % 2) * (colW * 0.5);
+    for (let c = -1; c <= cols; c++) {
+      const x = c * colW + offset;
+      const shade = Math.round(38 + rng() * 14);
+      ctx.fillStyle = `rgb(${shade},${shade + 2},${shade + 5})`;
+      ctx.fillRect(x + 1, y + 1, colW - 2, rowH - 2);
+
+      // Subtle overlapping shadow line at bottom of each shingle tab
+      ctx.fillStyle = 'rgba(10, 11, 13, 0.72)';
+      ctx.fillRect(x, y + rowH - 3, colW, 3);
+      // Vertical cutout slot between tabs
+      ctx.fillStyle = 'rgba(12, 13, 16, 0.78)';
+      ctx.fillRect(x, y, 2.5, rowH);
+
+      hctx.fillStyle = 'rgb(168,168,168)';
+      hctx.fillRect(x + 2, y + 2, colW - 4, rowH - 4);
+      hctx.fillStyle = 'rgb(54,54,54)';
+      hctx.fillRect(x, y + rowH - 3, colW, 3);
+      hctx.fillRect(x, y, 2.5, rowH);
+    }
+  }
+
+  // Coarse basalt mineral roofing granules
+  for (let i = 0; i < 3600; i++) {
+    const gx = rng() * size;
+    const gy = rng() * size;
+    const v = Math.floor(24 + rng() * 58);
+    ctx.fillStyle = `rgba(${v},${v + 2},${v + 5},0.55)`;
+    ctx.fillRect(gx, gy, 1.6, 1.6);
+
+    const hv = Math.floor(90 + rng() * 140);
+    hctx.fillStyle = `rgba(${hv},${hv},${hv},0.55)`;
+    hctx.fillRect(gx, gy, 1.5, 1.5);
+
+    const rv = Math.floor(170 + rng() * 75);
+    rctx.fillStyle = `rgb(${rv},${rv},${rv})`;
+    rctx.fillRect(gx, gy, 1.6, 1.6);
+  }
+
+  return { albedo, height, roughness };
+}
+
+/** Planed tongue-and-groove spruce cladding / boazeria boards with V-groove shadow seams */
+function generatePlankCladdingPBR(
+  rgb: [number, number, number],
+  seed: number,
+  size = 256
+): PBRCanvasSet {
+  const base = generateProceduralWoodPBR(rgb, seed, size);
+  const ctx = base.albedo.getContext('2d')!;
+  const hctx = base.height.getContext('2d')!;
+  const rctx = base.roughness.getContext('2d')!;
+  const rng = createRng(seed + 99);
+
+  const planks = 4;
+  const plankH = size / planks;
+  for (let i = 0; i < planks; i++) {
+    const y = i * plankH;
+    // Slight warm/cool plank-to-plank variation
+    const alpha = (rng() - 0.5) * 0.14;
+    if (alpha > 0) {
+      ctx.fillStyle = `rgba(255, 240, 210, ${alpha.toFixed(3)})`;
+      ctx.fillRect(0, y, size, plankH);
+    } else {
+      ctx.fillStyle = `rgba(55, 34, 14, ${Math.abs(alpha).toFixed(3)})`;
+      ctx.fillRect(0, y, size, plankH);
+    }
+
+    // Crisp V-groove bevel seam between tongue-and-groove cladding planks
+    const seamH = Math.max(2, Math.round(size * 0.012));
+    ctx.fillStyle = 'rgba(42, 26, 12, 0.72)';
+    ctx.fillRect(0, y, size, seamH);
+    ctx.fillStyle = 'rgba(255, 236, 200, 0.18)';
+    ctx.fillRect(0, y + seamH, size, Math.max(1, seamH * 0.6));
+
+    hctx.fillStyle = 'rgb(36,36,36)';
+    hctx.fillRect(0, y, size, seamH + 1);
+    rctx.fillStyle = 'rgb(235,235,235)';
+    rctx.fillRect(0, y, size, seamH + 1);
+  }
+
+  return base;
+}
+
 /** UI Swatch URLs — supports custom uploaded photos as well as built-in studio scans */
 const swatchCache = new Map<MaterialId, string>();
 
@@ -845,6 +1095,18 @@ export function getMaterialSwatchDataUrl(
     canvas = generateArchitecturalMattePBR([40, 43, 48], 156, 8, 5, 1.5, 64).albedo;
   } else if (id === 'steel_black') {
     canvas = generateArchitecturalMattePBR([34, 37, 42], 116, 16, 16, 3, 64).albedo;
+  } else if (id === 'pine_timber') {
+    canvas = generateProceduralWoodPBR([218, 181, 126], 5101, 64).albedo;
+  } else if (id === 'spruce_plank') {
+    canvas = generatePlankCladdingPBR([204, 160, 104], 5207, 64).albedo;
+  } else if (id === 'larch_impregnated') {
+    canvas = generateProceduralWoodPBR([156, 109, 62], 5313, 64).albedo;
+  } else if (id === 'styrofoam_eps') {
+    canvas = generateStyrofoamEpsPBR(64).albedo;
+  } else if (id === 'mineral_wool') {
+    canvas = generateMineralWoolPBR(64).albedo;
+  } else if (id === 'roof_shingle') {
+    canvas = generateRoofShinglePBR(64).albedo;
   } else if (id === 'glass_clear') {
     const [c, ctx] = createCanvas(64);
     const g = ctx.createLinearGradient(0, 0, 64, 64);
@@ -879,6 +1141,12 @@ const FALLBACK_COLORS: Record<string, string> = {
   steel_black: '#22252A',
   steel_galv: '#AEB5BC',
   glass_clear: '#D4ECEE',
+  pine_timber: '#DAB57E',
+  spruce_plank: '#CCA068',
+  larch_impregnated: '#9C6D3E',
+  styrofoam_eps: '#F2F4F7',
+  mineral_wool: '#D8B85C',
+  roof_shingle: '#2E3136',
 };
 
 export class MaterialLibrary {
@@ -1208,7 +1476,13 @@ export class MaterialLibrary {
       id === 'steel_galv' ||
       id === 'glass_clear' ||
       id === 'hdf_white' ||
-      id === 'hdf_black'
+      id === 'hdf_black' ||
+      id === 'pine_timber' ||
+      id === 'spruce_plank' ||
+      id === 'larch_impregnated' ||
+      id === 'styrofoam_eps' ||
+      id === 'mineral_wool' ||
+      id === 'roof_shingle'
         ? 'banded'
         : edgeMode;
 
@@ -1455,36 +1729,128 @@ export class MaterialLibrary {
         clearcoatRoughness: 0.05,
         depthWrite: false,
       });
+    } else if (id === 'pine_timber') {
+      result = this.buildProceduralPbrMat(
+        baseKey,
+        generateProceduralWoodPBR([218, 181, 126], 5101, this.isSoftwareGl ? 256 : 512),
+        {
+          normalStrength: 1.25,
+          normalScale: 0.24,
+          roughness: 1.0,
+          metalness: 0.0,
+          specularIntensity: 0.36,
+          envMapIntensity: 0.56,
+          tileScaleX: 1.2,
+          tileScaleY: 1.2,
+        }
+      );
+    } else if (id === 'spruce_plank') {
+      result = this.buildProceduralPbrMat(
+        baseKey,
+        generatePlankCladdingPBR([204, 160, 104], 5207, this.isSoftwareGl ? 256 : 512),
+        {
+          normalStrength: 1.55,
+          normalScale: 0.32,
+          roughness: 1.0,
+          metalness: 0.0,
+          specularIntensity: 0.35,
+          envMapIntensity: 0.56,
+          tileScaleX: 1.35,
+          tileScaleY: 1.35,
+        }
+      );
+    } else if (id === 'larch_impregnated') {
+      result = this.buildProceduralPbrMat(
+        baseKey,
+        generateProceduralWoodPBR([156, 109, 62], 5313, this.isSoftwareGl ? 256 : 512),
+        {
+          normalStrength: 1.3,
+          normalScale: 0.25,
+          roughness: 0.96,
+          metalness: 0.0,
+          specularIntensity: 0.4,
+          envMapIntensity: 0.6,
+          tileScaleX: 1.2,
+          tileScaleY: 1.2,
+        }
+      );
+    } else if (id === 'styrofoam_eps') {
+      result = this.buildProceduralPbrMat(
+        baseKey,
+        generateStyrofoamEpsPBR(this.isSoftwareGl ? 192 : 256),
+        {
+          normalStrength: 1.85,
+          normalScale: 0.34,
+          roughness: 1.0,
+          metalness: 0.0,
+          specularIntensity: 0.28,
+          envMapIntensity: 0.48,
+          tileScaleX: 6.5,
+          tileScaleY: 6.5,
+        }
+      );
+    } else if (id === 'mineral_wool') {
+      result = this.buildProceduralPbrMat(
+        baseKey,
+        generateMineralWoolPBR(this.isSoftwareGl ? 192 : 256),
+        {
+          normalStrength: 2.1,
+          normalScale: 0.42,
+          roughness: 1.0,
+          metalness: 0.0,
+          specularIntensity: 0.12,
+          envMapIntensity: 0.34,
+          tileScaleX: 3.5,
+          tileScaleY: 3.5,
+        }
+      );
+    } else if (id === 'roof_shingle') {
+      result = this.buildProceduralPbrMat(
+        baseKey,
+        generateRoofShinglePBR(this.isSoftwareGl ? 256 : 384),
+        {
+          normalStrength: 2.2,
+          normalScale: 0.46,
+          roughness: 1.0,
+          metalness: 0.0,
+          specularIntensity: 0.24,
+          envMapIntensity: 0.44,
+          tileScaleX: 2.2,
+          tileScaleY: 2.2,
+        }
+      );
     } else {
-      // Custom user warehouse board — organic fBm wood grain or Egger-grade architectural matte PBR
+      // Custom user warehouse board / timber / insulation
       const meta = getMaterialMeta(id);
       const rgb = hexToRgbTuple(meta.swatchFallbackHex);
       const seed = rgb[0] * 17 + rgb[1] * 31 + rgb[2] * 13 + id.length * 7;
       const isSteel = meta.category === 'Stal i szkło';
+      const isSolidConstruction =
+        meta.category === 'Budowa i ogród' || meta.category === 'Izolacja i dach';
       const pbrSet = meta.grainDirectional
         ? generateProceduralWoodPBR(rgb, seed, this.isSoftwareGl ? 256 : 512)
         : generateArchitecturalMattePBR(
             rgb,
-            isSteel ? 116 : 164,
-            isSteel ? 16 : 10,
-            isSteel ? 16 : 8,
-            isSteel ? 2.2 : 1.4,
+            isSteel ? 116 : isSolidConstruction ? 196 : 164,
+            isSteel ? 16 : 12,
+            isSteel ? 16 : isSolidConstruction ? 14 : 8,
+            isSteel ? 2.2 : 1.8,
             256
           );
       const faceMat = this.buildProceduralPbrMat(baseKey, pbrSet, {
-        normalStrength: meta.grainDirectional ? 1.15 : isSteel ? 0.6 : 0.38,
-        normalScale: meta.grainDirectional ? 0.2 : isSteel ? 0.1 : 0.05,
+        normalStrength: meta.grainDirectional ? 1.15 : isSteel ? 0.6 : 0.42,
+        normalScale: meta.grainDirectional ? 0.2 : isSteel ? 0.1 : 0.08,
         roughness: 1.0,
         metalness: isSteel ? 0.62 : 0.0,
         clearcoat: isSteel ? 0.06 : 0.0,
         clearcoatRoughness: 0.46,
-        specularIntensity: isSteel ? 0.82 : 0.45,
-        envMapIntensity: isSteel ? 1.05 : 0.66,
+        specularIntensity: isSteel ? 0.82 : isSolidConstruction ? 0.3 : 0.45,
+        envMapIntensity: isSteel ? 1.05 : isSolidConstruction ? 0.5 : 0.66,
         tileScaleX: meta.grainDirectional ? 1.0 : 8.0,
         tileScaleY: meta.grainDirectional ? 1.0 : 8.0,
       });
 
-      if (isSteel) {
+      if (isSteel || isSolidConstruction) {
         result = faceMat;
       } else {
         const edgeMat =

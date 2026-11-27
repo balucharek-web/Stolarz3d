@@ -21,6 +21,7 @@ import {
   type ParametricCabinetConfig,
 } from '../engine/parametric';
 import { computeProjectWeightSummary } from '../engine/carpentry';
+import { CabinetSideSectionSvg } from './CabinetPreviewSvg';
 
 interface CabinetBuilderModalProps {
   open: boolean;
@@ -74,6 +75,7 @@ export const CabinetBuilderModal: React.FC<CabinetBuilderModalProps> = ({
     structuredClone(CABINET_PRESETS.base_kitchen.config)
   );
   const [placementMode, setPlacementMode] = useState<CabinetPlacementMode>('auto');
+  const [previewView, setPreviewView] = useState<'front' | 'side'>('front');
 
   useEffect(() => {
     if (!open) return;
@@ -237,12 +239,42 @@ export const CabinetBuilderModal: React.FC<CabinetBuilderModalProps> = ({
             {/* Left: Live 2D Orthographic Front Blueprint (sticky on mobile & desktop!) */}
             <div className="md:col-span-5 sticky top-0 z-10 bg-[#141518] pb-2 md:pb-0 flex flex-col gap-3">
               <div className="rounded-xl border border-zinc-800 bg-zinc-950/95 p-2.5 sm:p-3 shadow-md md:shadow-none">
-                <div className="flex items-center justify-between text-[11px] text-zinc-400 mb-1.5 sm:mb-2">
-                  <span>Podgląd techniczny (przód)</span>
+                <div className="flex items-center justify-between gap-2 text-[11px] text-zinc-400 mb-1.5 sm:mb-2">
+                  <div className="flex items-center gap-0.5 rounded-lg bg-zinc-900 p-0.5 border border-zinc-800">
+                    <button
+                      type="button"
+                      onClick={() => setPreviewView('front')}
+                      className={`rounded-md px-2 py-0.5 text-[10px] font-medium cursor-pointer transition-colors ${
+                        previewView === 'front'
+                          ? 'bg-amber-500 text-zinc-950 font-semibold'
+                          : 'text-zinc-400 hover:text-white'
+                      }`}
+                    >
+                      Przód
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setPreviewView('side')}
+                      className={`rounded-md px-2 py-0.5 text-[10px] font-medium cursor-pointer transition-colors ${
+                        previewView === 'side'
+                          ? 'bg-amber-500 text-zinc-950 font-semibold'
+                          : 'text-zinc-400 hover:text-white'
+                      }`}
+                    >
+                      Przekrój (gł.)
+                    </button>
+                  </div>
                   <span className="font-mono-num text-amber-300">
                     Światło: {previewSummary.innerW} mm
                   </span>
                 </div>
+                {previewView === 'side' ? (
+                  <CabinetSideSectionSvg
+                    cfg={cfg}
+                    bodyHeightMm={bodyH}
+                    isHybrid={previewSummary.isHybrid}
+                  />
+                ) : (
                 <svg
                   viewBox={`0 0 ${vbW} ${vbH}`}
                   className="w-full h-auto max-h-[155px] sm:max-h-[240px] rounded-lg bg-[#1A1C22]"
@@ -665,6 +697,7 @@ export const CabinetBuilderModal: React.FC<CabinetBuilderModalProps> = ({
                     {totalDrawH}
                   </text>
                 </svg>
+                )}
 
                 <div className="mt-2.5 flex flex-wrap gap-x-2.5 gap-y-1 text-[11px] text-zinc-400 font-mono-num">
                   <span>Płyta: {cfg.boardThicknessMm} mm</span>

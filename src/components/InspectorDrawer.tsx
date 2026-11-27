@@ -3,13 +3,18 @@ import {
   AlertTriangle,
   ArrowDownToLine,
   Check,
+  ChevronDown,
+  ChevronRight,
   Copy,
+  Eye,
+  EyeOff,
   FlipHorizontal2,
   FolderKanban,
   Group,
   ImagePlus,
   Layers,
   LayoutPanelTop,
+  Lock,
   Minus,
   PenTool,
   Plus,
@@ -18,6 +23,7 @@ import {
   Ruler,
   Trash2,
   Ungroup,
+  Unlock,
   X,
 } from 'lucide-react';
 import {
@@ -28,6 +34,7 @@ import {
   HandleSide,
   HandleStyle,
   MATERIAL_CATALOG,
+  type MaterialCategory,
   MaterialId,
   PART_KIND_LABELS,
   PartCutout,
@@ -52,6 +59,7 @@ type InspectorTab = 'dimensions' | 'material' | 'machining';
 
 interface InspectorDrawerProps {
   open: boolean;
+  uiMode?: 'simple' | 'expert';
   part: FurniturePart | null;
   selectedParts: FurniturePart[];
   allParts: FurniturePart[];
@@ -168,6 +176,7 @@ function NumberStepper({
 
 export const InspectorDrawer: React.FC<InspectorDrawerProps> = ({
   open,
+  uiMode = 'expert',
   part,
   selectedParts,
   allParts,
@@ -224,6 +233,16 @@ export const InspectorDrawer: React.FC<InspectorDrawerProps> = ({
   const [grpD, setGrpD] = useState<number | null>(null);
   const [lastGroupId, setLastGroupId] = useState<string | undefined>(undefined);
   const [lastPartId, setLastPartId] = useState<string | undefined>(undefined);
+  const [posExpanded, setPosExpanded] = useState<boolean>(false);
+  const [edgeExpanded, setEdgeExpanded] = useState<boolean>(false);
+  const [matCategoryFilter, setMatCategoryFilter] = useState<'all' | MaterialCategory>('all');
+  const [applyMatToGroup, setApplyMatToGroup] = useState<boolean>(false);
+
+  const filteredMaterialCatalog = useMemo(() => {
+    void materialsVersion;
+    if (matCategoryFilter === 'all') return MATERIAL_CATALOG;
+    return MATERIAL_CATALOG.filter((m) => m.category === matCategoryFilter);
+  }, [matCategoryFilter, materialsVersion]);
 
   if (part?.groupId !== lastGroupId) {
     setLastGroupId(part?.groupId);
@@ -409,14 +428,14 @@ export const InspectorDrawer: React.FC<InspectorDrawerProps> = ({
         onClick={onClose}
         aria-hidden="true"
       />
-      <aside className="fixed inset-x-0 bottom-0 sm:inset-x-auto sm:top-14 sm:right-3 sm:bottom-36 lg:bottom-32 z-40 flex max-h-[80dvh] sm:max-h-[calc(100dvh-160px)] sm:w-[min(344px,calc(100vw-24px))] flex-col overflow-hidden rounded-t-2xl sm:rounded-2xl border border-zinc-800 bg-[#141518] text-zinc-100 shadow-2xl">
+      <aside className="fixed inset-x-0 bottom-0 sm:inset-x-auto sm:top-14 sm:right-3 sm:bottom-20 z-40 flex max-h-[82dvh] sm:max-h-[calc(100dvh-140px)] sm:w-[min(352px,calc(100vw-24px))] flex-col overflow-hidden rounded-t-2xl sm:rounded-2xl border border-zinc-800 bg-[#141518] text-zinc-100 shadow-2xl">
         {/* Mobile grab handle */}
         <div className="sm:hidden flex justify-center pt-2.5 pb-1">
           <div className="h-1 w-10 rounded-full bg-zinc-700" />
         </div>
 
         {/* Header */}
-        <div className="flex items-center justify-between gap-2 border-b border-zinc-800 px-4 py-2.5">
+        <div className="flex items-center justify-between gap-2 border-b border-zinc-800 px-3.5 py-2.5">
           <div className="min-w-0">
             <h2 className="text-sm font-semibold text-white truncate">
               {showBatchView
@@ -425,18 +444,54 @@ export const InspectorDrawer: React.FC<InspectorDrawerProps> = ({
             </h2>
             <p className="text-[11px] text-zinc-400 font-mono-num truncate">
               {showBatchView
-                ? `Łącznie ~${selectedTotalWeightKg.toFixed(1)} kg · kliknij parametr, aby zmienić wszystkie`
+                ? `Łącznie ~${selectedTotalWeightKg.toFixed(1)} kg · zmiana dla wszystkich`
                 : `${part.width} × ${part.height} × ${part.depth} mm · ${partWeightKg.toFixed(1)} kg`}
             </p>
           </div>
-          <button
-            type="button"
-            onClick={onClose}
-            className="flex h-9 w-9 items-center justify-center rounded-lg text-zinc-400 hover:bg-zinc-800 hover:text-white cursor-pointer shrink-0"
-            aria-label="Zamknij panel właściwości"
-          >
-            <X className="h-4 w-4" />
-          </button>
+          <div className="flex items-center gap-0.5 shrink-0">
+            <button
+              type="button"
+              onClick={() =>
+                showBatchView
+                  ? onBatchUpdateParts(selectedIds, { hidden: !selectedParts.every((p) => p.hidden) })
+                  : onUpdatePart(part.id, { hidden: !part.hidden })
+              }
+              className={`flex h-8 w-8 items-center justify-center rounded-lg transition-colors cursor-pointer ${
+                part.hidden
+                  ? 'bg-amber-500/15 text-amber-300'
+                  : 'text-zinc-400 hover:bg-zinc-800 hover:text-white'
+              }`}
+              title={part.hidden ? 'Pokaż w 3D' : 'Ukryj w 3D'}
+              aria-label="Przełącz widoczność"
+            >
+              {part.hidden ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+            </button>
+            <button
+              type="button"
+              onClick={() =>
+                showBatchView
+                  ? onBatchUpdateParts(selectedIds, { locked: !selectedParts.every((p) => p.locked) })
+                  : onUpdatePart(part.id, { locked: !part.locked })
+              }
+              className={`flex h-8 w-8 items-center justify-center rounded-lg transition-colors cursor-pointer ${
+                part.locked
+                  ? 'bg-sky-500/15 text-sky-300'
+                  : 'text-zinc-400 hover:bg-zinc-800 hover:text-white'
+              }`}
+              title={part.locked ? 'Odblokuj ruch' : 'Zablokuj ruch'}
+              aria-label="Przełącz blokadę ruchu"
+            >
+              {part.locked ? <Lock className="h-4 w-4" /> : <Unlock className="h-4 w-4" />}
+            </button>
+            <button
+              type="button"
+              onClick={onClose}
+              className="flex h-8 w-8 items-center justify-center rounded-lg text-zinc-400 hover:bg-zinc-800 hover:text-white cursor-pointer"
+              aria-label="Zamknij panel właściwości"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
         </div>
 
         {/* Multi-Select Mode Switcher (when 2+ parts are selected) */}
@@ -451,7 +506,7 @@ export const InspectorDrawer: React.FC<InspectorDrawerProps> = ({
                   : 'text-zinc-400 hover:bg-zinc-900 hover:text-zinc-200'
               }`}
             >
-              Wszystkie ({selectedParts.length})
+              Cała grupa ({selectedParts.length})
             </button>
             <button
               type="button"
@@ -462,25 +517,33 @@ export const InspectorDrawer: React.FC<InspectorDrawerProps> = ({
                   : 'text-zinc-400 hover:bg-zinc-900 hover:text-zinc-200'
               }`}
             >
-              Aktywna: {part.name}
+              1 płyta: {part.name}
             </button>
           </div>
         )}
 
-        {/* 3 Clean Single-Line Tabs (when editing single element) */}
+        {/* Clean Single-Line Tabs (2 tabs in Simple mode, 3 tabs in Expert mode) */}
         {!showBatchView && (
-          <div className="grid grid-cols-3 gap-1 border-b border-zinc-800 px-3 py-2 bg-[#141518]">
+          <div
+            className={`grid gap-1 border-b border-zinc-800 px-3 py-2 bg-[#141518] ${
+              uiMode === 'expert' ? 'grid-cols-3' : 'grid-cols-2'
+            }`}
+          >
             {(
               [
                 { id: 'dimensions' as const, label: 'Wymiary' },
                 { id: 'material' as const, label: 'Materiał' },
-                {
-                  id: 'machining' as const,
-                  label: machiningCount > 0 ? `Obróbki (${machiningCount})` : 'Obróbki',
-                },
+                ...(uiMode === 'expert'
+                  ? [
+                      {
+                        id: 'machining' as const,
+                        label: machiningCount > 0 ? `Obróbki (${machiningCount})` : 'Obróbki',
+                      },
+                    ]
+                  : []),
               ] as const
             ).map((tab) => {
-              const active = activeTab === tab.id;
+              const active = (uiMode === 'simple' && activeTab === 'machining' ? 'dimensions' : activeTab) === tab.id;
               return (
                 <button
                   key={tab.id}
@@ -867,7 +930,7 @@ export const InspectorDrawer: React.FC<InspectorDrawerProps> = ({
           {/* ===============================================================
               TAB 1: WYMIARY (Dimensions, Clearances, Position, Group & Smart Resize)
           =============================================================== */}
-          {!showBatchView && activeTab === 'dimensions' && (
+          {!showBatchView && (activeTab === 'dimensions' || (uiMode === 'simple' && activeTab === 'machining')) && (
             <div className="space-y-4">
               {/* Quick Parametric Re-Edit Banner if this part belongs to a parametric cabinet */}
               {hasParametricConfig && onOpenParametricEditor && (
@@ -1149,72 +1212,13 @@ export const InspectorDrawer: React.FC<InspectorDrawerProps> = ({
                 </div>
               )}
 
-              {/* Position & Rotation */}
-              <div className="space-y-2.5 border-t border-zinc-800/80 pt-3.5">
-                <h3 className="text-xs font-semibold text-zinc-200">Pozycja i obrót</h3>
-                <div className="grid grid-cols-3 gap-2">
-                  <NumberStepper
-                    label="Poz. X"
-                    value={part.position[0]}
-                    step={10}
-                    onChange={(x) =>
-                      onUpdatePart(part.id, { position: [x, part.position[1], part.position[2]] })
-                    }
-                  />
-                  <NumberStepper
-                    label="Poz. Y"
-                    value={part.position[1]}
-                    step={10}
-                    min={5}
-                    onChange={(y) =>
-                      onUpdatePart(part.id, { position: [part.position[0], y, part.position[2]] })
-                    }
-                  />
-                  <NumberStepper
-                    label="Poz. Z"
-                    value={part.position[2]}
-                    step={10}
-                    onChange={(z) =>
-                      onUpdatePart(part.id, { position: [part.position[0], part.position[1], z] })
-                    }
-                  />
-                </div>
-
-                <div className="grid grid-cols-3 gap-2">
-                  <NumberStepper
-                    label="Obrót X"
-                    value={part.rotation[0]}
-                    step={5}
-                    unit="°"
-                    onChange={(rx) =>
-                      onUpdatePart(part.id, { rotation: [rx, part.rotation[1], part.rotation[2]] })
-                    }
-                  />
-                  <NumberStepper
-                    label="Obrót Y"
-                    value={part.rotation[1]}
-                    step={15}
-                    unit="°"
-                    onChange={(ry) =>
-                      onUpdatePart(part.id, { rotation: [part.rotation[0], ry, part.rotation[2]] })
-                    }
-                  />
-                  <NumberStepper
-                    label="Obrót Z"
-                    value={part.rotation[2]}
-                    step={5}
-                    unit="°"
-                    onChange={(rz) =>
-                      onUpdatePart(part.id, { rotation: [part.rotation[0], part.rotation[1], rz] })
-                    }
-                  />
-                </div>
-
-                <div className="grid grid-cols-2 gap-1.5 pt-1">
+              {/* Quick Position Actions + Collapsible XYZ / Rotation Accordion */}
+              <div className="space-y-2 border-t border-zinc-800/80 pt-3.5">
+                <div className="grid grid-cols-2 gap-1.5">
                   <button
                     type="button"
                     onClick={snapToFloor}
-                    className="flex min-h-[36px] items-center justify-center gap-1.5 rounded-lg border border-zinc-800 bg-zinc-900 px-2.5 text-xs font-medium text-zinc-200 hover:bg-zinc-800 cursor-pointer"
+                    className="flex min-h-[38px] items-center justify-center gap-1.5 rounded-lg border border-zinc-800 bg-zinc-900 px-2.5 text-xs font-medium text-zinc-200 hover:bg-zinc-800 cursor-pointer"
                   >
                     <ArrowDownToLine className="h-3.5 w-3.5 text-amber-400" />
                     <span>Do podłogi</span>
@@ -1222,12 +1226,90 @@ export const InspectorDrawer: React.FC<InspectorDrawerProps> = ({
                   <button
                     type="button"
                     onClick={rotateY90}
-                    className="flex min-h-[36px] items-center justify-center gap-1.5 rounded-lg border border-zinc-800 bg-zinc-900 px-2.5 text-xs font-medium text-zinc-200 hover:bg-zinc-800 cursor-pointer"
+                    className="flex min-h-[38px] items-center justify-center gap-1.5 rounded-lg border border-zinc-800 bg-zinc-900 px-2.5 text-xs font-medium text-zinc-200 hover:bg-zinc-800 cursor-pointer"
                   >
                     <RotateCw className="h-3.5 w-3.5 text-amber-400" />
                     <span>Obróć 90°</span>
                   </button>
                 </div>
+
+                <button
+                  type="button"
+                  onClick={() => setPosExpanded((v) => !v)}
+                  className="flex w-full items-center justify-between rounded-lg px-1 py-1.5 text-left text-xs font-semibold text-zinc-300 hover:text-white cursor-pointer"
+                >
+                  <span>Dokładna pozycja XYZ i kąty obrotu</span>
+                  <span className="flex items-center gap-1 text-[10px] font-mono-num text-zinc-500">
+                    {part.position[0]}, {part.position[1]}, {part.position[2]}
+                    {posExpanded ? (
+                      <ChevronDown className="h-3.5 w-3.5 text-zinc-400" />
+                    ) : (
+                      <ChevronRight className="h-3.5 w-3.5 text-zinc-400" />
+                    )}
+                  </span>
+                </button>
+
+                {posExpanded && (
+                  <div className="space-y-2.5 pt-1">
+                    <div className="grid grid-cols-3 gap-2">
+                      <NumberStepper
+                        label="Poz. X"
+                        value={part.position[0]}
+                        step={10}
+                        onChange={(x) =>
+                          onUpdatePart(part.id, { position: [x, part.position[1], part.position[2]] })
+                        }
+                      />
+                      <NumberStepper
+                        label="Poz. Y"
+                        value={part.position[1]}
+                        step={10}
+                        min={5}
+                        onChange={(y) =>
+                          onUpdatePart(part.id, { position: [part.position[0], y, part.position[2]] })
+                        }
+                      />
+                      <NumberStepper
+                        label="Poz. Z"
+                        value={part.position[2]}
+                        step={10}
+                        onChange={(z) =>
+                          onUpdatePart(part.id, { position: [part.position[0], part.position[1], z] })
+                        }
+                      />
+                    </div>
+
+                    <div className="grid grid-cols-3 gap-2">
+                      <NumberStepper
+                        label="Obrót X"
+                        value={part.rotation[0]}
+                        step={5}
+                        unit="°"
+                        onChange={(rx) =>
+                          onUpdatePart(part.id, { rotation: [rx, part.rotation[1], part.rotation[2]] })
+                        }
+                      />
+                      <NumberStepper
+                        label="Obrót Y"
+                        value={part.rotation[1]}
+                        step={15}
+                        unit="°"
+                        onChange={(ry) =>
+                          onUpdatePart(part.id, { rotation: [part.rotation[0], ry, part.rotation[2]] })
+                        }
+                      />
+                      <NumberStepper
+                        label="Obrót Z"
+                        value={part.rotation[2]}
+                        step={5}
+                        unit="°"
+                        onChange={(rz) =>
+                          onUpdatePart(part.id, { rotation: [part.rotation[0], part.rotation[1], rz] })
+                        }
+                      />
+                    </div>
+                  </div>
+                )}
               </div>
 
               {/* Group Assignment & Smart Resize */}
@@ -1397,14 +1479,61 @@ export const InspectorDrawer: React.FC<InspectorDrawerProps> = ({
                   </button>
                 </div>
 
+                {part.groupId && sameGroupCount >= 2 && (
+                  <label className="flex items-center justify-between gap-2 rounded-lg border border-sky-500/35 bg-sky-500/10 px-2.5 py-1.5 text-[11px] text-sky-200 cursor-pointer select-none">
+                    <span>Zmień materiał dla całej grupy ({sameGroupCount})</span>
+                    <input
+                      type="checkbox"
+                      checked={applyMatToGroup}
+                      onChange={(e) => setApplyMatToGroup(e.target.checked)}
+                      className="h-4 w-4 accent-amber-500"
+                    />
+                  </label>
+                )}
+
+                <div className="flex items-center gap-1 overflow-x-auto cad-scroll pb-0.5">
+                  {(
+                    [
+                      { id: 'all', label: 'Wszystkie' },
+                      { id: 'Płyty meblowe', label: 'Meblowe' },
+                      { id: 'Płyty konstrukcyjne', label: 'OSB/Sklejka' },
+                      { id: 'Budowa i ogród', label: 'Kantówki' },
+                      { id: 'Izolacja i dach', label: 'Izolacja' },
+                      { id: 'Stal i szkło', label: 'Stal/Szkło' },
+                    ] as const
+                  ).map((cat) => (
+                    <button
+                      key={cat.id}
+                      type="button"
+                      onClick={() => setMatCategoryFilter(cat.id)}
+                      className={`rounded-md px-2 py-1 text-[10px] font-medium whitespace-nowrap shrink-0 cursor-pointer transition-colors ${
+                        matCategoryFilter === cat.id
+                          ? 'bg-amber-500 text-zinc-950 font-semibold'
+                          : 'border border-zinc-800 bg-zinc-900 text-zinc-400 hover:text-zinc-200'
+                      }`}
+                    >
+                      {cat.label}
+                    </button>
+                  ))}
+                </div>
+
                 <div className="grid grid-cols-2 gap-1.5">
-                  {MATERIAL_CATALOG.map((mat) => {
+                  {filteredMaterialCatalog.map((mat) => {
                     const active = part.materialId === mat.id;
                     return (
                       <button
                         key={mat.id}
                         type="button"
-                        onClick={() => onUpdatePart(part.id, { materialId: mat.id })}
+                        onClick={() => {
+                          if (applyMatToGroup && part.groupId) {
+                            const groupIds = allParts
+                              .filter((p) => p.groupId === part.groupId)
+                              .map((p) => p.id);
+                            onBatchUpdateParts(groupIds, { materialId: mat.id });
+                          } else {
+                            onUpdatePart(part.id, { materialId: mat.id });
+                          }
+                        }}
                         className={`flex items-center gap-2 rounded-lg border p-1.5 text-left transition-colors cursor-pointer ${
                           active
                             ? 'border-amber-500 bg-amber-500/10 text-white'
@@ -1483,14 +1612,27 @@ export const InspectorDrawer: React.FC<InspectorDrawerProps> = ({
                 </div>
               </div>
 
-              {/* Edge Banding (Okleina ABS/PCV) */}
-              <div className="space-y-2.5 border-t border-zinc-800/80 pt-3.5">
-                <div className="flex items-center justify-between">
-                  <h3 className="text-xs font-semibold text-zinc-200">Okleina krawędzi (ABS/PCV)</h3>
-                  {ebThickness === 2 && (
-                    <span className="text-[10px] text-amber-400">Piła: −2 mm/kraw.</span>
-                  )}
-                </div>
+              {/* Collapsible Edge Banding (Okleina ABS/PCV) */}
+              <div className="space-y-2.5 border-t border-zinc-800/80 pt-3">
+                <button
+                  type="button"
+                  onClick={() => setEdgeExpanded((v) => !v)}
+                  className="flex w-full items-center justify-between text-left cursor-pointer"
+                >
+                  <span className="text-xs font-semibold text-zinc-200">
+                    Okleina krawędzi (ABS/PCV)
+                  </span>
+                  <span className="flex items-center gap-1 text-[10px] text-zinc-400">
+                    {ebThickness > 0 ? `${ebThickness} mm` : 'Brak'}
+                    {edgeExpanded ? (
+                      <ChevronDown className="h-3.5 w-3.5" />
+                    ) : (
+                      <ChevronRight className="h-3.5 w-3.5" />
+                    )}
+                  </span>
+                </button>
+                {edgeExpanded && (
+                <>
                 <div className="grid grid-cols-3 gap-1 rounded-lg bg-zinc-900 p-1 border border-zinc-800">
                   {(
                     [
@@ -1541,6 +1683,8 @@ export const InspectorDrawer: React.FC<InspectorDrawerProps> = ({
                       );
                     })}
                   </div>
+                )}
+                </>
                 )}
               </div>
 
@@ -1659,7 +1803,7 @@ export const InspectorDrawer: React.FC<InspectorDrawerProps> = ({
           {/* ===============================================================
               TAB 3: OBRÓBKI (CNC Machining, Cutouts, Mirror, Shelves, Fasteners)
           =============================================================== */}
-          {!showBatchView && activeTab === 'machining' && (
+          {!showBatchView && uiMode === 'expert' && activeTab === 'machining' && (
             <div className="space-y-4">
               {/* Board Machining: Rounded Corners, Dado Groove, LED, System 32, Miter, Cutouts */}
               <div className="space-y-3">

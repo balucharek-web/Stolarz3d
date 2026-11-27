@@ -4,6 +4,7 @@ import {
   Layers,
   Plus,
   RotateCcw,
+  Ruler,
   Trash2,
   X,
 } from 'lucide-react';
@@ -11,6 +12,7 @@ import {
   BuiltInMaterialId,
   DEFAULT_MATERIAL_CATALOG,
   MATERIAL_CATALOG,
+  MaterialCategory,
   MaterialId,
   MaterialMeta,
   MaterialsCatalogConfig,
@@ -27,12 +29,16 @@ interface MaterialsManagerModalProps {
   onSetCustomTexture: (id: MaterialId, dataUrl: string | null) => void;
 }
 
-const CATEGORIES: MaterialMeta['category'][] = [
+const CATEGORIES: MaterialCategory[] = [
   'Płyty meblowe',
   'Płyty konstrukcyjne',
+  'Budowa i ogród',
+  'Izolacja i dach',
   'Blaty',
   'Stal i szkło',
 ];
+
+type PricingFormMode = 'sheet' | 'linear';
 
 export const MaterialsManagerModal: React.FC<MaterialsManagerModalProps> = ({
   open,
@@ -44,14 +50,20 @@ export const MaterialsManagerModal: React.FC<MaterialsManagerModalProps> = ({
   onSetCustomTexture,
 }) => {
   const [tab, setTab] = useState<'catalog' | 'add'>('catalog');
-  const [name, setName] = useState('Egger H1180 Dąb Halifax');
-  const [shortName, setShortName] = useState('Dąb Halifax');
-  const [category, setCategory] = useState<MaterialMeta['category']>('Płyty meblowe');
-  const [thicknessMm, setThicknessMm] = useState(18);
+  const [filterCat, setFilterCat] = useState<'all' | MaterialCategory>('all');
+
+  // Custom material form state
+  const [formMode, setFormMode] = useState<PricingFormMode>('sheet');
+  const [name, setName] = useState('Kantówka sosnowa 50×50 mm');
+  const [shortName, setShortName] = useState('Kantówka 50×50');
+  const [category, setCategory] = useState<MaterialCategory>('Budowa i ogród');
+  const [thicknessMm, setThicknessMm] = useState(50);
   const [sheetWidthMm, setSheetWidthMm] = useState(2800);
   const [sheetHeightMm, setSheetHeightMm] = useState(2070);
-  const [pricePerM2Pln, setPricePerM2Pln] = useState(118);
-  const [swatchHex, setSwatchHex] = useState('#B88E5F');
+  const [pricePerM2Pln, setPricePerM2Pln] = useState(85);
+  const [barLengthMm, setBarLengthMm] = useState(3000);
+  const [pricePerLinearMPln, setPricePerLinearMPln] = useState(14);
+  const [swatchHex, setSwatchHex] = useState('#D8B27C');
   const [grainDirectional, setGrainDirectional] = useState(true);
   const [pendingTexture, setPendingTexture] = useState<string | null>(null);
 
@@ -68,10 +80,53 @@ export const MaterialsManagerModal: React.FC<MaterialsManagerModalProps> = ({
     return map;
   }, [customTextures, materialsVersion]);
 
+  const visibleCatalog = useMemo(() => {
+    void materialsVersion;
+    if (filterCat === 'all') return MATERIAL_CATALOG;
+    return MATERIAL_CATALOG.filter((m) => m.category === filterCat);
+  }, [filterCat, materialsVersion]);
+
   if (!open) return null;
 
   const sheetAreaM2 = Math.max(0.01, (sheetWidthMm * sheetHeightMm) / 1_000_000);
   const sheetPricePln = Math.round(sheetAreaM2 * pricePerM2Pln);
+  const barPricePln = Math.round((barLengthMm / 1000) * pricePerLinearMPln);
+
+  const applyQuickFill = (preset: 'timber' | 'styrofoam' | 'board') => {
+    if (preset === 'timber') {
+      setFormMode('linear');
+      setName('Kantówka sosnowa 50×50 mm');
+      setShortName('Kantówka 50×50');
+      setCategory('Budowa i ogród');
+      setThicknessMm(50);
+      setBarLengthMm(3000);
+      setPricePerLinearMPln(14);
+      setSwatchHex('#DAB57E');
+      setGrainDirectional(true);
+    } else if (preset === 'styrofoam') {
+      setFormMode('sheet');
+      setName('Styropian grafitowy EPS 100 mm');
+      setShortName('Styropian 100');
+      setCategory('Izolacja i dach');
+      setThicknessMm(100);
+      setSheetWidthMm(1000);
+      setSheetHeightMm(500);
+      setPricePerM2Pln(42);
+      setSwatchHex('#8E949E');
+      setGrainDirectional(false);
+    } else {
+      setFormMode('sheet');
+      setName('Egger H1180 Dąb Halifax');
+      setShortName('Dąb Halifax');
+      setCategory('Płyty meblowe');
+      setThicknessMm(18);
+      setSheetWidthMm(2800);
+      setSheetHeightMm(2070);
+      setPricePerM2Pln(118);
+      setSwatchHex('#B88E5F');
+      setGrainDirectional(true);
+    }
+  };
 
   const readImageFile = (file: File, onLoaded: (dataUrl: string) => void) => {
     const reader = new FileReader();
@@ -99,19 +154,37 @@ export const MaterialsManagerModal: React.FC<MaterialsManagerModalProps> = ({
     const cleanName = name.trim();
     if (!cleanName) return;
     const id: MaterialId = `custom_mat_${Date.now().toString(36)}`;
-    const newMat: MaterialMeta = {
-      id,
-      name: cleanName,
-      shortName: (shortName.trim() || cleanName).slice(0, 22),
-      category,
-      defaultThicknessMm: Math.max(3, Math.min(80, Math.round(thicknessMm))),
-      sheetWidthMm: Math.max(500, Math.min(4500, Math.round(sheetWidthMm))),
-      sheetHeightMm: Math.max(300, Math.min(3000, Math.round(sheetHeightMm))),
-      pricePerM2Pln: Math.max(1, Math.round(pricePerM2Pln)),
-      swatchFallbackHex: swatchHex,
-      isCustom: true,
-      grainDirectional,
-    };
+    const clampedThick = Math.max(3, Math.min(250, Math.round(thicknessMm)));
+    const newMat: MaterialMeta =
+      formMode === 'linear'
+        ? {
+            id,
+            name: cleanName,
+            shortName: (shortName.trim() || cleanName).slice(0, 22),
+            category,
+            defaultThicknessMm: clampedThick,
+            sheetWidthMm: Math.max(500, Math.min(6000, Math.round(barLengthMm))),
+            sheetHeightMm: Math.max(100, clampedThick * 2),
+            pricePerM2Pln: Math.max(10, Math.round(pricePerLinearMPln * 6)),
+            barLengthMm: Math.max(500, Math.min(12000, Math.round(barLengthMm))),
+            pricePerLinearMPln: Math.max(1, Math.round(pricePerLinearMPln)),
+            swatchFallbackHex: swatchHex,
+            isCustom: true,
+            grainDirectional,
+          }
+        : {
+            id,
+            name: cleanName,
+            shortName: (shortName.trim() || cleanName).slice(0, 22),
+            category,
+            defaultThicknessMm: clampedThick,
+            sheetWidthMm: Math.max(200, Math.min(6000, Math.round(sheetWidthMm))),
+            sheetHeightMm: Math.max(100, Math.min(4000, Math.round(sheetHeightMm))),
+            pricePerM2Pln: Math.max(1, Math.round(pricePerM2Pln)),
+            swatchFallbackHex: swatchHex,
+            isCustom: true,
+            grainDirectional,
+          };
 
     onChangeConfig({
       ...config,
@@ -129,7 +202,12 @@ export const MaterialsManagerModal: React.FC<MaterialsManagerModalProps> = ({
 
   const updateBuiltInField = (
     id: BuiltInMaterialId,
-    field: 'pricePerM2Pln' | 'sheetWidthMm' | 'sheetHeightMm',
+    field:
+      | 'pricePerM2Pln'
+      | 'sheetWidthMm'
+      | 'sheetHeightMm'
+      | 'barLengthMm'
+      | 'pricePerLinearMPln',
     value: number
   ) => {
     if (!Number.isFinite(value) || value <= 0) return;
@@ -148,7 +226,12 @@ export const MaterialsManagerModal: React.FC<MaterialsManagerModalProps> = ({
 
   const updateCustomField = (
     id: string,
-    field: 'pricePerM2Pln' | 'sheetWidthMm' | 'sheetHeightMm',
+    field:
+      | 'pricePerM2Pln'
+      | 'sheetWidthMm'
+      | 'sheetHeightMm'
+      | 'barLengthMm'
+      | 'pricePerLinearMPln',
     value: number
   ) => {
     if (!Number.isFinite(value) || value <= 0) return;
@@ -179,15 +262,15 @@ export const MaterialsManagerModal: React.FC<MaterialsManagerModalProps> = ({
 
   return (
     <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/55 p-0 sm:p-4">
-      <div className="w-full sm:max-w-3xl rounded-t-2xl sm:rounded-2xl border border-zinc-800 bg-[#141518] text-zinc-100 shadow-2xl flex flex-col max-h-[90dvh]">
+      <div className="w-full sm:max-w-4xl rounded-t-2xl sm:rounded-2xl border border-zinc-800 bg-[#141518] text-zinc-100 shadow-2xl flex flex-col max-h-[92dvh]">
         {/* Header */}
-        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-zinc-800 px-5 py-3.5">
+        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-zinc-800 px-4 sm:px-5 py-3.5">
           <div>
             <h2 className="text-base font-semibold text-white">
-              Katalog płyt i cennik z hurtowni
+              Katalog materiałów i cennik
             </h2>
             <p className="text-xs text-zinc-400">
-              Dodaj dekory Egger, Kronospan lub Swiss Krono — ceny i formaty arkuszy aktualizują rozkrój 2D i wycenę
+              Płyty meblowe, kantówki i deski C24 (mb), styropian, wełna oraz pokrycia dachowe
             </p>
           </div>
           <div className="flex items-center gap-2">
@@ -214,7 +297,7 @@ export const MaterialsManagerModal: React.FC<MaterialsManagerModalProps> = ({
                 }`}
               >
                 <Plus className="h-3.5 w-3.5" />
-                <span>Dodaj własną płytę</span>
+                <span>Dodaj własny</span>
               </button>
             </div>
             <button
@@ -244,18 +327,77 @@ export const MaterialsManagerModal: React.FC<MaterialsManagerModalProps> = ({
         />
 
         {/* Body */}
-        <div className="cad-scroll flex-1 overflow-y-auto px-5 py-4">
+        <div className="cad-scroll flex-1 overflow-y-auto px-4 sm:px-5 py-4">
           {tab === 'add' ? (
             <form onSubmit={handleAddCustomMaterial} className="space-y-4">
+              {/* Quick-fill templates + Sheet vs Linear Mode */}
+              <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-zinc-800 bg-zinc-900/50 p-3">
+                <div className="flex items-center gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => setFormMode('sheet')}
+                    className={`flex min-h-[34px] items-center gap-1.5 rounded-lg px-3 text-xs font-medium transition-colors cursor-pointer ${
+                      formMode === 'sheet'
+                        ? 'bg-amber-500 text-zinc-950 font-semibold'
+                        : 'border border-zinc-700 bg-zinc-950 text-zinc-300 hover:text-white'
+                    }`}
+                  >
+                    <Layers className="h-3.5 w-3.5" />
+                    <span>Płyta / Arkusz (zł/m²)</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setFormMode('linear')}
+                    className={`flex min-h-[34px] items-center gap-1.5 rounded-lg px-3 text-xs font-medium transition-colors cursor-pointer ${
+                      formMode === 'linear'
+                        ? 'bg-amber-500 text-zinc-950 font-semibold'
+                        : 'border border-zinc-700 bg-zinc-950 text-zinc-300 hover:text-white'
+                    }`}
+                  >
+                    <Ruler className="h-3.5 w-3.5" />
+                    <span>Kantówka / Belka / Profil (zł/mb)</span>
+                  </button>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
+                  <span className="text-zinc-500">Wzór:</span>
+                  <button
+                    type="button"
+                    onClick={() => applyQuickFill('timber')}
+                    className="rounded-md border border-zinc-700 bg-zinc-950 px-2 py-1 text-zinc-300 hover:border-amber-500/60 hover:text-amber-300 cursor-pointer"
+                  >
+                    Kantówka 50×50
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => applyQuickFill('styrofoam')}
+                    className="rounded-md border border-zinc-700 bg-zinc-950 px-2 py-1 text-zinc-300 hover:border-amber-500/60 hover:text-amber-300 cursor-pointer"
+                  >
+                    Styropian 100 mm
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => applyQuickFill('board')}
+                    className="rounded-md border border-zinc-700 bg-zinc-950 px-2 py-1 text-zinc-300 hover:border-amber-500/60 hover:text-amber-300 cursor-pointer"
+                  >
+                    Płyta Egger 18
+                  </button>
+                </div>
+              </div>
+
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="block text-[11px] font-medium text-zinc-400 mb-1">
-                    Pełna nazwa płyty / dekoru
+                    Pełna nazwa materiału
                   </label>
                   <input
                     type="text"
                     required
-                    placeholder="np. Egger H1180 ST37 Dąb Halifax"
+                    placeholder={
+                      formMode === 'linear'
+                        ? 'np. Kantówka sosnowa 70×70 mm C24'
+                        : 'np. Styropian EPS 100 mm lub Dąb Halifax'
+                    }
                     value={name}
                     onChange={(e) => setName(e.target.value)}
                     className="w-full rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-2 text-xs text-white focus:border-amber-500 focus:outline-none"
@@ -267,7 +409,7 @@ export const MaterialsManagerModal: React.FC<MaterialsManagerModalProps> = ({
                   </label>
                   <input
                     type="text"
-                    placeholder="np. Dąb Halifax"
+                    placeholder={formMode === 'linear' ? 'np. Kantówka 70×70' : 'np. Styropian 100'}
                     value={shortName}
                     onChange={(e) => setShortName(e.target.value)}
                     className="w-full rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-2 text-xs text-white focus:border-amber-500 focus:outline-none"
@@ -275,86 +417,156 @@ export const MaterialsManagerModal: React.FC<MaterialsManagerModalProps> = ({
                 </div>
               </div>
 
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                <div>
-                  <label className="block text-[11px] font-medium text-zinc-400 mb-1">
-                    Kategoria
-                  </label>
-                  <select
-                    value={category}
-                    onChange={(e) => setCategory(e.target.value as MaterialMeta['category'])}
-                    className="w-full rounded-lg border border-zinc-800 bg-zinc-900 px-2.5 py-2 text-xs text-white focus:border-amber-500 focus:outline-none"
-                  >
-                    {CATEGORIES.map((c) => (
-                      <option key={c} value={c}>
-                        {c}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-[11px] font-medium text-zinc-400 mb-1">
-                    Grubość [mm]
-                  </label>
-                  <input
-                    type="number"
-                    min={3}
-                    max={80}
-                    value={thicknessMm}
-                    onChange={(e) => setThicknessMm(Number(e.target.value))}
-                    className="w-full rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-2 text-xs font-mono-num text-white focus:border-amber-500 focus:outline-none"
-                  />
-                </div>
-                <div>
-                  <label className="block text-[11px] font-medium text-zinc-400 mb-1">
-                    Arkusz szer. [mm]
-                  </label>
-                  <input
-                    type="number"
-                    min={500}
-                    max={4500}
-                    step={10}
-                    value={sheetWidthMm}
-                    onChange={(e) => setSheetWidthMm(Number(e.target.value))}
-                    className="w-full rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-2 text-xs font-mono-num text-white focus:border-amber-500 focus:outline-none"
-                  />
-                </div>
-                <div>
-                  <label className="block text-[11px] font-medium text-zinc-400 mb-1">
-                    Arkusz wys. [mm]
-                  </label>
-                  <input
-                    type="number"
-                    min={300}
-                    max={3000}
-                    step={10}
-                    value={sheetHeightMm}
-                    onChange={(e) => setSheetHeightMm(Number(e.target.value))}
-                    className="w-full rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-2 text-xs font-mono-num text-white focus:border-amber-500 focus:outline-none"
-                  />
-                </div>
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 items-center rounded-xl border border-zinc-800 bg-zinc-900/60 p-3.5">
-                <div>
-                  <label className="block text-[11px] font-medium text-zinc-400 mb-1">
-                    Cena w hurtowni [zł / m² netto]
-                  </label>
-                  <div className="flex items-center gap-2">
+              {formMode === 'sheet' ? (
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                  <div>
+                    <label className="block text-[11px] font-medium text-zinc-400 mb-1">
+                      Kategoria
+                    </label>
+                    <select
+                      value={category}
+                      onChange={(e) => setCategory(e.target.value as MaterialCategory)}
+                      className="w-full rounded-lg border border-zinc-800 bg-zinc-900 px-2.5 py-2 text-xs text-white focus:border-amber-500 focus:outline-none"
+                    >
+                      {CATEGORIES.map((c) => (
+                        <option key={c} value={c}>
+                          {c}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-medium text-zinc-400 mb-1">
+                      Grubość [mm]
+                    </label>
                     <input
                       type="number"
-                      min={1}
-                      max={5000}
-                      value={pricePerM2Pln}
-                      onChange={(e) => setPricePerM2Pln(Number(e.target.value))}
-                      className="w-28 rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm font-semibold font-mono-num text-amber-300 focus:border-amber-500 focus:outline-none"
+                      min={3}
+                      max={250}
+                      value={thicknessMm}
+                      onChange={(e) => setThicknessMm(Number(e.target.value))}
+                      className="w-full rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-2 text-xs font-mono-num text-white focus:border-amber-500 focus:outline-none"
                     />
-                    <span className="text-xs text-zinc-400 font-mono-num">
-                      ≈ <strong className="text-zinc-200">{sheetPricePln} zł</strong> / arkusz (
-                      {sheetAreaM2.toFixed(2)} m²)
-                    </span>
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-medium text-zinc-400 mb-1">
+                      Arkusz szer. [mm]
+                    </label>
+                    <input
+                      type="number"
+                      min={200}
+                      max={6000}
+                      step={10}
+                      value={sheetWidthMm}
+                      onChange={(e) => setSheetWidthMm(Number(e.target.value))}
+                      className="w-full rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-2 text-xs font-mono-num text-white focus:border-amber-500 focus:outline-none"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-medium text-zinc-400 mb-1">
+                      Arkusz wys. [mm]
+                    </label>
+                    <input
+                      type="number"
+                      min={100}
+                      max={4000}
+                      step={10}
+                      value={sheetHeightMm}
+                      onChange={(e) => setSheetHeightMm(Number(e.target.value))}
+                      className="w-full rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-2 text-xs font-mono-num text-white focus:border-amber-500 focus:outline-none"
+                    />
                   </div>
                 </div>
+              ) : (
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <div>
+                    <label className="block text-[11px] font-medium text-zinc-400 mb-1">
+                      Kategoria
+                    </label>
+                    <select
+                      value={category}
+                      onChange={(e) => setCategory(e.target.value as MaterialCategory)}
+                      className="w-full rounded-lg border border-zinc-800 bg-zinc-900 px-2.5 py-2 text-xs text-white focus:border-amber-500 focus:outline-none"
+                    >
+                      {CATEGORIES.map((c) => (
+                        <option key={c} value={c}>
+                          {c}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-medium text-zinc-400 mb-1">
+                      Domyślny przekrój [mm]
+                    </label>
+                    <input
+                      type="number"
+                      min={10}
+                      max={250}
+                      value={thicknessMm}
+                      onChange={(e) => setThicknessMm(Number(e.target.value))}
+                      className="w-full rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-2 text-xs font-mono-num text-white focus:border-amber-500 focus:outline-none"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-medium text-zinc-400 mb-1">
+                      Długość handlowa sztangi [mm]
+                    </label>
+                    <input
+                      type="number"
+                      min={500}
+                      max={12000}
+                      step={100}
+                      value={barLengthMm}
+                      onChange={(e) => setBarLengthMm(Number(e.target.value))}
+                      className="w-full rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-2 text-xs font-mono-num text-white focus:border-amber-500 focus:outline-none"
+                    />
+                  </div>
+                </div>
+              )}
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 items-center rounded-xl border border-zinc-800 bg-zinc-900/60 p-3.5">
+                {formMode === 'sheet' ? (
+                  <div>
+                    <label className="block text-[11px] font-medium text-zinc-400 mb-1">
+                      Cena w hurtowni [zł / m² netto]
+                    </label>
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="number"
+                        min={1}
+                        max={5000}
+                        value={pricePerM2Pln}
+                        onChange={(e) => setPricePerM2Pln(Number(e.target.value))}
+                        className="w-28 rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm font-semibold font-mono-num text-amber-300 focus:border-amber-500 focus:outline-none"
+                      />
+                      <span className="text-xs text-zinc-400 font-mono-num">
+                        ≈ <strong className="text-zinc-200">{sheetPricePln} zł</strong> / arkusz (
+                        {sheetAreaM2.toFixed(2)} m²)
+                      </span>
+                    </div>
+                  </div>
+                ) : (
+                  <div>
+                    <label className="block text-[11px] font-medium text-zinc-400 mb-1">
+                      Cena w składzie [zł / metr bieżący (mb)]
+                    </label>
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="number"
+                        min={1}
+                        max={2000}
+                        value={pricePerLinearMPln}
+                        onChange={(e) => setPricePerLinearMPln(Number(e.target.value))}
+                        className="w-28 rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm font-semibold font-mono-num text-amber-300 focus:border-amber-500 focus:outline-none"
+                      />
+                      <span className="text-xs text-zinc-400 font-mono-num">
+                        ≈ <strong className="text-zinc-200">{barPricePln} zł</strong> / sztangę (
+                        {(barLengthMm / 1000).toFixed(1)} m)
+                      </span>
+                    </div>
+                  </div>
+                )}
 
                 <div className="flex flex-wrap items-center gap-3">
                   <div className="flex items-center gap-2">
@@ -372,7 +584,7 @@ export const MaterialsManagerModal: React.FC<MaterialsManagerModalProps> = ({
                     className="flex items-center gap-1.5 rounded-lg border border-zinc-700 bg-zinc-950 px-2.5 py-1.5 text-xs text-zinc-200 hover:border-amber-500/60 cursor-pointer"
                   >
                     <ImagePlus className="h-3.5 w-3.5 text-amber-400" />
-                    <span>{pendingTexture ? 'Zmień zdjęcie' : 'Wgraj zdjęcie dekoru'}</span>
+                    <span>{pendingTexture ? 'Zmień zdjęcie' : 'Wgraj zdjęcie tekstury'}</span>
                   </button>
                   <input
                     ref={newFileRef}
@@ -388,7 +600,7 @@ export const MaterialsManagerModal: React.FC<MaterialsManagerModalProps> = ({
                   {pendingTexture && (
                     <img
                       src={pendingTexture}
-                      alt="Podgląd dekoru"
+                      alt="Podgląd tekstury"
                       className="h-9 w-9 rounded-lg object-cover border border-amber-500/60"
                     />
                   )}
@@ -403,7 +615,9 @@ export const MaterialsManagerModal: React.FC<MaterialsManagerModalProps> = ({
                   className="h-4 w-4 rounded border-zinc-700 bg-zinc-900 accent-amber-500"
                 />
                 <span>
-                  Płyta ma kierunek słojów (blokuj obrót o 90° podczas rozkroju arkuszy 2D)
+                  {formMode === 'linear'
+                    ? 'Generuj naturalne usłojenie drewna (dla kantówek, łat i desek)'
+                    : 'Materiał ma kierunek słojów (blokuj obrót o 90° podczas rozkroju arkuszy 2D)'}
                 </span>
               </label>
 
@@ -426,18 +640,43 @@ export const MaterialsManagerModal: React.FC<MaterialsManagerModalProps> = ({
             </form>
           ) : (
             <div className="space-y-3">
-              <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-zinc-400">
-                <span>
-                  Edytuj ceny za m² i wymiary arkuszy z Twojej hurtowni (zapisywane lokalnie w przeglądarce).
-                </span>
+              {/* Category filter strip */}
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="flex items-center gap-1 overflow-x-auto cad-scroll pb-0.5">
+                  <button
+                    type="button"
+                    onClick={() => setFilterCat('all')}
+                    className={`rounded-lg px-2.5 py-1 text-[11px] font-medium whitespace-nowrap cursor-pointer ${
+                      filterCat === 'all'
+                        ? 'bg-amber-500 text-zinc-950 font-semibold'
+                        : 'border border-zinc-800 bg-zinc-900 text-zinc-400 hover:text-zinc-200'
+                    }`}
+                  >
+                    Wszystkie ({MATERIAL_CATALOG.length})
+                  </button>
+                  {CATEGORIES.map((cat) => (
+                    <button
+                      key={cat}
+                      type="button"
+                      onClick={() => setFilterCat(cat)}
+                      className={`rounded-lg px-2.5 py-1 text-[11px] font-medium whitespace-nowrap cursor-pointer ${
+                        filterCat === cat
+                          ? 'bg-amber-500 text-zinc-950 font-semibold'
+                          : 'border border-zinc-800 bg-zinc-900 text-zinc-400 hover:text-zinc-200'
+                      }`}
+                    >
+                      {cat}
+                    </button>
+                  ))}
+                </div>
                 {hasBuiltInOverrides && (
                   <button
                     type="button"
                     onClick={resetBuiltInPrices}
-                    className="flex items-center gap-1 rounded-lg border border-zinc-700 bg-zinc-900 px-2.5 py-1 text-[11px] text-zinc-300 hover:text-white cursor-pointer"
+                    className="flex items-center gap-1 rounded-lg border border-zinc-700 bg-zinc-900 px-2.5 py-1 text-[11px] text-zinc-300 hover:text-white cursor-pointer shrink-0"
                   >
                     <RotateCcw className="h-3 w-3" />
-                    <span>Przywróć domyślne ceny</span>
+                    <span>Przywróć ceny</span>
                   </button>
                 )}
               </div>
@@ -446,19 +685,22 @@ export const MaterialsManagerModal: React.FC<MaterialsManagerModalProps> = ({
                 <table className="w-full text-left text-xs border-collapse">
                   <thead>
                     <tr className="border-b border-zinc-800 text-zinc-400">
-                      <th className="py-2 pr-2 font-medium">Płyta / Dekor</th>
-                      <th className="py-2 px-2 font-medium text-right">Arkusz szer. [mm]</th>
-                      <th className="py-2 px-2 font-medium text-right">Arkusz wys. [mm]</th>
-                      <th className="py-2 px-2 font-medium text-right">Cena [zł/m²]</th>
-                      <th className="py-2 px-2 font-medium text-right">Arkusz</th>
+                      <th className="py-2 pr-2 font-medium">Materiał</th>
+                      <th className="py-2 px-2 font-medium text-right">Format / Sztanga [mm]</th>
+                      <th className="py-2 px-2 font-medium text-right">Cena [zł/m² lub mb]</th>
+                      <th className="py-2 px-2 font-medium text-right">Sztuka</th>
                       <th className="py-2 pl-2 font-medium text-right">Akcje</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-zinc-800/60">
-                    {MATERIAL_CATALOG.map((mat) => {
+                    {visibleCatalog.map((mat) => {
                       const isBuiltIn = DEFAULT_MATERIAL_CATALOG.some((d) => d.id === mat.id);
+                      const isLinear = Boolean(mat.barLengthMm && mat.pricePerLinearMPln);
                       const area = (mat.sheetWidthMm * mat.sheetHeightMm) / 1_000_000;
-                      const perSheet = Math.round(area * mat.pricePerM2Pln);
+                      const perUnit = isLinear
+                        ? Math.round(((mat.barLengthMm ?? 3000) / 1000) * (mat.pricePerLinearMPln ?? 14))
+                        : Math.round(area * mat.pricePerM2Pln);
+
                       return (
                         <tr key={mat.id} className="text-zinc-200">
                           <td className="py-2 pr-2">
@@ -473,73 +715,129 @@ export const MaterialsManagerModal: React.FC<MaterialsManagerModalProps> = ({
                                   {mat.name}
                                   {mat.isCustom && (
                                     <span className="ml-1.5 text-[10px] font-semibold text-emerald-400">
-                                      WŁASNA
+                                      WŁASNY
                                     </span>
                                   )}
                                 </div>
                                 <div className="text-[10px] text-zinc-500">
                                   {mat.category} · {mat.defaultThicknessMm} mm
+                                  {isLinear ? ' · Liniowy (mb)' : ''}
                                   {mat.grainDirectional ? ' · Usłojenie' : ''}
                                 </div>
                               </div>
                             </div>
                           </td>
-                          <td className="py-2 px-2 text-right">
-                            <input
-                              type="number"
-                              min={500}
-                              max={4500}
-                              step={10}
-                              value={mat.sheetWidthMm}
-                              onChange={(e) => {
-                                const v = Number(e.target.value);
-                                if (isBuiltIn) {
-                                  updateBuiltInField(mat.id as BuiltInMaterialId, 'sheetWidthMm', v);
-                                } else {
-                                  updateCustomField(mat.id, 'sheetWidthMm', v);
-                                }
-                              }}
-                              className="w-20 rounded-md border border-zinc-800 bg-zinc-900 px-2 py-1 text-right font-mono-num text-xs text-white focus:border-amber-500 focus:outline-none"
-                            />
+
+                          <td className="py-2 px-2 text-right whitespace-nowrap">
+                            {isLinear ? (
+                              <div className="inline-flex items-center gap-1">
+                                <span className="text-[10px] text-zinc-500">dł.</span>
+                                <input
+                                  type="number"
+                                  min={500}
+                                  max={12000}
+                                  step={100}
+                                  value={mat.barLengthMm ?? 3000}
+                                  onChange={(e) => {
+                                    const v = Number(e.target.value);
+                                    if (isBuiltIn) {
+                                      updateBuiltInField(mat.id as BuiltInMaterialId, 'barLengthMm', v);
+                                    } else {
+                                      updateCustomField(mat.id, 'barLengthMm', v);
+                                    }
+                                  }}
+                                  className="w-20 rounded-md border border-zinc-800 bg-zinc-900 px-2 py-1 text-right font-mono-num text-xs text-white focus:border-amber-500 focus:outline-none"
+                                />
+                              </div>
+                            ) : (
+                              <div className="inline-flex items-center gap-1">
+                                <input
+                                  type="number"
+                                  min={200}
+                                  max={6000}
+                                  step={10}
+                                  value={mat.sheetWidthMm}
+                                  onChange={(e) => {
+                                    const v = Number(e.target.value);
+                                    if (isBuiltIn) {
+                                      updateBuiltInField(mat.id as BuiltInMaterialId, 'sheetWidthMm', v);
+                                    } else {
+                                      updateCustomField(mat.id, 'sheetWidthMm', v);
+                                    }
+                                  }}
+                                  className="w-16 sm:w-20 rounded-md border border-zinc-800 bg-zinc-900 px-1.5 py-1 text-right font-mono-num text-xs text-white focus:border-amber-500 focus:outline-none"
+                                />
+                                <span className="text-zinc-600">×</span>
+                                <input
+                                  type="number"
+                                  min={100}
+                                  max={4000}
+                                  step={10}
+                                  value={mat.sheetHeightMm}
+                                  onChange={(e) => {
+                                    const v = Number(e.target.value);
+                                    if (isBuiltIn) {
+                                      updateBuiltInField(mat.id as BuiltInMaterialId, 'sheetHeightMm', v);
+                                    } else {
+                                      updateCustomField(mat.id, 'sheetHeightMm', v);
+                                    }
+                                  }}
+                                  className="w-16 sm:w-20 rounded-md border border-zinc-800 bg-zinc-900 px-1.5 py-1 text-right font-mono-num text-xs text-white focus:border-amber-500 focus:outline-none"
+                                />
+                              </div>
+                            )}
                           </td>
-                          <td className="py-2 px-2 text-right">
-                            <input
-                              type="number"
-                              min={300}
-                              max={3000}
-                              step={10}
-                              value={mat.sheetHeightMm}
-                              onChange={(e) => {
-                                const v = Number(e.target.value);
-                                if (isBuiltIn) {
-                                  updateBuiltInField(mat.id as BuiltInMaterialId, 'sheetHeightMm', v);
-                                } else {
-                                  updateCustomField(mat.id, 'sheetHeightMm', v);
-                                }
-                              }}
-                              className="w-20 rounded-md border border-zinc-800 bg-zinc-900 px-2 py-1 text-right font-mono-num text-xs text-white focus:border-amber-500 focus:outline-none"
-                            />
+
+                          <td className="py-2 px-2 text-right whitespace-nowrap">
+                            {isLinear ? (
+                              <div className="inline-flex items-center gap-1">
+                                <input
+                                  type="number"
+                                  min={1}
+                                  max={2000}
+                                  value={mat.pricePerLinearMPln ?? 14}
+                                  onChange={(e) => {
+                                    const v = Number(e.target.value);
+                                    if (isBuiltIn) {
+                                      updateBuiltInField(
+                                        mat.id as BuiltInMaterialId,
+                                        'pricePerLinearMPln',
+                                        v
+                                      );
+                                    } else {
+                                      updateCustomField(mat.id, 'pricePerLinearMPln', v);
+                                    }
+                                  }}
+                                  className="w-16 rounded-md border border-zinc-800 bg-zinc-900 px-2 py-1 text-right font-mono-num text-xs font-semibold text-amber-300 focus:border-amber-500 focus:outline-none"
+                                />
+                                <span className="text-[10px] text-zinc-500">zł/mb</span>
+                              </div>
+                            ) : (
+                              <div className="inline-flex items-center gap-1">
+                                <input
+                                  type="number"
+                                  min={1}
+                                  max={5000}
+                                  value={mat.pricePerM2Pln}
+                                  onChange={(e) => {
+                                    const v = Number(e.target.value);
+                                    if (isBuiltIn) {
+                                      updateBuiltInField(mat.id as BuiltInMaterialId, 'pricePerM2Pln', v);
+                                    } else {
+                                      updateCustomField(mat.id, 'pricePerM2Pln', v);
+                                    }
+                                  }}
+                                  className="w-16 rounded-md border border-zinc-800 bg-zinc-900 px-2 py-1 text-right font-mono-num text-xs font-semibold text-amber-300 focus:border-amber-500 focus:outline-none"
+                                />
+                                <span className="text-[10px] text-zinc-500">zł/m²</span>
+                              </div>
+                            )}
                           </td>
-                          <td className="py-2 px-2 text-right">
-                            <input
-                              type="number"
-                              min={1}
-                              max={5000}
-                              value={mat.pricePerM2Pln}
-                              onChange={(e) => {
-                                const v = Number(e.target.value);
-                                if (isBuiltIn) {
-                                  updateBuiltInField(mat.id as BuiltInMaterialId, 'pricePerM2Pln', v);
-                                } else {
-                                  updateCustomField(mat.id, 'pricePerM2Pln', v);
-                                }
-                              }}
-                              className="w-20 rounded-md border border-zinc-800 bg-zinc-900 px-2 py-1 text-right font-mono-num text-xs font-semibold text-amber-300 focus:border-amber-500 focus:outline-none"
-                            />
-                          </td>
+
                           <td className="py-2 px-2 text-right font-mono-num text-zinc-400 whitespace-nowrap">
-                            ~{perSheet} zł
+                            ~{perUnit} zł{isLinear ? '/szt' : '/ark'}
                           </td>
+
                           <td className="py-2 pl-2 text-right">
                             <div className="inline-flex items-center gap-1">
                               <button
@@ -548,7 +846,7 @@ export const MaterialsManagerModal: React.FC<MaterialsManagerModalProps> = ({
                                   setUploadTargetId(mat.id);
                                   rowFileRef.current?.click();
                                 }}
-                                title="Wgraj zdjęcie własnej płyty jako teksturę 3D"
+                                title="Wgraj zdjęcie własnej tekstury 3D"
                                 className="flex h-7 w-7 items-center justify-center rounded-md border border-zinc-800 bg-zinc-900 text-zinc-400 hover:border-amber-500/60 hover:text-amber-300 cursor-pointer"
                               >
                                 <ImagePlus className="h-3.5 w-3.5" />
@@ -557,7 +855,7 @@ export const MaterialsManagerModal: React.FC<MaterialsManagerModalProps> = ({
                                 <button
                                   type="button"
                                   onClick={() => deleteCustomMaterial(mat.id)}
-                                  title="Usuń własną płytę z katalogu"
+                                  title="Usuń własny materiał z katalogu"
                                   className="flex h-7 w-7 items-center justify-center rounded-md border border-zinc-800 bg-zinc-900 text-zinc-400 hover:border-red-500/60 hover:text-red-400 cursor-pointer"
                                 >
                                   <Trash2 className="h-3.5 w-3.5" />
