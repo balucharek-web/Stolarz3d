@@ -26,6 +26,7 @@ import {
   Unlock,
   X,
 } from 'lucide-react';
+import { NumericInput } from './NumericInput';
 import {
   DrawerSlideType,
   EdgeBandingThickness,
@@ -143,26 +144,28 @@ function NumberStepper({
         <span>{label}</span>
         <span className="font-mono-num text-zinc-500">{unit}</span>
       </div>
-      <div className="flex items-center rounded-lg border border-zinc-800 bg-zinc-900 overflow-hidden">
+      <div className="flex items-center rounded-lg border border-zinc-800 bg-zinc-900 overflow-hidden focus-within:border-amber-500">
         <button
           type="button"
+          onMouseDown={(e) => e.preventDefault()}
           onClick={() => onChange(clamp(value - step))}
           className="flex h-9 w-8 items-center justify-center text-zinc-400 hover:bg-zinc-800 hover:text-white cursor-pointer shrink-0"
           aria-label={`Zmniejsz ${label}`}
         >
           <Minus className="h-3.5 w-3.5" />
         </button>
-        <input
-          type="number"
+        <NumericInput
           value={value}
-          onChange={(e) => {
-            const parsed = Number(e.target.value);
-            if (!Number.isNaN(parsed)) onChange(clamp(parsed));
-          }}
+          min={min}
+          max={max}
+          step={step}
+          ariaLabel={label}
+          onChange={onChange}
           className="w-full min-w-0 bg-transparent text-center text-xs font-medium text-zinc-100 font-mono-num focus:outline-none py-1.5"
         />
         <button
           type="button"
+          onMouseDown={(e) => e.preventDefault()}
           onClick={() => onChange(clamp(value + step))}
           className="flex h-9 w-8 items-center justify-center text-zinc-400 hover:bg-zinc-800 hover:text-white cursor-pointer shrink-0"
           aria-label={`Zwiększ ${label}`}
@@ -424,18 +427,18 @@ export const InspectorDrawer: React.FC<InspectorDrawerProps> = ({
   return (
     <>
       <div
-        className="sm:hidden fixed inset-0 z-30 bg-black/40"
+        className="sm:hidden fixed inset-0 z-30 bg-black/50 backdrop-blur-[2px]"
         onClick={onClose}
         aria-hidden="true"
       />
-      <aside className="fixed inset-x-0 bottom-0 sm:inset-x-auto sm:top-14 sm:right-3 sm:bottom-20 z-40 flex max-h-[82dvh] sm:max-h-[calc(100dvh-140px)] sm:w-[min(352px,calc(100vw-24px))] flex-col overflow-hidden rounded-t-2xl sm:rounded-2xl border border-zinc-800 bg-[#141518] text-zinc-100 shadow-2xl">
+      <aside className="studio-sheet animate-studio-sheet fixed inset-x-0 bottom-0 sm:inset-x-auto sm:top-[62px] sm:right-3.5 sm:bottom-20 z-40 flex max-h-[84dvh] sm:max-h-[calc(100dvh-146px)] sm:w-[min(356px,calc(100vw-24px))] flex-col overflow-hidden rounded-t-3xl sm:rounded-2xl text-zinc-100">
         {/* Mobile grab handle */}
         <div className="sm:hidden flex justify-center pt-2.5 pb-1">
-          <div className="h-1 w-10 rounded-full bg-zinc-700" />
+          <div className="h-1 w-10 rounded-full bg-white/20" />
         </div>
 
         {/* Header */}
-        <div className="flex items-center justify-between gap-2 border-b border-zinc-800 px-3.5 py-2.5">
+        <div className="flex items-center justify-between gap-2 border-b border-white/[0.08] px-4 py-3">
           <div className="min-w-0">
             <h2 className="text-sm font-semibold text-white truncate">
               {showBatchView
@@ -456,10 +459,10 @@ export const InspectorDrawer: React.FC<InspectorDrawerProps> = ({
                   ? onBatchUpdateParts(selectedIds, { hidden: !selectedParts.every((p) => p.hidden) })
                   : onUpdatePart(part.id, { hidden: !part.hidden })
               }
-              className={`flex h-8 w-8 items-center justify-center rounded-lg transition-colors cursor-pointer ${
+              className={`flex h-8 w-8 items-center justify-center rounded-xl transition-colors cursor-pointer ${
                 part.hidden
                   ? 'bg-amber-500/15 text-amber-300'
-                  : 'text-zinc-400 hover:bg-zinc-800 hover:text-white'
+                  : 'text-zinc-400 hover:bg-white/[0.08] hover:text-white'
               }`}
               title={part.hidden ? 'Pokaż w 3D' : 'Ukryj w 3D'}
               aria-label="Przełącz widoczność"
@@ -473,10 +476,10 @@ export const InspectorDrawer: React.FC<InspectorDrawerProps> = ({
                   ? onBatchUpdateParts(selectedIds, { locked: !selectedParts.every((p) => p.locked) })
                   : onUpdatePart(part.id, { locked: !part.locked })
               }
-              className={`flex h-8 w-8 items-center justify-center rounded-lg transition-colors cursor-pointer ${
+              className={`flex h-8 w-8 items-center justify-center rounded-xl transition-colors cursor-pointer ${
                 part.locked
                   ? 'bg-sky-500/15 text-sky-300'
-                  : 'text-zinc-400 hover:bg-zinc-800 hover:text-white'
+                  : 'text-zinc-400 hover:bg-white/[0.08] hover:text-white'
               }`}
               title={part.locked ? 'Odblokuj ruch' : 'Zablokuj ruch'}
               aria-label="Przełącz blokadę ruchu"
@@ -486,7 +489,7 @@ export const InspectorDrawer: React.FC<InspectorDrawerProps> = ({
             <button
               type="button"
               onClick={onClose}
-              className="flex h-8 w-8 items-center justify-center rounded-lg text-zinc-400 hover:bg-zinc-800 hover:text-white cursor-pointer"
+              className="flex h-8 w-8 items-center justify-center rounded-xl text-zinc-400 hover:bg-white/[0.08] hover:text-white transition-colors cursor-pointer"
               aria-label="Zamknij panel właściwości"
             >
               <X className="h-4 w-4" />
@@ -981,14 +984,18 @@ export const InspectorDrawer: React.FC<InspectorDrawerProps> = ({
                                 {CLEARANCE_ARROWS[c.direction]}
                               </span>
                               <input
-                                type="number"
-                                min={0}
-                                max={5000}
+                                type="text"
+                                inputMode="numeric"
+                                autoComplete="off"
                                 autoFocus
                                 value={clearanceDraft}
                                 onChange={(e) => setClearanceDraft(e.target.value)}
                                 onKeyDown={(e) => {
-                                  if (e.key === 'Escape') setEditingClearanceDir(null);
+                                  if (e.key === 'Backspace' || e.key === 'Delete') {
+                                    e.stopPropagation();
+                                  } else if (e.key === 'Escape') {
+                                    setEditingClearanceDir(null);
+                                  }
                                 }}
                                 className="w-16 rounded border border-zinc-700 bg-zinc-900 px-1.5 py-0.5 text-xs font-mono-num text-white focus:border-sky-400 focus:outline-none"
                               />
@@ -1352,38 +1359,35 @@ export const InspectorDrawer: React.FC<InspectorDrawerProps> = ({
                     <div className="grid grid-cols-3 gap-1.5">
                       <label>
                         <span className="text-[10px] text-zinc-400">Szer. S</span>
-                        <input
-                          type="number"
+                        <NumericInput
                           min={150}
                           max={4000}
                           step={20}
                           value={grpW ?? groupBounds.width}
-                          onChange={(e) => setGrpW(Number(e.target.value) || groupBounds.width)}
-                          className="mt-0.5 w-full rounded border border-zinc-700 bg-zinc-950 px-1.5 py-1 text-center text-xs font-mono-num text-white"
+                          onChange={(val) => setGrpW(val)}
+                          className="mt-0.5 w-full rounded border border-zinc-700 bg-zinc-950 px-1.5 py-1 text-center text-xs font-mono-num text-white focus:border-amber-500 focus:outline-none"
                         />
                       </label>
                       <label>
                         <span className="text-[10px] text-zinc-400">Wys. W</span>
-                        <input
-                          type="number"
+                        <NumericInput
                           min={150}
                           max={3000}
                           step={20}
                           value={grpH ?? groupBounds.height}
-                          onChange={(e) => setGrpH(Number(e.target.value) || groupBounds.height)}
-                          className="mt-0.5 w-full rounded border border-zinc-700 bg-zinc-950 px-1.5 py-1 text-center text-xs font-mono-num text-white"
+                          onChange={(val) => setGrpH(val)}
+                          className="mt-0.5 w-full rounded border border-zinc-700 bg-zinc-950 px-1.5 py-1 text-center text-xs font-mono-num text-white focus:border-amber-500 focus:outline-none"
                         />
                       </label>
                       <label>
                         <span className="text-[10px] text-zinc-400">Głęb. G</span>
-                        <input
-                          type="number"
+                        <NumericInput
                           min={150}
                           max={1500}
                           step={10}
                           value={grpD ?? groupBounds.depth}
-                          onChange={(e) => setGrpD(Number(e.target.value) || groupBounds.depth)}
-                          className="mt-0.5 w-full rounded border border-zinc-700 bg-zinc-950 px-1.5 py-1 text-center text-xs font-mono-num text-white"
+                          onChange={(val) => setGrpD(val)}
+                          className="mt-0.5 w-full rounded border border-zinc-700 bg-zinc-950 px-1.5 py-1 text-center text-xs font-mono-num text-white focus:border-amber-500 focus:outline-none"
                         />
                       </label>
                     </div>
@@ -1892,40 +1896,38 @@ export const InspectorDrawer: React.FC<InspectorDrawerProps> = ({
                       </label>
                       <label>
                         <span className="text-[10px] text-zinc-500">Odsunięcie</span>
-                        <input
-                          type="number"
+                        <NumericInput
                           min={15}
                           max={300}
                           step={5}
                           value={part.ledGroove.insetMm}
-                          onChange={(e) =>
+                          onChange={(val) =>
                             onUpdatePart(part.id, {
                               ledGroove: {
                                 ...part.ledGroove!,
-                                insetMm: Math.max(15, Number(e.target.value) || 45),
+                                insetMm: val,
                               },
                             })
                           }
-                          className="w-full rounded border border-zinc-800 bg-zinc-950 px-1.5 py-1 text-[11px] font-mono-num text-white"
+                          className="w-full rounded border border-zinc-800 bg-zinc-950 px-1.5 py-1 text-[11px] font-mono-num text-white focus:border-amber-500 focus:outline-none"
                         />
                       </label>
                       <label>
                         <span className="text-[10px] text-zinc-500">Szer. [mm]</span>
-                        <input
-                          type="number"
+                        <NumericInput
                           min={8}
                           max={20}
                           step={2}
                           value={part.ledGroove.widthMm}
-                          onChange={(e) =>
+                          onChange={(val) =>
                             onUpdatePart(part.id, {
                               ledGroove: {
                                 ...part.ledGroove!,
-                                widthMm: Math.max(8, Number(e.target.value) || 10),
+                                widthMm: val,
                               },
                             })
                           }
-                          className="w-full rounded border border-zinc-800 bg-zinc-950 px-1.5 py-1 text-[11px] font-mono-num text-white"
+                          className="w-full rounded border border-zinc-800 bg-zinc-950 px-1.5 py-1 text-[11px] font-mono-num text-white focus:border-amber-500 focus:outline-none"
                         />
                       </label>
                     </div>
@@ -2025,38 +2027,42 @@ export const InspectorDrawer: React.FC<InspectorDrawerProps> = ({
                     <div className="grid grid-cols-4 gap-1.5">
                       <label>
                         <span className="text-[10px] text-zinc-500">Szer.</span>
-                        <input
-                          type="number"
+                        <NumericInput
+                          min={20}
+                          max={3000}
+                          step={10}
                           value={newCutW}
-                          onChange={(e) => setNewCutW(Number(e.target.value) || 100)}
-                          className="w-full rounded border border-zinc-800 bg-zinc-950 px-1.5 py-1 text-[11px] font-mono-num text-white"
+                          onChange={(val) => setNewCutW(val)}
+                          className="w-full rounded border border-zinc-800 bg-zinc-950 px-1.5 py-1 text-[11px] font-mono-num text-white focus:border-amber-500 focus:outline-none"
                         />
                       </label>
                       <label>
                         <span className="text-[10px] text-zinc-500">Gł./Wys.</span>
-                        <input
-                          type="number"
+                        <NumericInput
+                          min={20}
+                          max={3000}
+                          step={10}
                           value={newCutH}
-                          onChange={(e) => setNewCutH(Number(e.target.value) || 100)}
-                          className="w-full rounded border border-zinc-800 bg-zinc-950 px-1.5 py-1 text-[11px] font-mono-num text-white"
+                          onChange={(val) => setNewCutH(val)}
+                          className="w-full rounded border border-zinc-800 bg-zinc-950 px-1.5 py-1 text-[11px] font-mono-num text-white focus:border-amber-500 focus:outline-none"
                         />
                       </label>
                       <label>
                         <span className="text-[10px] text-zinc-500">Przes. X</span>
-                        <input
-                          type="number"
+                        <NumericInput
+                          step={10}
                           value={newCutX}
-                          onChange={(e) => setNewCutX(Number(e.target.value) || 0)}
-                          className="w-full rounded border border-zinc-800 bg-zinc-950 px-1.5 py-1 text-[11px] font-mono-num text-white"
+                          onChange={(val) => setNewCutX(val)}
+                          className="w-full rounded border border-zinc-800 bg-zinc-950 px-1.5 py-1 text-[11px] font-mono-num text-white focus:border-amber-500 focus:outline-none"
                         />
                       </label>
                       <label>
                         <span className="text-[10px] text-zinc-500">Przes. Y</span>
-                        <input
-                          type="number"
+                        <NumericInput
+                          step={10}
                           value={newCutY}
-                          onChange={(e) => setNewCutY(Number(e.target.value) || 0)}
-                          className="w-full rounded border border-zinc-800 bg-zinc-950 px-1.5 py-1 text-[11px] font-mono-num text-white"
+                          onChange={(val) => setNewCutY(val)}
+                          className="w-full rounded border border-zinc-800 bg-zinc-950 px-1.5 py-1 text-[11px] font-mono-num text-white focus:border-amber-500 focus:outline-none"
                         />
                       </label>
                     </div>
@@ -2064,29 +2070,31 @@ export const InspectorDrawer: React.FC<InspectorDrawerProps> = ({
                     <div className="grid grid-cols-3 gap-1.5">
                       <label>
                         <span className="text-[10px] text-zinc-500">Średnica Ø</span>
-                        <input
-                          type="number"
+                        <NumericInput
+                          min={12}
+                          max={2000}
+                          step={5}
                           value={newCutDia}
-                          onChange={(e) => setNewCutDia(Number(e.target.value) || 60)}
-                          className="w-full rounded border border-zinc-800 bg-zinc-950 px-1.5 py-1 text-[11px] font-mono-num text-white"
+                          onChange={(val) => setNewCutDia(val)}
+                          className="w-full rounded border border-zinc-800 bg-zinc-950 px-1.5 py-1 text-[11px] font-mono-num text-white focus:border-amber-500 focus:outline-none"
                         />
                       </label>
                       <label>
                         <span className="text-[10px] text-zinc-500">Przes. X</span>
-                        <input
-                          type="number"
+                        <NumericInput
+                          step={10}
                           value={newCutX}
-                          onChange={(e) => setNewCutX(Number(e.target.value) || 0)}
-                          className="w-full rounded border border-zinc-800 bg-zinc-950 px-1.5 py-1 text-[11px] font-mono-num text-white"
+                          onChange={(val) => setNewCutX(val)}
+                          className="w-full rounded border border-zinc-800 bg-zinc-950 px-1.5 py-1 text-[11px] font-mono-num text-white focus:border-amber-500 focus:outline-none"
                         />
                       </label>
                       <label>
                         <span className="text-[10px] text-zinc-500">Przes. Y</span>
-                        <input
-                          type="number"
+                        <NumericInput
+                          step={10}
                           value={newCutY}
-                          onChange={(e) => setNewCutY(Number(e.target.value) || 0)}
-                          className="w-full rounded border border-zinc-800 bg-zinc-950 px-1.5 py-1 text-[11px] font-mono-num text-white"
+                          onChange={(val) => setNewCutY(val)}
+                          className="w-full rounded border border-zinc-800 bg-zinc-950 px-1.5 py-1 text-[11px] font-mono-num text-white focus:border-amber-500 focus:outline-none"
                         />
                       </label>
                     </div>
@@ -2203,32 +2211,23 @@ export const InspectorDrawer: React.FC<InspectorDrawerProps> = ({
                   <div className="flex items-center gap-1.5">
                     <label className="flex-1">
                       <span className="text-[10px] text-zinc-500">Nowych półek</span>
-                      <input
-                        type="number"
+                      <NumericInput
                         min={1}
                         max={8}
+                        step={1}
                         value={shelfCopies}
-                        onChange={(e) => {
-                          const v = Number(e.target.value);
-                          if (!Number.isNaN(v))
-                            setShelfCopies(Math.max(1, Math.min(8, Math.round(v))));
-                        }}
+                        onChange={(val) => setShelfCopies(val)}
                         className="mt-0.5 w-full rounded-md border border-zinc-800 bg-zinc-950 px-2 py-1 text-center text-xs font-mono-num text-white focus:border-amber-500 focus:outline-none"
                       />
                     </label>
                     <label className="flex-1">
                       <span className="text-[10px] text-zinc-500">Zakres (mm)</span>
-                      <input
-                        type="number"
+                      <NumericInput
                         min={150}
                         max={2800}
                         step={50}
                         value={shelfSpanMm}
-                        onChange={(e) => {
-                          const v = Number(e.target.value);
-                          if (!Number.isNaN(v))
-                            setShelfSpanMm(Math.max(150, Math.min(2800, Math.round(v))));
-                        }}
+                        onChange={(val) => setShelfSpanMm(val)}
                         className="mt-0.5 w-full rounded-md border border-zinc-800 bg-zinc-950 px-2 py-1 text-center text-xs font-mono-num text-white focus:border-amber-500 focus:outline-none"
                       />
                     </label>

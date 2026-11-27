@@ -11,6 +11,7 @@ import {
   LayoutPanelTop,
   Plus,
   RefreshCw,
+  Search,
   Undo2,
   X,
 } from 'lucide-react';
@@ -20,7 +21,8 @@ import {
   signOut,
   type User,
 } from 'firebase/auth';
-import { auth, googleProvider } from './firebase';
+import { enableNetwork } from 'firebase/firestore';
+import { auth, db, googleProvider, isFirestoreOfflineError } from './firebase';
 import {
   deleteCloudProject,
   deleteCloudTemplate,
@@ -117,6 +119,7 @@ import {
   PartsTemplatesDrawer,
   type LeftDrawerMode,
 } from './components/PartsTemplatesDrawer';
+import { CommandPaletteModal } from './components/CommandPaletteModal';
 import { CutListModal } from './components/CutListModal';
 import { ShapeSketchModal } from './components/ShapeSketchModal';
 import { RoomSettingsModal } from './components/RoomSettingsModal';
@@ -238,6 +241,7 @@ export default function App() {
   });
   const [contextMenu, setContextMenu] = useState<ContextMenuTarget | null>(null);
   const [shortcutsOpen, setShortcutsOpen] = useState<boolean>(false);
+  const [commandPaletteOpen, setCommandPaletteOpen] = useState<boolean>(false);
   const [multiSelectMode, setMultiSelectMode] = useState<boolean>(false);
   const [uiMode, setUiMode] = useState<UiMode>(() => {
     try {
@@ -261,6 +265,8 @@ export default function App() {
   const [cloudProjectsCount, setCloudProjectsCount] = useState<number>(0);
   const [cloudTemplates, setCloudTemplates] = useState<FurnitureTemplateMeta[]>([]);
   const [cloudTemplatesLoading, setCloudTemplatesLoading] = useState<boolean>(false);
+  const [cloudTemplatesError, setCloudTemplatesError] = useState<string | null>(null);
+  const [cloudReconnectNonce, setCloudReconnectNonce] = useState<number>(0);
   const [lastCloudSyncedAt, setLastCloudSyncedAt] = useState<number | null>(null);
 
   const cloudKnownIdsRef = useRef<Set<string>>(new Set());
@@ -328,6 +334,9 @@ export default function App() {
     if (raw.includes('Quota exceeded')) {
       return 'Przekroczono dzienny darmowy limit odczytów/zapisów Firebase (Spark). Limit odnowi się jutro.';
     }
+    if (isFirestoreOfflineError(err) || raw.includes('client is offline') || raw.includes('unavailable')) {
+      return 'Chwilowy brak połączenia z bazą Firebase (tryb offline). Aplikacja połączy się automatycznie po odzyskaniu sieci.';
+    }
     return raw;
   }, []);
 
@@ -346,6 +355,7 @@ export default function App() {
         setCloudProjectsCount(0);
         setCloudTemplates([]);
         setCloudTemplatesLoading(false);
+        setCloudTemplatesError(null);
         setCloudSyncStatus('signed_out');
         setCloudSyncError(null);
       }
@@ -366,6 +376,7 @@ export default function App() {
     setCloudSyncStatus('connecting');
     setCloudSyncError(null);
     setCloudTemplatesLoading(true);
+    setCloudTemplatesError(null);
     cloudInitialMergeDoneRef.current = false;
     cloudProfileReadyRef.current = false;
     cloudTemplatesSeededRef.current = false;
@@ -511,14 +522,17 @@ export default function App() {
           uid,
           (tpls) => {
             if (cancelled) return;
+            setCloudTemplatesError(null);
             if (tpls.length === 0 && !cloudTemplatesSeededRef.current) {
               cloudTemplatesSeededRef.current = true;
               setCloudTemplatesLoading(true);
               void seedStarterTemplatesToCloud(uid, FURNITURE_TEMPLATES).catch((err) => {
                 if (!cancelled) {
+                  const msg = formatCloudError(err);
                   setCloudTemplatesLoading(false);
+                  setCloudTemplatesError(msg);
                   setCloudSyncStatus('error');
-                  setCloudSyncError(formatCloudError(err));
+                  setCloudSyncError(msg);
                 }
               });
               return;
@@ -528,16 +542,20 @@ export default function App() {
           },
           (err) => {
             if (cancelled) return;
+            const msg = formatCloudError(err);
             setCloudTemplatesLoading(false);
+            setCloudTemplatesError(msg);
             setCloudSyncStatus('error');
-            setCloudSyncError(formatCloudError(err));
+            setCloudSyncError(msg);
           }
         );
       } catch (err) {
         if (!cancelled) {
+          const msg = formatCloudError(err);
           setCloudTemplatesLoading(false);
+          setCloudTemplatesError(msg);
           setCloudSyncStatus('error');
-          setCloudSyncError(formatCloudError(err));
+          setCloudSyncError(msg);
         }
       }
     })();
@@ -548,7 +566,25 @@ export default function App() {
       unsubSettings?.();
       unsubTemplates?.();
     };
-  }, [cloudAuthReady, cloudUser, formatCloudError]);
+  }, [cloudAuthReady, cloudUser, cloudReconnectNonce, formatCloudError]);
+
+  // Auto-reconnect Firestore cleanly when device regains network or returns to foreground
+  useEffect(() => {
+    if (!cloudUser) return;
+    const handleReconnect = () => {
+      if (document.visibilityState === 'hidden') return;
+      if (cloudSyncStatus === 'error') {
+        void enableNetwork(db).catch(() => {});
+        setCloudReconnectNonce((n) => n + 1);
+      }
+    };
+    window.addEventListener('online', handleReconnect);
+    document.addEventListener('visibilitychange', handleReconnect);
+    return () => {
+      window.removeEventListener('online', handleReconnect);
+      document.removeEventListener('visibilitychange', handleReconnect);
+    };
+  }, [cloudUser, cloudSyncStatus]);
 
   // Debounced background auto-save of the active project to Firestore
   useEffect(() => {
@@ -657,13 +693,24 @@ export default function App() {
       );
       setCloudSyncStatus('synced');
       setLastCloudSyncedAt(Date.now());
+      if (cloudTemplatesError) {
+        setCloudReconnectNonce((n) => n + 1);
+      }
       showToast(`Zapisano ${toUpload.length} proj. i katalog materiałów w chmurze`);
     } catch (err) {
       setCloudSyncStatus('error');
       setCloudSyncError(formatCloudError(err));
       showToast('Błąd zapisu do Firebase — sprawdź szczegóły w panelu Chmury');
     }
-  }, [cloudUser, formatCloudError, showToast]);
+  }, [cloudUser, cloudTemplatesError, formatCloudError, showToast]);
+
+  const handleCloudRetrySync = useCallback(() => {
+    if (!cloudUser) return;
+    setCloudSyncError(null);
+    setCloudTemplatesError(null);
+    setCloudReconnectNonce((n) => n + 1);
+    showToast('Ponawianie połączenia z bazą Firestore...');
+  }, [cloudUser, showToast]);
 
   const handleSaveCurrentAsTemplate = useCallback(async () => {
     if (!cloudUser || project.parts.length === 0) return;
@@ -1854,11 +1901,18 @@ export default function App() {
     materialsModalOpen ||
     roomModalOpen ||
     shortcutsOpen ||
+    commandPaletteOpen ||
     cloudModalOpen;
 
   // Isolated Keyboard shortcuts for fast desktop CAD workflow
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        setCommandPaletteOpen((open) => !open);
+        return;
+      }
+
       const target = e.target as HTMLElement | null;
       if (
         target &&
@@ -1870,6 +1924,10 @@ export default function App() {
       }
 
       if (e.key === 'Escape') {
+        if (commandPaletteOpen) {
+          setCommandPaletteOpen(false);
+          return;
+        }
         if (cloudModalOpen) {
           setCloudModalOpen(false);
           return;
@@ -2025,6 +2083,7 @@ export default function App() {
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [
     anyModalOpen,
+    commandPaletteOpen,
     cloudModalOpen,
     shortcutsOpen,
     roomModalOpen,
@@ -2232,80 +2291,131 @@ export default function App() {
 
   return (
     <div className="relative h-[100dvh] w-screen overflow-hidden bg-[#EAECEF]">
-      {/* Minimal 3-Zone Top Bar (Height 48px — stays slim & overflow-safe on mobile & desktop) */}
-      <header className="fixed top-0 inset-x-0 z-30 flex h-12 max-w-full items-center justify-between gap-2 lg:gap-4 border-b border-zinc-800 bg-[#141518] px-2.5 sm:px-4 text-zinc-100 overflow-hidden">
-        {/* Zone 1: Single-line Brand Wordmark (opens Start Launcher) */}
+      {/* Atelier Studio 3-Zone Top Bar (48px mobile / 52px desktop — single dominant brass CTA) */}
+      <header className="fixed top-0 inset-x-0 z-30 flex h-12 md:h-[52px] max-w-full items-center justify-between gap-2 lg:gap-4 border-b border-white/[0.08] bg-[#101216]/94 backdrop-blur-xl px-2.5 sm:px-4 text-zinc-100 overflow-hidden">
+        {/* Zone 1: Clean Geometric Brand Wordmark (opens Start Launcher) */}
         <button
           type="button"
           onClick={() => setStartModalOpen(true)}
-          className="text-sm sm:text-base font-bold tracking-tight text-white hover:text-amber-300 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+          className="group flex items-center gap-2 text-sm sm:text-[15px] font-semibold tracking-tight text-white hover:text-amber-300 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
           title="Ekran startowy — pomieszczenie, nowy mebel, szkic lub szablon"
         >
-          Stolarz 3D
+          <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-amber-500/15 text-amber-400 border border-amber-400/25 group-hover:bg-amber-500/25 transition-colors shrink-0">
+            <svg
+              width="15"
+              height="15"
+              viewBox="0 0 20 20"
+              fill="none"
+              aria-hidden="true"
+            >
+              <path
+                d="M3 4.5L10 2L17 4.5V15.5L10 18L3 15.5V4.5Z"
+                stroke="currentColor"
+                strokeWidth="1.8"
+                strokeLinejoin="round"
+              />
+              <path
+                d="M10 2V18M3 4.5L10 7.5L17 4.5"
+                stroke="currentColor"
+                strokeWidth="1.5"
+                strokeLinejoin="round"
+              />
+            </svg>
+          </span>
+          <span>Stolarz 3D</span>
         </button>
 
-        {/* Zone 2: Clean Single-Line Nav Actions (Desktop — flex-1 min-w-0 prevents right-side clipping on PC) */}
-        <nav className="hidden md:flex flex-1 min-w-0 items-center justify-center gap-2.5 lg:gap-4 xl:gap-5 overflow-x-auto cad-scroll text-[11px] lg:text-xs font-medium text-zinc-300">
-          <button
-            type="button"
-            onClick={() =>
-              setLeftDrawerMode((m) => (m === 'projects' ? null : 'projects'))
-            }
-            className={`hover:text-white transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
-              leftDrawerMode === 'projects' ? 'text-amber-400' : ''
-            }`}
-          >
-            Projekty ({projectStore.projects.length})
-          </button>
-          <button
-            type="button"
-            onClick={() =>
-              setLeftDrawerMode((m) => (m === 'templates' ? null : 'templates'))
-            }
-            className={`hover:text-white transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
-              leftDrawerMode === 'templates' ? 'text-amber-400' : ''
-            }`}
-          >
-            Szablony
-          </button>
-          <button
-            type="button"
-            onClick={() =>
-              setLeftDrawerMode((m) => (m === 'parts' ? null : 'parts'))
-            }
-            className={`hover:text-white transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
-              leftDrawerMode === 'parts' ? 'text-amber-400' : ''
-            }`}
-          >
-            Scena ({project.parts.length})
-          </button>
-          <button
-            type="button"
-            onClick={() => setMaterialsModalOpen(true)}
-            className="hover:text-white transition-colors whitespace-nowrap shrink-0 cursor-pointer"
-          >
-            Materiały
-          </button>
-          <button
-            type="button"
-            onClick={() => setCutListOpen(true)}
-            className="hover:text-white transition-colors whitespace-nowrap shrink-0 cursor-pointer"
-          >
-            Rozkrój
-          </button>
+        {/* Zone 2: Clean Hairline Text Navigation (Desktop) */}
+        <nav className="hidden md:flex flex-1 min-w-0 h-full items-center justify-center gap-4 lg:gap-6 overflow-x-auto cad-scroll text-xs font-medium text-zinc-400">
+          {(
+            [
+              {
+                id: 'projects' as const,
+                label: 'Projekty',
+                count: projectStore.projects.length,
+                active: leftDrawerMode === 'projects',
+                onClick: () =>
+                  setLeftDrawerMode((m) => (m === 'projects' ? null : 'projects')),
+              },
+              {
+                id: 'templates' as const,
+                label: 'Szablony',
+                active: leftDrawerMode === 'templates',
+                onClick: () =>
+                  setLeftDrawerMode((m) => (m === 'templates' ? null : 'templates')),
+              },
+              {
+                id: 'parts' as const,
+                label: 'Scena',
+                count: project.parts.length,
+                active: leftDrawerMode === 'parts',
+                onClick: () =>
+                  setLeftDrawerMode((m) => (m === 'parts' ? null : 'parts')),
+              },
+              {
+                id: 'materials' as const,
+                label: 'Materiały',
+                active: materialsModalOpen,
+                onClick: () => setMaterialsModalOpen(true),
+              },
+              {
+                id: 'cutlist' as const,
+                label: 'Rozkrój',
+                active: cutListOpen,
+                onClick: () => setCutListOpen(true),
+              },
+            ]
+          ).map((navItem) => (
+            <button
+              key={navItem.id}
+              type="button"
+              onClick={navItem.onClick}
+              className={`relative flex h-full items-center gap-1.5 transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                navItem.active ? 'text-white' : 'hover:text-zinc-100'
+              }`}
+            >
+              <span>{navItem.label}</span>
+              {typeof navItem.count === 'number' && (
+                <span className="text-[11px] font-mono-num text-zinc-500">
+                  {navItem.count}
+                </span>
+              )}
+              {navItem.active && (
+                <span
+                  aria-hidden="true"
+                  className="absolute bottom-0 inset-x-0 h-[2px] rounded-full bg-amber-400"
+                />
+              )}
+            </button>
+          ))}
         </nav>
 
-        {/* Zone 3: Clean Primary Actions (spacious on mobile, complete on desktop) */}
+        {/* Zone 3: Quiet Neutral Utilities + Single Primary Brass CTA */}
         <div className="flex items-center gap-1 sm:gap-1.5 shrink-0">
+          {/* Quick Command Palette Trigger (Ctrl+K) */}
+          <button
+            type="button"
+            onClick={() => setCommandPaletteOpen(true)}
+            className="hidden sm:flex min-h-[34px] items-center gap-1.5 rounded-xl border border-white/[0.08] bg-white/[0.04] px-2.5 text-xs text-zinc-400 hover:bg-white/[0.08] hover:text-zinc-100 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+            title="Szybkie polecenia i wyszukiwarka (Ctrl+K)"
+            aria-label="Otwórz szybkie polecenia (Ctrl+K)"
+          >
+            <Search className="h-3.5 w-3.5 shrink-0" />
+            <span className="hidden xl:inline">Szukaj...</span>
+            <kbd className="hidden lg:inline rounded bg-white/[0.07] px-1 py-0.5 text-[10px] font-mono-num text-zinc-500">
+              ⌘K
+            </kbd>
+          </button>
+
           <button
             type="button"
             onClick={() => setCloudModalOpen(true)}
-            className={`flex min-h-[34px] items-center gap-1.5 rounded-lg border px-2 sm:px-2.5 text-xs font-medium transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+            className={`flex min-h-[34px] items-center gap-1.5 rounded-xl border px-2 sm:px-2.5 text-xs font-medium transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
               cloudSyncStatus === 'error'
-                ? 'border-red-500/60 bg-red-500/15 text-red-300 hover:bg-red-500/25'
+                ? 'border-red-500/40 bg-red-500/15 text-red-200 hover:bg-red-500/25'
                 : cloudUser
-                  ? 'border-emerald-500/50 bg-emerald-500/12 text-emerald-300 hover:bg-emerald-500/20'
-                  : 'border-zinc-700 bg-zinc-900 text-zinc-200 hover:border-sky-500/60 hover:text-sky-300'
+                  ? 'border-white/[0.09] bg-white/[0.05] text-zinc-200 hover:bg-white/[0.1]'
+                  : 'border-white/[0.08] bg-white/[0.04] text-zinc-300 hover:bg-white/[0.09] hover:text-white'
             }`}
             title={
               cloudUser
@@ -2314,9 +2424,9 @@ export default function App() {
             }
           >
             {cloudSyncStatus === 'syncing' || cloudSyncStatus === 'connecting' ? (
-              <RefreshCw className="h-3.5 w-3.5 animate-spin shrink-0" />
+              <RefreshCw className="h-3.5 w-3.5 animate-spin text-amber-400 shrink-0" />
             ) : cloudUser ? (
-              <Cloud className="h-3.5 w-3.5 shrink-0" />
+              <Cloud className="h-3.5 w-3.5 text-emerald-400 shrink-0" />
             ) : (
               <CloudOff className="h-3.5 w-3.5 shrink-0 text-zinc-400" />
             )}
@@ -2324,42 +2434,46 @@ export default function App() {
               {cloudUser ? 'Chmura' : 'Zaloguj'}
             </span>
           </button>
+
           <PWAInstallButton
             needRefresh={pwa.needRefresh}
             checkStatus={pwa.checkStatus}
             onApplyUpdate={() => void pwa.applyUpdate()}
             onCheckForUpdate={() => void pwa.checkForUpdate()}
           />
+
           <button
             type="button"
             onClick={() => setRoomModalOpen(true)}
-            className={`flex min-h-[34px] items-center gap-1 rounded-lg border px-2 sm:px-2.5 text-xs font-medium transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+            className={`flex min-h-[34px] items-center gap-1.5 rounded-xl border px-2 sm:px-2.5 text-xs font-medium transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
               project.room?.enabled
-                ? 'border-sky-500/70 bg-sky-500/20 text-sky-200 hover:bg-sky-500/30 font-semibold'
-                : 'border-zinc-700 bg-zinc-900 text-zinc-200 hover:border-sky-500/50 hover:text-sky-300'
+                ? 'border-sky-400/40 bg-sky-500/15 text-sky-200 hover:bg-sky-500/25'
+                : 'border-white/[0.08] bg-white/[0.04] text-zinc-200 hover:bg-white/[0.09] hover:text-white'
             }`}
             title="Konfigurator pomieszczenia 2D/3D: rysowanie ścian, drzwi, okien, sanitariatów i przeszkód"
           >
             <Home className="h-3.5 w-3.5 shrink-0" />
             <span className="xl:hidden">Rzut 2D</span>
-            <span className="hidden xl:inline">Pomieszczenie 2D</span>
+            <span className="hidden xl:inline">Pokój 2D</span>
           </button>
+
           <button
             type="button"
             onClick={() => {
               setEditingCabinetGroupId(null);
               setCabinetBuilderOpen(true);
             }}
-            className="hidden sm:flex min-h-[34px] items-center gap-1 rounded-lg border border-emerald-500/50 bg-emerald-500/12 px-2.5 text-xs font-medium text-emerald-300 hover:bg-emerald-500/20 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+            className="hidden sm:flex min-h-[34px] items-center gap-1.5 rounded-xl border border-white/[0.08] bg-white/[0.04] px-2.5 text-xs font-medium text-zinc-200 hover:bg-white/[0.09] hover:text-white transition-colors whitespace-nowrap shrink-0 cursor-pointer"
             title="Kreator parametrycznej szafki, szuflad i frontów"
           >
-            <LayoutPanelTop className="h-3.5 w-3.5 shrink-0" />
+            <LayoutPanelTop className="h-3.5 w-3.5 text-amber-400 shrink-0" />
             <span>Szafka</span>
           </button>
+
           <button
             type="button"
             onClick={() => setAddPartOpen(true)}
-            className="flex min-h-[34px] items-center gap-1 rounded-lg bg-amber-500 px-2.5 sm:px-3 text-xs font-semibold text-zinc-950 hover:bg-amber-400 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+            className="flex min-h-[34px] items-center gap-1 rounded-xl bg-amber-500 px-3 text-xs font-semibold text-zinc-950 hover:bg-amber-400 shadow-[0_2px_12px_rgba(245,158,11,0.28)] transition-colors whitespace-nowrap shrink-0 cursor-pointer"
           >
             <Plus className="h-4 w-4 shrink-0" />
             <span>Dodaj</span>
@@ -2367,45 +2481,47 @@ export default function App() {
         </div>
       </header>
 
-      {/* Quiet Unboxed Dimension Readout + Actionable Carpentry Warnings (offset right of Left CAD Rail on desktop) */}
-      <div className="pointer-events-none fixed top-14 left-3.5 md:left-16 z-20 flex flex-col gap-0.5 text-zinc-700">
+      {/* Architectural Frosted Light Project HUD + Actionable Carpentry Warnings */}
+      <div className="pointer-events-none fixed top-[58px] md:top-[62px] left-3 md:left-[70px] z-20 flex flex-col gap-1.5">
         <button
           type="button"
           onClick={() => setLeftDrawerMode((m) => (m === 'projects' ? null : 'projects'))}
-          className="pointer-events-auto text-left text-xs font-semibold text-zinc-900 hover:text-amber-700 truncate max-w-[220px] sm:max-w-md cursor-pointer"
+          className="studio-hud-light pointer-events-auto group flex flex-col items-start rounded-2xl px-3 py-1.5 text-left hover:bg-white/95 transition-colors cursor-pointer max-w-[235px] sm:max-w-md"
           title="Kliknij, aby zarządzać projektami lub zmienić nazwę"
         >
-          {project.name}
+          <span className="text-xs font-semibold text-zinc-900 group-hover:text-amber-700 truncate w-full transition-colors">
+            {project.name}
+          </span>
+          {project.parts.length === 0 ? (
+            <div className="flex items-center gap-1.5 text-[11px] text-zinc-600 font-mono-num">
+              {project.room?.enabled ? (
+                <>
+                  <span>
+                    Pokój {project.room.widthMm} × {project.room.depthMm} × {project.room.heightMm} mm
+                  </span>
+                  <span aria-hidden="true">·</span>
+                  <span className="font-sans">pusto</span>
+                </>
+              ) : (
+                <span className="font-sans">Pusta scena · dodaj pokój lub mebel</span>
+              )}
+            </div>
+          ) : (
+            <div className="flex items-center gap-1.5 text-[11px] text-zinc-600 font-mono-num">
+              <span>
+                {overallDims.width} × {overallDims.height} × {overallDims.depth} mm
+              </span>
+              <span aria-hidden="true">·</span>
+              <span className="font-sans">{project.parts.length} elem.</span>
+              {project.fasteners.length > 0 && (
+                <>
+                  <span aria-hidden="true">·</span>
+                  <span className="font-sans">{project.fasteners.length} wkręt.</span>
+                </>
+              )}
+            </div>
+          )}
         </button>
-        {project.parts.length === 0 ? (
-          <div className="flex items-center gap-1.5 text-[11px] text-zinc-600 font-mono-num">
-            {project.room?.enabled ? (
-              <>
-                <span>
-                  Pokój {project.room.widthMm} × {project.room.depthMm} × {project.room.heightMm} mm
-                </span>
-                <span aria-hidden="true">·</span>
-                <span className="font-sans">brak elementów</span>
-              </>
-            ) : (
-              <span className="font-sans">Pusta scena · dodaj pokój, szafkę lub element</span>
-            )}
-          </div>
-        ) : (
-          <div className="flex items-center gap-1.5 text-[11px] text-zinc-600 font-mono-num">
-            <span>
-              {overallDims.width} × {overallDims.height} × {overallDims.depth} mm
-            </span>
-            <span aria-hidden="true">·</span>
-            <span className="font-sans">{project.parts.length} elem.</span>
-            {project.fasteners.length > 0 && (
-              <>
-                <span aria-hidden="true">·</span>
-                <span className="font-sans">{project.fasteners.length} wkręt.</span>
-              </>
-            )}
-          </div>
-        )}
 
         {(collisionReport.pairs.length > 0 ||
           faultyFastenerCount > 0 ||
@@ -2422,7 +2538,7 @@ export default function App() {
                   ? setLeftDrawerMode('parts')
                   : setCutListOpen(true)
             }
-            className="pointer-events-auto mt-1 inline-flex w-fit items-center gap-1.5 rounded-lg border border-red-500/40 bg-red-950/90 px-2.5 py-1 text-[11px] font-medium text-red-100 shadow-md hover:bg-red-900 cursor-pointer"
+            className="pointer-events-auto inline-flex w-fit items-center gap-1.5 rounded-xl border border-red-500/40 bg-red-950/92 backdrop-blur-md px-3 py-1.5 text-[11px] font-medium text-red-100 shadow-lg hover:bg-red-900 transition-colors cursor-pointer"
           >
             <AlertTriangle className="h-3.5 w-3.5 text-red-400 shrink-0" />
             <span>
@@ -2443,7 +2559,7 @@ export default function App() {
 
       {/* Physical Contact-Graph Step-by-Step Workshop Assembly Guide */}
       {activeAssemblyStepPlan && (
-        <div className="fixed top-14 left-1/2 z-30 -translate-x-1/2 w-[min(660px,calc(100vw-24px))] rounded-xl border border-emerald-500/50 bg-[#141518]/[0.97] px-3.5 py-2.5 text-zinc-100 shadow-2xl">
+        <div className="studio-glass animate-studio-pop fixed top-[60px] left-1/2 z-30 -translate-x-1/2 w-[min(660px,calc(100vw-24px))] rounded-2xl border-emerald-400/35 px-4 py-3 text-zinc-100">
           {/* Top navigation & granularity row */}
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div className="flex items-center gap-1">
@@ -2451,7 +2567,7 @@ export default function App() {
                 type="button"
                 disabled={clampedAssemblyStep <= 1}
                 onClick={() => setAssemblyStep((s) => Math.max(1, s - 1))}
-                className="flex h-7 w-7 items-center justify-center rounded-md border border-zinc-700 bg-zinc-900 text-zinc-200 hover:bg-zinc-800 disabled:opacity-35 cursor-pointer"
+                className="flex h-7 w-7 items-center justify-center rounded-lg border border-white/[0.1] bg-white/[0.05] text-zinc-200 hover:bg-white/[0.1] disabled:opacity-30 cursor-pointer"
                 aria-label="Poprzedni krok montażu"
               >
                 <ChevronLeft className="h-4 w-4" />
@@ -2464,12 +2580,12 @@ export default function App() {
                     type="button"
                     onClick={() => setAssemblyStep(s.step)}
                     title={`Krok ${s.step}: ${s.title}`}
-                    className={`flex h-7 min-w-[26px] px-1 items-center justify-center rounded-md text-xs font-mono-num font-semibold cursor-pointer ${
+                    className={`flex h-7 min-w-[26px] px-1 items-center justify-center rounded-lg text-xs font-mono-num font-semibold cursor-pointer transition-colors ${
                       clampedAssemblyStep === s.step
                         ? 'bg-emerald-500 text-zinc-950'
                         : s.step < clampedAssemblyStep
                           ? 'bg-emerald-500/20 text-emerald-300'
-                          : 'bg-zinc-900 text-zinc-400 hover:text-white'
+                          : 'bg-white/[0.05] text-zinc-400 hover:text-white'
                     }`}
                   >
                     {s.step}
@@ -2500,7 +2616,7 @@ export default function App() {
                     Math.min(assemblyPlan.steps.length, s + 1)
                   )
                 }
-                className="flex h-7 w-7 items-center justify-center rounded-md border border-zinc-700 bg-zinc-900 text-zinc-200 hover:bg-zinc-800 disabled:opacity-35 cursor-pointer"
+                className="flex h-7 w-7 items-center justify-center rounded-lg border border-white/[0.1] bg-white/[0.05] text-zinc-200 hover:bg-white/[0.1] disabled:opacity-30 cursor-pointer"
                 aria-label="Następny krok montażu"
               >
                 <ChevronRight className="h-4 w-4" />
@@ -2508,14 +2624,14 @@ export default function App() {
             </div>
 
             <div className="flex items-center gap-2">
-              <div className="flex items-center rounded-md border border-zinc-800 bg-zinc-950 p-0.5 text-[10px]">
+              <div className="flex items-center rounded-lg border border-white/[0.08] bg-white/[0.04] p-0.5 text-[10px]">
                 <button
                   type="button"
                   onClick={() => {
                     setAssemblyGranularity('grouped');
                     setAssemblyStep(1);
                   }}
-                  className={`rounded px-2 py-0.5 font-medium cursor-pointer transition-colors ${
+                  className={`rounded-md px-2 py-0.5 font-medium cursor-pointer transition-colors ${
                     assemblyGranularity === 'grouped'
                       ? 'bg-emerald-500/20 text-emerald-300'
                       : 'text-zinc-400 hover:text-zinc-200'
@@ -2529,7 +2645,7 @@ export default function App() {
                     setAssemblyGranularity('part_by_part');
                     setAssemblyStep(1);
                   }}
-                  className={`rounded px-2 py-0.5 font-medium cursor-pointer transition-colors ${
+                  className={`rounded-md px-2 py-0.5 font-medium cursor-pointer transition-colors ${
                     assemblyGranularity === 'part_by_part'
                       ? 'bg-emerald-500/20 text-emerald-300'
                       : 'text-zinc-400 hover:text-zinc-200'
@@ -2544,7 +2660,7 @@ export default function App() {
               <button
                 type="button"
                 onClick={() => setAssemblyStep(0)}
-                className="flex h-7 w-7 items-center justify-center rounded-md text-zinc-400 hover:bg-zinc-800 hover:text-white cursor-pointer shrink-0"
+                className="flex h-7 w-7 items-center justify-center rounded-lg text-zinc-400 hover:bg-white/[0.08] hover:text-white cursor-pointer shrink-0"
                 title="Zakończ przewodnik montażu"
               >
                 <X className="h-4 w-4" />
@@ -2553,14 +2669,14 @@ export default function App() {
           </div>
 
           {/* Step title & auto-generated carpentry instruction */}
-          <div className="mt-2 border-t border-zinc-800/80 pt-2">
+          <div className="mt-2.5 border-t border-white/[0.08] pt-2.5">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div className="text-xs font-semibold text-emerald-300">
                 Krok {activeAssemblyStepPlan.step}/{assemblyPlan.steps.length}:{' '}
                 {activeAssemblyStepPlan.title}
               </div>
               {activeAssemblyStepPlan.totalFasteners > 0 && (
-                <span className="rounded bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-mono-num font-medium text-amber-300">
+                <span className="text-[11px] font-mono-num font-medium text-amber-300">
                   {activeAssemblyStepPlan.fastenerSummary}
                 </span>
               )}
@@ -2569,8 +2685,8 @@ export default function App() {
               {activeAssemblyStepPlan.instruction}
             </p>
 
-            {/* Per-board contact breakdown (clickable to focus/select board in 3D) */}
-            <div className="mt-2 flex max-h-24 flex-col gap-1 overflow-y-auto pr-1">
+            {/* Per-board contact breakdown */}
+            <div className="mt-2 flex max-h-24 flex-col gap-1 overflow-y-auto pr-1 cad-scroll">
               {activeAssemblyStepPlan.items.map((item) => (
                 <button
                   key={item.partId}
@@ -2579,7 +2695,7 @@ export default function App() {
                     handleSelectPart(item.partId, false);
                     viewportRef.current?.focusPart(item.partId);
                   }}
-                  className="flex flex-wrap items-center justify-between gap-x-2 gap-y-0.5 rounded-md border border-zinc-800 bg-zinc-900/80 px-2 py-1 text-left text-[11px] hover:border-emerald-500/60 hover:bg-zinc-900 transition-colors cursor-pointer"
+                  className="flex flex-wrap items-center justify-between gap-x-2 gap-y-0.5 rounded-lg border border-white/[0.07] bg-white/[0.04] px-2.5 py-1.5 text-left text-[11px] hover:border-emerald-400/45 hover:bg-white/[0.08] transition-colors cursor-pointer"
                 >
                   <span className="flex items-center gap-1.5 font-medium text-zinc-100">
                     <span className="inline-block h-2 w-2 rounded-full bg-emerald-400 shrink-0" />
@@ -2600,7 +2716,7 @@ export default function App() {
             </div>
 
             {/* Compact 3D highlight color key */}
-            <div className="mt-1.5 flex items-center gap-3 text-[10px] text-zinc-400">
+            <div className="mt-2 flex items-center gap-3 text-[10px] text-zinc-400">
               <span className="inline-flex items-center gap-1">
                 <span className="h-2 w-2 rounded-xs bg-emerald-400" />
                 Montujesz teraz
@@ -2619,23 +2735,32 @@ export default function App() {
         </div>
       )}
 
-      {/* Subtle Toast Notification */}
+      {/* Subtle Frosted Toast Notification */}
       {toastMsg && (
-        <div className="pointer-events-none fixed top-15 left-1/2 z-50 -translate-x-1/2 rounded-xl border border-zinc-700 bg-[#141518] px-4 py-2 text-xs font-medium text-zinc-100 shadow-xl whitespace-nowrap">
+        <div className="studio-glass animate-studio-pop pointer-events-none fixed top-[62px] left-1/2 z-50 -translate-x-1/2 rounded-full px-4 py-2 text-xs font-medium text-zinc-100 whitespace-nowrap max-w-[calc(100vw-24px)] truncate">
           {toastMsg}
         </div>
       )}
 
-      {/* Mobile Always-Accessible Floating Quick Pill: Undo, Focus Camera, Multi-Select Toggle */}
+      {/* Mobile Always-Accessible Floating Quick Strip: Search, Undo, Focus, Multi-Select */}
       {!anyModalOpen && !startModalOpen && (
-        <div className="md:hidden fixed top-14 right-2.5 z-20 flex flex-col gap-1 rounded-xl border border-zinc-800/90 bg-[#141518]/90 p-1 shadow-lg">
+        <div className="md:hidden studio-glass fixed top-[58px] right-2.5 z-20 flex flex-col gap-1 rounded-2xl p-1">
+          <button
+            type="button"
+            onClick={() => setCommandPaletteOpen(true)}
+            aria-label="Szybkie polecenia i wyszukiwarka"
+            title="Szukaj polecenia"
+            className="flex h-10 w-10 items-center justify-center rounded-xl text-amber-400 active:bg-white/[0.1]"
+          >
+            <Search className="h-4 w-4" />
+          </button>
           <button
             type="button"
             onClick={handleUndo}
             disabled={historyPast.length === 0}
             aria-label="Cofnij ostatnią zmianę"
             title="Cofnij"
-            className="flex h-9 w-9 items-center justify-center rounded-lg text-zinc-200 active:bg-zinc-800 disabled:opacity-30"
+            className="flex h-10 w-10 items-center justify-center rounded-xl text-zinc-200 active:bg-white/[0.1] disabled:opacity-25"
           >
             <Undo2 className="h-4 w-4" />
           </button>
@@ -2644,7 +2769,7 @@ export default function App() {
             onClick={() => viewportRef.current?.focusAll()}
             aria-label="Dopasuj widok kamery do projektu"
             title="Dopasuj widok"
-            className="flex h-9 w-9 items-center justify-center rounded-lg text-zinc-200 active:bg-zinc-800"
+            className="flex h-10 w-10 items-center justify-center rounded-xl text-zinc-200 active:bg-white/[0.1]"
           >
             <Focus className="h-4 w-4" />
           </button>
@@ -2663,15 +2788,15 @@ export default function App() {
             }}
             aria-label="Zaznacz wiele elementów"
             title="Zaznacz wiele"
-            className={`relative flex h-9 w-9 items-center justify-center rounded-lg transition-colors ${
+            className={`relative flex h-10 w-10 items-center justify-center rounded-xl transition-colors ${
               multiSelectMode
                 ? 'bg-amber-500 text-zinc-950'
-                : 'text-zinc-200 active:bg-zinc-800'
+                : 'text-zinc-200 active:bg-white/[0.1]'
             }`}
           >
             <CheckSquare className="h-4 w-4" />
             {selectedPartIds.length > 1 && (
-              <span className="absolute -top-1 -right-1 flex h-4 min-w-[16px] items-center justify-center rounded-full bg-sky-500 px-1 text-[9px] font-bold text-white font-mono-num">
+              <span className="absolute -top-0.5 -right-0.5 flex h-4 min-w-[16px] items-center justify-center rounded-full bg-sky-500 px-1 text-[9px] font-bold text-white font-mono-num">
                 {selectedPartIds.length}
               </span>
             )}
@@ -2679,35 +2804,35 @@ export default function App() {
         </div>
       )}
 
-      {/* Quiet Empty-Scene Action CTA (guides next step after creating a room or blank project) */}
+      {/* Calm Empty-Scene Action Dock (single brass CTA + clean neutral secondary triggers) */}
       {project.parts.length === 0 && !anyModalOpen && !startModalOpen && !leftDrawerMode && (
-        <div className="fixed bottom-[66px] md:bottom-[124px] left-1/2 z-20 -translate-x-1/2 flex flex-wrap items-center justify-center gap-1.5 rounded-2xl border border-zinc-800 bg-[#141518]/[0.94] px-2.5 py-2 shadow-xl max-w-[calc(100vw-20px)]">
+        <div className="studio-glass animate-studio-pop fixed bottom-[72px] md:bottom-[104px] left-1/2 z-20 -translate-x-1/2 flex flex-wrap items-center justify-center gap-1.5 rounded-2xl p-1.5 max-w-[calc(100vw-20px)]">
           <button
             type="button"
             onClick={() => {
               setEditingCabinetGroupId(null);
               setCabinetBuilderOpen(true);
             }}
-            className="flex min-h-[34px] items-center gap-1.5 rounded-xl bg-emerald-500/20 border border-emerald-500/50 px-3 text-xs font-semibold text-emerald-200 hover:bg-emerald-500/30 transition-colors whitespace-nowrap cursor-pointer"
+            className="flex min-h-[38px] items-center gap-1.5 rounded-xl bg-amber-500 px-3.5 text-xs font-semibold text-zinc-950 hover:bg-amber-400 transition-colors whitespace-nowrap cursor-pointer"
           >
             <LayoutPanelTop className="h-3.5 w-3.5" />
-            <span>+ Kreator szafki</span>
+            <span>Kreator szafki</span>
           </button>
           <button
             type="button"
             onClick={() => setAddPartOpen(true)}
-            className="flex min-h-[34px] items-center gap-1.5 rounded-xl bg-amber-500 px-3 text-xs font-semibold text-zinc-950 hover:bg-amber-400 transition-colors whitespace-nowrap cursor-pointer"
+            className="flex min-h-[38px] items-center gap-1.5 rounded-xl border border-white/[0.08] bg-white/[0.05] px-3 text-xs font-medium text-zinc-100 hover:bg-white/[0.1] transition-colors whitespace-nowrap cursor-pointer"
           >
-            <Plus className="h-3.5 w-3.5" />
+            <Plus className="h-3.5 w-3.5 text-amber-400" />
             <span>Płyty i urządzenia</span>
           </button>
           {!project.room?.enabled && (
             <button
               type="button"
               onClick={() => setRoomModalOpen(true)}
-              className="flex min-h-[34px] items-center gap-1.5 rounded-xl bg-sky-500/15 border border-sky-500/45 px-3 text-xs font-semibold text-sky-200 hover:bg-sky-500/25 transition-colors whitespace-nowrap cursor-pointer"
+              className="flex min-h-[38px] items-center gap-1.5 rounded-xl border border-white/[0.08] bg-white/[0.05] px-3 text-xs font-medium text-zinc-100 hover:bg-white/[0.1] transition-colors whitespace-nowrap cursor-pointer"
             >
-              <Home className="h-3.5 w-3.5" />
+              <Home className="h-3.5 w-3.5 text-zinc-300" />
               <span>Rysuj pokój 2D</span>
             </button>
           )}
@@ -2722,7 +2847,7 @@ export default function App() {
       />
 
       {/* Full-Viewport Realistic 3D CAD Canvas */}
-      <main className="h-full w-full pt-12">
+      <main className="h-full w-full pt-12 md:pt-[52px]">
         <Viewport3D
           ref={viewportRef}
           parts={project.parts}
@@ -2972,6 +3097,7 @@ export default function App() {
           setSketchOpen(true);
         }}
         onOpenShortcuts={() => setShortcutsOpen(true)}
+        onOpenCommandPalette={() => setCommandPaletteOpen(true)}
         onSnapshot={handleSnapshot}
       />
 
@@ -2996,9 +3122,11 @@ export default function App() {
         onLoadTemplate={handleLoadTemplate}
         templates={cloudTemplates}
         templatesLoading={cloudTemplatesLoading}
+        templatesError={cloudTemplatesError}
         isCloudSignedIn={Boolean(cloudUser)}
         canSaveCurrentAsTemplate={project.parts.length > 0}
         onOpenCloud={() => setCloudModalOpen(true)}
+        onRetryTemplates={handleCloudRetrySync}
         onSaveCurrentAsTemplate={() => void handleSaveCurrentAsTemplate()}
         onDeleteTemplate={(id) => void handleDeleteCloudTemplate(id)}
         onRestoreStarterTemplates={() => void handleRestoreStarterTemplates()}
@@ -3210,6 +3338,7 @@ export default function App() {
         activeProjectId={projectStore.activeProjectId}
         templates={cloudTemplates}
         templatesLoading={cloudTemplatesLoading}
+        templatesError={cloudTemplatesError}
         isCloudSignedIn={Boolean(cloudUser)}
         skipOnStartup={skipStartModal}
         onToggleSkipOnStartup={handleToggleSkipStartModal}
@@ -3293,6 +3422,67 @@ export default function App() {
         onSignInGoogle={handleCloudSignInGoogle}
         onSignOut={handleCloudSignOut}
         onForceUploadAll={handleCloudForceUploadAll}
+        onRetrySync={handleCloudRetrySync}
+      />
+
+      <CommandPaletteModal
+        open={commandPaletteOpen}
+        onClose={() => setCommandPaletteOpen(false)}
+        projects={projectStore.projects}
+        activeProjectId={projectStore.activeProjectId}
+        parts={project.parts}
+        uiMode={uiMode}
+        xrayMode={xrayMode}
+        ledUnderCabinet={ledUnderCabinet}
+        showDimensions={showDimensions}
+        magneticSnap={magneticSnap}
+        openAmount={openAmount}
+        assemblyStep={assemblyStep}
+        onOpenRoom={() => setRoomModalOpen(true)}
+        onOpenCabinetBuilder={() => {
+          setEditingCabinetGroupId(null);
+          setCabinetBuilderOpen(true);
+        }}
+        onOpenAddPart={() => setAddPartOpen(true)}
+        onOpenSketch2D={() => {
+          setSketchEditingPart(null);
+          setSketchOpen(true);
+        }}
+        onOpenCutList={() => setCutListOpen(true)}
+        onOpenMaterials={() => setMaterialsModalOpen(true)}
+        onOpenProjects={() => setLeftDrawerMode('projects')}
+        onOpenTemplates={() => setLeftDrawerMode('templates')}
+        onOpenPartsList={() => setLeftDrawerMode('parts')}
+        onOpenCloud={() => setCloudModalOpen(true)}
+        onOpenShortcuts={() => setShortcutsOpen(true)}
+        onOpenStartModal={() => setStartModalOpen(true)}
+        onCreateNewProject={handleCreateNewProject}
+        onSwitchProject={handleSwitchProject}
+        onSelectAndFocusPart={(id) => {
+          const p = project.parts.find((x) => x.id === id);
+          if (p?.groupId) setActiveGroupEditId(p.groupId);
+          setSelectedPartId(id);
+          setSelectedPartIds([id]);
+          setSelectedFastenerId(null);
+          viewportRef.current?.focusPart(id);
+        }}
+        onChangeTool={(nextTool) => {
+          setTool(nextTool);
+          if (nextTool === 'screw') setExplodedAmount(0);
+        }}
+        onCameraPreset={(preset) => viewportRef.current?.setCameraPreset(preset)}
+        onFocusAll={() => viewportRef.current?.focusAll()}
+        onToggleXray={() => setXrayMode((v) => !v)}
+        onToggleLed={() => setLedUnderCabinet((v) => !v)}
+        onToggleDimensions={() => setShowDimensions((v) => !v)}
+        onToggleMagneticSnap={() => setMagneticSnap((v) => !v)}
+        onToggleOpenFronts={() => setOpenAmount((v) => (v > 0.1 ? 0 : 1))}
+        onToggleAssembly={() => setAssemblyStep((s) => (s > 0 ? 0 : 1))}
+        onToggleUiMode={() =>
+          handleChangeUiMode(uiMode === 'expert' ? 'simple' : 'expert')
+        }
+        onAutoFasteners={() => handleAutoFasteners()}
+        onSnapshot={handleSnapshot}
       />
 
       <PWAStatusOverlays

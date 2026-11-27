@@ -18,6 +18,7 @@ import {
   MaterialsCatalogConfig,
 } from '../types/furniture';
 import { getMaterialSwatchDataUrl } from '../engine/materials';
+import { NumericInput } from './NumericInput';
 
 interface MaterialsManagerModalProps {
   open: boolean;
@@ -439,12 +440,12 @@ export const MaterialsManagerModal: React.FC<MaterialsManagerModalProps> = ({
                     <label className="block text-[11px] font-medium text-zinc-400 mb-1">
                       Grubość [mm]
                     </label>
-                    <input
-                      type="number"
+                    <NumericInput
                       min={3}
                       max={250}
+                      step={1}
                       value={thicknessMm}
-                      onChange={(e) => setThicknessMm(Number(e.target.value))}
+                      onChange={(val) => setThicknessMm(val)}
                       className="w-full rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-2 text-xs font-mono-num text-white focus:border-amber-500 focus:outline-none"
                     />
                   </div>
@@ -452,13 +453,12 @@ export const MaterialsManagerModal: React.FC<MaterialsManagerModalProps> = ({
                     <label className="block text-[11px] font-medium text-zinc-400 mb-1">
                       Arkusz szer. [mm]
                     </label>
-                    <input
-                      type="number"
+                    <NumericInput
                       min={200}
                       max={6000}
                       step={10}
                       value={sheetWidthMm}
-                      onChange={(e) => setSheetWidthMm(Number(e.target.value))}
+                      onChange={(val) => setSheetWidthMm(val)}
                       className="w-full rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-2 text-xs font-mono-num text-white focus:border-amber-500 focus:outline-none"
                     />
                   </div>
@@ -466,13 +466,12 @@ export const MaterialsManagerModal: React.FC<MaterialsManagerModalProps> = ({
                     <label className="block text-[11px] font-medium text-zinc-400 mb-1">
                       Arkusz wys. [mm]
                     </label>
-                    <input
-                      type="number"
+                    <NumericInput
                       min={100}
                       max={4000}
                       step={10}
                       value={sheetHeightMm}
-                      onChange={(e) => setSheetHeightMm(Number(e.target.value))}
+                      onChange={(val) => setSheetHeightMm(val)}
                       className="w-full rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-2 text-xs font-mono-num text-white focus:border-amber-500 focus:outline-none"
                     />
                   </div>
@@ -499,12 +498,12 @@ export const MaterialsManagerModal: React.FC<MaterialsManagerModalProps> = ({
                     <label className="block text-[11px] font-medium text-zinc-400 mb-1">
                       Domyślny przekrój [mm]
                     </label>
-                    <input
-                      type="number"
+                    <NumericInput
                       min={10}
                       max={250}
+                      step={1}
                       value={thicknessMm}
-                      onChange={(e) => setThicknessMm(Number(e.target.value))}
+                      onChange={(val) => setThicknessMm(val)}
                       className="w-full rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-2 text-xs font-mono-num text-white focus:border-amber-500 focus:outline-none"
                     />
                   </div>
@@ -512,13 +511,12 @@ export const MaterialsManagerModal: React.FC<MaterialsManagerModalProps> = ({
                     <label className="block text-[11px] font-medium text-zinc-400 mb-1">
                       Długość handlowa sztangi [mm]
                     </label>
-                    <input
-                      type="number"
+                    <NumericInput
                       min={500}
                       max={12000}
                       step={100}
                       value={barLengthMm}
-                      onChange={(e) => setBarLengthMm(Number(e.target.value))}
+                      onChange={(val) => setBarLengthMm(val)}
                       className="w-full rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-2 text-xs font-mono-num text-white focus:border-amber-500 focus:outline-none"
                     />
                   </div>
@@ -532,12 +530,13 @@ export const MaterialsManagerModal: React.FC<MaterialsManagerModalProps> = ({
                       Cena w hurtowni [zł / m² netto]
                     </label>
                     <div className="flex items-center gap-2">
-                      <input
-                        type="number"
+                      <NumericInput
                         min={1}
                         max={5000}
+                        step={1}
+                        allowDecimal
                         value={pricePerM2Pln}
-                        onChange={(e) => setPricePerM2Pln(Number(e.target.value))}
+                        onChange={(val) => setPricePerM2Pln(val)}
                         className="w-28 rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm font-semibold font-mono-num text-amber-300 focus:border-amber-500 focus:outline-none"
                       />
                       <span className="text-xs text-zinc-400 font-mono-num">
@@ -552,12 +551,13 @@ export const MaterialsManagerModal: React.FC<MaterialsManagerModalProps> = ({
                       Cena w składzie [zł / metr bieżący (mb)]
                     </label>
                     <div className="flex items-center gap-2">
-                      <input
-                        type="number"
+                      <NumericInput
                         min={1}
                         max={2000}
+                        step={1}
+                        allowDecimal
                         value={pricePerLinearMPln}
-                        onChange={(e) => setPricePerLinearMPln(Number(e.target.value))}
+                        onChange={(val) => setPricePerLinearMPln(val)}
                         className="w-28 rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm font-semibold font-mono-num text-amber-300 focus:border-amber-500 focus:outline-none"
                       />
                       <span className="text-xs text-zinc-400 font-mono-num">
@@ -732,14 +732,12 @@ export const MaterialsManagerModal: React.FC<MaterialsManagerModalProps> = ({
                             {isLinear ? (
                               <div className="inline-flex items-center gap-1">
                                 <span className="text-[10px] text-zinc-500">dł.</span>
-                                <input
-                                  type="number"
+                                <NumericInput
                                   min={500}
                                   max={12000}
                                   step={100}
                                   value={mat.barLengthMm ?? 3000}
-                                  onChange={(e) => {
-                                    const v = Number(e.target.value);
+                                  onChange={(v) => {
                                     if (isBuiltIn) {
                                       updateBuiltInField(mat.id as BuiltInMaterialId, 'barLengthMm', v);
                                     } else {
@@ -751,14 +749,12 @@ export const MaterialsManagerModal: React.FC<MaterialsManagerModalProps> = ({
                               </div>
                             ) : (
                               <div className="inline-flex items-center gap-1">
-                                <input
-                                  type="number"
+                                <NumericInput
                                   min={200}
                                   max={6000}
                                   step={10}
                                   value={mat.sheetWidthMm}
-                                  onChange={(e) => {
-                                    const v = Number(e.target.value);
+                                  onChange={(v) => {
                                     if (isBuiltIn) {
                                       updateBuiltInField(mat.id as BuiltInMaterialId, 'sheetWidthMm', v);
                                     } else {
@@ -768,14 +764,12 @@ export const MaterialsManagerModal: React.FC<MaterialsManagerModalProps> = ({
                                   className="w-16 sm:w-20 rounded-md border border-zinc-800 bg-zinc-900 px-1.5 py-1 text-right font-mono-num text-xs text-white focus:border-amber-500 focus:outline-none"
                                 />
                                 <span className="text-zinc-600">×</span>
-                                <input
-                                  type="number"
+                                <NumericInput
                                   min={100}
                                   max={4000}
                                   step={10}
                                   value={mat.sheetHeightMm}
-                                  onChange={(e) => {
-                                    const v = Number(e.target.value);
+                                  onChange={(v) => {
                                     if (isBuiltIn) {
                                       updateBuiltInField(mat.id as BuiltInMaterialId, 'sheetHeightMm', v);
                                     } else {
@@ -791,13 +785,13 @@ export const MaterialsManagerModal: React.FC<MaterialsManagerModalProps> = ({
                           <td className="py-2 px-2 text-right whitespace-nowrap">
                             {isLinear ? (
                               <div className="inline-flex items-center gap-1">
-                                <input
-                                  type="number"
+                                <NumericInput
                                   min={1}
                                   max={2000}
+                                  step={1}
+                                  allowDecimal
                                   value={mat.pricePerLinearMPln ?? 14}
-                                  onChange={(e) => {
-                                    const v = Number(e.target.value);
+                                  onChange={(v) => {
                                     if (isBuiltIn) {
                                       updateBuiltInField(
                                         mat.id as BuiltInMaterialId,
@@ -814,13 +808,13 @@ export const MaterialsManagerModal: React.FC<MaterialsManagerModalProps> = ({
                               </div>
                             ) : (
                               <div className="inline-flex items-center gap-1">
-                                <input
-                                  type="number"
+                                <NumericInput
                                   min={1}
                                   max={5000}
+                                  step={1}
+                                  allowDecimal
                                   value={mat.pricePerM2Pln}
-                                  onChange={(e) => {
-                                    const v = Number(e.target.value);
+                                  onChange={(v) => {
                                     if (isBuiltIn) {
                                       updateBuiltInField(mat.id as BuiltInMaterialId, 'pricePerM2Pln', v);
                                     } else {

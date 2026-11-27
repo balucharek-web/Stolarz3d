@@ -16,6 +16,7 @@ import {
   X,
 } from 'lucide-react';
 import { FIREBASE_PROJECT_ID } from '../firebase';
+import FIRESTORE_RULES_SNIPPET from '../../firestore.rules?raw';
 
 export type CloudSyncStatus = 'signed_out' | 'connecting' | 'syncing' | 'synced' | 'error';
 
@@ -34,123 +35,8 @@ interface CloudAccountModalProps {
   onSignInGoogle: () => Promise<void>;
   onSignOut: () => Promise<void>;
   onForceUploadAll: () => Promise<void>;
+  onRetrySync: () => void;
 }
-
-const FIRESTORE_RULES_SNIPPET = `rules_version = '2';
-
-service cloud.firestore {
-  match /databases/{database}/documents {
-    match /{document=**} { allow read, write: if false; }
-
-    function isSignedIn() { return request.auth != null; }
-    function isVerifiedUser() { return isSignedIn() && request.auth.token.email_verified == true; }
-    function isValidId(id) { return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\\\-]+$'); }
-    function incoming() { return request.resource.data; }
-    function existing() { return resource.data; }
-    function isOwner(userId) { return isSignedIn() && request.auth.uid == userId; }
-    function hasWorkspaceProfile(userId) {
-      return exists(/databases/$(database)/documents/users/$(userId)) &&
-        get(/databases/$(database)/documents/users/$(userId)).data.ownerId == request.auth.uid;
-    }
-
-    function isValidUserProfile(data, userId) {
-      return data.keys().hasAll(['ownerId', 'displayName', 'createdAt', 'updatedAt']) &&
-        data.keys().hasOnly(['ownerId', 'displayName', 'createdAt', 'updatedAt']) &&
-        isValidId(data.ownerId) && data.ownerId == request.auth.uid && data.ownerId == userId &&
-        data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 80 &&
-        data.createdAt is timestamp && data.updatedAt is timestamp;
-    }
-
-    function isValidProject(data, projectId) {
-      return data.keys().hasAll(['id', 'ownerId', 'name', 'parts', 'fasteners', 'clientUpdatedAt', 'createdAt', 'updatedAt']) &&
-        data.keys().hasOnly(['id', 'ownerId', 'name', 'parts', 'fasteners', 'room', 'cabinetConfigs', 'clientUpdatedAt', 'createdAt', 'updatedAt']) &&
-        isValidId(data.id) && data.id.size() <= 80 && data.id == projectId &&
-        isValidId(data.ownerId) && data.ownerId == request.auth.uid &&
-        data.name is string && data.name.size() >= 1 && data.name.size() <= 80 &&
-        data.parts is list && data.parts.size() <= 400 && (data.parts.size() == 0 || data.parts[0] is map) &&
-        data.fasteners is list && data.fasteners.size() <= 2000 && (data.fasteners.size() == 0 || data.fasteners[0] is map) &&
-        (!('room' in data) || data.room == null || data.room is map) &&
-        (!('cabinetConfigs' in data) || data.cabinetConfigs == null || data.cabinetConfigs is map) &&
-        data.clientUpdatedAt is number && data.clientUpdatedAt >= 0 &&
-        data.createdAt is timestamp && data.updatedAt is timestamp;
-    }
-
-    function isValidTemplatePayload(proj) {
-      return proj is map &&
-        proj.keys().hasAll(['id', 'name', 'parts', 'fasteners']) &&
-        proj.keys().hasOnly(['id', 'name', 'parts', 'fasteners', 'room', 'cabinetConfigs']) &&
-        isValidId(proj.id) && proj.id.size() <= 80 &&
-        proj.name is string && proj.name.size() >= 1 && proj.name.size() <= 80 &&
-        proj.parts is list && proj.parts.size() <= 400 && (proj.parts.size() == 0 || proj.parts[0] is map) &&
-        proj.fasteners is list && proj.fasteners.size() <= 2000 && (proj.fasteners.size() == 0 || proj.fasteners[0] is map) &&
-        (!('room' in proj) || proj.room == null || proj.room is map) &&
-        (!('cabinetConfigs' in proj) || proj.cabinetConfigs == null || proj.cabinetConfigs is map);
-    }
-
-    function isValidTemplate(data, templateId) {
-      return data.keys().hasAll(['id', 'ownerId', 'name', 'subtitle', 'category', 'project', 'createdAt', 'updatedAt']) &&
-        data.keys().hasOnly(['id', 'ownerId', 'name', 'subtitle', 'category', 'project', 'createdAt', 'updatedAt']) &&
-        isValidId(data.id) && data.id.size() <= 80 && data.id == templateId &&
-        isValidId(data.ownerId) && data.ownerId == request.auth.uid &&
-        data.name is string && data.name.size() >= 1 && data.name.size() <= 80 &&
-        data.subtitle is string && data.subtitle.size() >= 1 && data.subtitle.size() <= 160 &&
-        data.category is string && data.category in ['Ogród i DIY', 'Magazynowe i OSB', 'Kuchenne', 'Domowe', 'Warsztat'] &&
-        isValidTemplatePayload(data.project) &&
-        data.createdAt is timestamp && data.updatedAt is timestamp;
-    }
-
-    function isValidMaterialsConfig(cfg) {
-      return cfg is map &&
-        cfg.keys().hasAll(['customMaterials', 'builtInOverrides']) &&
-        cfg.keys().hasOnly(['customMaterials', 'builtInOverrides']) &&
-        cfg.customMaterials is list && cfg.customMaterials.size() <= 100 &&
-        (cfg.customMaterials.size() == 0 || cfg.customMaterials[0] is map) &&
-        cfg.builtInOverrides is map && cfg.builtInOverrides.size() <= 60;
-    }
-
-    function isValidWorkspaceSettings(data) {
-      return data.keys().hasAll(['ownerId', 'materialsConfig', 'quoteSettings', 'clientUpdatedAt', 'createdAt', 'updatedAt']) &&
-        data.keys().hasOnly(['ownerId', 'materialsConfig', 'quoteSettings', 'clientUpdatedAt', 'createdAt', 'updatedAt']) &&
-        isValidId(data.ownerId) && data.ownerId == request.auth.uid &&
-        isValidMaterialsConfig(data.materialsConfig) &&
-        data.quoteSettings is map && data.quoteSettings.size() <= 30 &&
-        data.clientUpdatedAt is number && data.clientUpdatedAt >= 0 &&
-        data.createdAt is timestamp && data.updatedAt is timestamp;
-    }
-
-    match /users/{userId} {
-      allow get: if isValidId(userId) && isOwner(userId) && (resource == null || existing().ownerId == request.auth.uid);
-      allow list: if false;
-      allow create: if isVerifiedUser() && isValidId(userId) && isOwner(userId) && isValidUserProfile(incoming(), userId) && incoming().createdAt == request.time && incoming().updatedAt == request.time;
-      allow update: if isVerifiedUser() && isValidId(userId) && isOwner(userId) && isValidUserProfile(incoming(), userId) && incoming().ownerId == existing().ownerId && incoming().createdAt == existing().createdAt && incoming().updatedAt == request.time && incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'updatedAt']);
-      allow delete: if false;
-
-      match /projects/{projectId} {
-        allow get: if isValidId(userId) && isValidId(projectId) && isOwner(userId) && (resource == null || existing().ownerId == request.auth.uid) && hasWorkspaceProfile(userId);
-        allow list: if isOwner(userId) && existing().ownerId == request.auth.uid;
-        allow create: if isVerifiedUser() && isValidId(userId) && isValidId(projectId) && isOwner(userId) && isValidProject(incoming(), projectId) && incoming().createdAt == request.time && incoming().updatedAt == request.time && hasWorkspaceProfile(userId);
-        allow update: if isVerifiedUser() && isValidId(userId) && isValidId(projectId) && isOwner(userId) && isValidProject(incoming(), projectId) && incoming().ownerId == existing().ownerId && incoming().id == existing().id && incoming().createdAt == existing().createdAt && incoming().updatedAt == request.time && hasWorkspaceProfile(userId) && (incoming().diff(existing()).affectedKeys().hasOnly(['name', 'parts', 'fasteners', 'room', 'cabinetConfigs', 'clientUpdatedAt', 'updatedAt']) || incoming().diff(existing()).affectedKeys().hasOnly(['name', 'clientUpdatedAt', 'updatedAt']));
-        allow delete: if isVerifiedUser() && isValidId(userId) && isValidId(projectId) && isOwner(userId) && existing().ownerId == request.auth.uid && hasWorkspaceProfile(userId);
-      }
-
-      match /templates/{templateId} {
-        allow get: if isValidId(userId) && isValidId(templateId) && isOwner(userId) && (resource == null || existing().ownerId == request.auth.uid) && hasWorkspaceProfile(userId);
-        allow list: if isOwner(userId) && existing().ownerId == request.auth.uid;
-        allow create: if isVerifiedUser() && isValidId(userId) && isValidId(templateId) && isOwner(userId) && isValidTemplate(incoming(), templateId) && incoming().createdAt == request.time && incoming().updatedAt == request.time && hasWorkspaceProfile(userId);
-        allow update: if isVerifiedUser() && isValidId(userId) && isValidId(templateId) && isOwner(userId) && isValidTemplate(incoming(), templateId) && incoming().ownerId == existing().ownerId && incoming().id == existing().id && incoming().createdAt == existing().createdAt && incoming().updatedAt == request.time && hasWorkspaceProfile(userId) && incoming().diff(existing()).affectedKeys().hasOnly(['name', 'subtitle', 'category', 'project', 'updatedAt']);
-        allow delete: if isVerifiedUser() && isValidId(userId) && isValidId(templateId) && isOwner(userId) && existing().ownerId == request.auth.uid && hasWorkspaceProfile(userId);
-      }
-
-      match /settings/{settingId} {
-        allow get: if isValidId(userId) && settingId == 'workspace' && isOwner(userId) && (resource == null || existing().ownerId == request.auth.uid) && hasWorkspaceProfile(userId);
-        allow list: if false;
-        allow create: if isVerifiedUser() && isValidId(userId) && settingId == 'workspace' && isOwner(userId) && isValidWorkspaceSettings(incoming()) && incoming().createdAt == request.time && incoming().updatedAt == request.time && hasWorkspaceProfile(userId);
-        allow update: if isVerifiedUser() && isValidId(userId) && settingId == 'workspace' && isOwner(userId) && isValidWorkspaceSettings(incoming()) && incoming().ownerId == existing().ownerId && incoming().createdAt == existing().createdAt && incoming().updatedAt == request.time && hasWorkspaceProfile(userId) && incoming().diff(existing()).affectedKeys().hasOnly(['materialsConfig', 'quoteSettings', 'clientUpdatedAt', 'updatedAt']);
-        allow delete: if false;
-      }
-    }
-  }
-}`;
 
 export const CloudAccountModal: React.FC<CloudAccountModalProps> = ({
   open,
@@ -167,26 +53,59 @@ export const CloudAccountModal: React.FC<CloudAccountModalProps> = ({
   onSignInGoogle,
   onSignOut,
   onForceUploadAll,
+  onRetrySync,
 }) => {
   const [busy, setBusy] = useState(false);
   const [copiedDomain, setCopiedDomain] = useState(false);
   const [copiedRules, setCopiedRules] = useState(false);
   const [showSetupGuide, setShowSetupGuide] = useState(false);
+  const [showRulesCode, setShowRulesCode] = useState(false);
 
   if (!open) return null;
 
   const currentHost = typeof window !== 'undefined' ? window.location.hostname : '';
+  const hasPermissionError =
+    Boolean(syncError) &&
+    (syncError!.includes('Missing or insufficient permissions') ||
+      syncError!.includes('permission-denied'));
+  const isTemplatesRuleError = hasPermissionError && Boolean(syncError?.includes('/templates'));
   const hasSetupError =
     Boolean(syncError) &&
     (syncError!.includes('unauthorized-domain') ||
       syncError!.includes('operation-not-allowed') ||
-      syncError!.includes('Missing or insufficient permissions') ||
-      syncError!.includes('permission-denied') ||
+      hasPermissionError ||
       syncError!.includes('NOT_FOUND'));
 
   const handleCopy = async (text: string, target: 'domain' | 'rules') => {
+    let ok = false;
     try {
-      await navigator.clipboard.writeText(text);
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(text);
+        ok = true;
+      }
+    } catch {
+      ok = false;
+    }
+
+    if (!ok) {
+      try {
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        ta.setAttribute('readonly', '');
+        ta.style.position = 'fixed';
+        ta.style.opacity = '0';
+        ta.style.left = '-9999px';
+        document.body.appendChild(ta);
+        ta.focus();
+        ta.select();
+        ok = document.execCommand('copy');
+        document.body.removeChild(ta);
+      } catch {
+        ok = false;
+      }
+    }
+
+    if (ok) {
       if (target === 'domain') {
         setCopiedDomain(true);
         setTimeout(() => setCopiedDomain(false), 2000);
@@ -194,8 +113,8 @@ export const CloudAccountModal: React.FC<CloudAccountModalProps> = ({
         setCopiedRules(true);
         setTimeout(() => setCopiedRules(false), 2000);
       }
-    } catch {
-      // ignore clipboard errors
+    } else if (target === 'rules') {
+      setShowRulesCode(true);
     }
   };
 
@@ -404,9 +323,30 @@ export const CloudAccountModal: React.FC<CloudAccountModalProps> = ({
 
           {/* Error diagnostics */}
           {syncError && (
-            <div className="rounded-xl border border-red-500/40 bg-red-950/30 p-3 space-y-1.5 text-[11px] text-red-200">
-              <div className="font-semibold text-red-300">Szczegóły błędu:</div>
-              <div className="font-mono break-all text-[10px] text-red-200/90">{syncError}</div>
+            <div className="rounded-xl border border-red-500/40 bg-red-950/30 p-3 space-y-2 text-[11px] text-red-200">
+              {isTemplatesRuleError ? (
+                <div className="space-y-1">
+                  <div className="font-semibold text-amber-300">
+                    Zaktualizuj reguły Firestore dla kolekcji szablonów (templates)
+                  </div>
+                  <p className="text-zinc-200 leading-relaxed">
+                    Twoje projekty działają, ale w projekcie <strong>{FIREBASE_PROJECT_ID}</strong> opublikowane są jeszcze starsze reguły bez sekcji <code>templates</code>. Skopiuj poniższe reguły (krok 3), wklej je w konsoli Firebase → <strong>Publish</strong>, a następnie kliknij przycisk poniżej.
+                  </p>
+                </div>
+              ) : (
+                <div className="font-semibold text-red-300">Szczegóły błędu:</div>
+              )}
+              <div className="font-mono break-all text-[10px] text-red-200/80">{syncError}</div>
+              {user && (
+                <button
+                  type="button"
+                  onClick={onRetrySync}
+                  className="inline-flex min-h-[34px] items-center gap-1.5 rounded-lg bg-amber-500 px-3 text-[11px] font-semibold text-zinc-950 hover:bg-amber-400 cursor-pointer"
+                >
+                  <RefreshCw className="h-3.5 w-3.5" />
+                  <span>Ponów synchronizację</span>
+                </button>
+              )}
             </div>
           )}
 
@@ -490,29 +430,48 @@ export const CloudAccountModal: React.FC<CloudAccountModalProps> = ({
                     <span className="font-semibold text-white">
                       3. Wklej reguły bezpieczeństwa w Firestore → Rules
                     </span>
-                    <button
-                      type="button"
-                      onClick={() => void handleCopy(FIRESTORE_RULES_SNIPPET, 'rules')}
-                      className="flex items-center gap-1 rounded-lg border border-zinc-700 bg-zinc-900 px-2 py-1 text-[10px] font-medium text-zinc-200 hover:border-amber-500/60 cursor-pointer shrink-0"
-                    >
-                      {copiedRules ? (
-                        <>
-                          <Check className="h-3 w-3 text-emerald-400" />
-                          Skopiowano reguły
-                        </>
-                      ) : (
-                        <>
-                          <Copy className="h-3 w-3" />
-                          Kopiuj reguły
-                        </>
-                      )}
-                    </button>
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      <button
+                        type="button"
+                        onClick={() => setShowRulesCode((v) => !v)}
+                        className="rounded-lg border border-zinc-800 bg-zinc-900 px-2 py-1 text-[10px] font-medium text-zinc-300 hover:border-zinc-700 cursor-pointer"
+                      >
+                        {showRulesCode || hasPermissionError ? 'Ukryj kod' : 'Podgląd'}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => void handleCopy(FIRESTORE_RULES_SNIPPET, 'rules')}
+                        className="flex items-center gap-1 rounded-lg border border-amber-500/50 bg-amber-500/15 px-2 py-1 text-[10px] font-semibold text-amber-200 hover:bg-amber-500/25 cursor-pointer"
+                      >
+                        {copiedRules ? (
+                          <>
+                            <Check className="h-3 w-3 text-emerald-400" />
+                            Skopiowano reguły
+                          </>
+                        ) : (
+                          <>
+                            <Copy className="h-3 w-3" />
+                            Kopiuj reguły
+                          </>
+                        )}
+                      </button>
+                    </div>
                   </div>
+                  {(showRulesCode || hasPermissionError) && (
+                    <textarea
+                      readOnly
+                      aria-label="Kod reguł Firestore"
+                      value={FIRESTORE_RULES_SNIPPET}
+                      onFocus={(e) => e.currentTarget.select()}
+                      rows={7}
+                      className="mt-2 w-full rounded-lg border border-zinc-800 bg-zinc-950 p-2 font-mono text-[10px] leading-relaxed text-zinc-300 focus:border-amber-500 focus:outline-none cad-scroll"
+                    />
+                  )}
                   <a
                     href={`https://console.firebase.google.com/project/${FIREBASE_PROJECT_ID}/firestore/rules`}
                     target="_blank"
                     rel="noreferrer"
-                    className="mt-1 inline-flex items-center gap-1 text-[11px] text-amber-400 hover:underline"
+                    className="mt-1.5 inline-flex items-center gap-1 text-[11px] text-amber-400 hover:underline"
                   >
                     Otwórz Firestore → Rules i kliknij Opublikuj
                     <ExternalLink className="h-3 w-3" />

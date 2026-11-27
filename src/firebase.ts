@@ -1,6 +1,12 @@
 import { initializeApp } from 'firebase/app';
 import { getAuth, GoogleAuthProvider } from 'firebase/auth';
-import { doc, getDocFromServer, getFirestore } from 'firebase/firestore';
+import {
+  doc,
+  getDocFromServer,
+  getFirestore,
+  initializeFirestore,
+  type Firestore,
+} from 'firebase/firestore';
 
 export const FIREBASE_PROJECT_ID = 'stolarz3d';
 
@@ -15,7 +21,20 @@ const firebaseConfig = {
 };
 
 export const app = initializeApp(firebaseConfig);
-export const db = getFirestore(app);
+
+function createFirestoreInstance(): Firestore {
+  try {
+    // Force HTTP long-polling so mobile carriers, proxies, and sandboxed iframes
+    // never stall or drop into offline mode on WebChannel streaming errors.
+    return initializeFirestore(app, {
+      experimentalForceLongPolling: true,
+    });
+  } catch {
+    return getFirestore(app);
+  }
+}
+
+export const db = createFirestoreInstance();
 export const auth = getAuth(app);
 export const googleProvider = new GoogleAuthProvider();
 googleProvider.setCustomParameters({ prompt: 'select_account' });
@@ -44,6 +63,22 @@ export interface FirestoreErrorInfo {
       email?: string | null;
     }[];
   };
+}
+
+export function isFirestoreOfflineError(error: unknown): boolean {
+  if (!error) return false;
+  const code =
+    typeof error === 'object' && error !== null && 'code' in error
+      ? String((error as { code?: unknown }).code ?? '')
+      : '';
+  const msg = error instanceof Error ? error.message : String(error);
+  const lower = msg.toLowerCase();
+  return (
+    code === 'unavailable' ||
+    lower.includes('client is offline') ||
+    lower.includes('could not reach cloud firestore') ||
+    lower.includes('code=unavailable')
+  );
 }
 
 export function handleFirestoreError(

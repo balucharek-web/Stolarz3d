@@ -29,6 +29,7 @@ import {
 } from '../engine/geometry';
 import { findSelfIntersectingEdges } from '../engine/carpentry';
 import { getMaterialSwatchDataUrl } from '../engine/materials';
+import { NumericInput } from './NumericInput';
 
 interface ShapeSketchModalProps {
   open: boolean;
@@ -1177,17 +1178,13 @@ export const ShapeSketchModal: React.FC<ShapeSketchModalProps> = ({
             {/* Directional Exact-Length Entry Bar in Draw Mode */}
             {mode === 'draw' && !isClosed && (
               <div className="absolute top-2 left-2.5 flex items-center gap-1 rounded-xl border border-zinc-700/90 bg-[#141518]/95 px-2 py-1 text-xs shadow-lg">
-                <input
-                  type="number"
+                <NumericInput
                   min={10}
                   max={5000}
                   step={10}
                   value={stepLenMm}
-                  onChange={(e) => {
-                    const v = Number(e.target.value);
-                    if (!Number.isNaN(v)) setStepLenMm(Math.max(10, Math.min(5000, Math.round(v))));
-                  }}
-                  aria-label="Długość kolejnego odcinka w mm"
+                  onChange={(val) => setStepLenMm(val)}
+                  ariaLabel="Długość kolejnego odcinka w mm"
                   className="w-14 rounded-md border border-zinc-700 bg-zinc-900 px-1.5 py-1 text-center text-xs font-mono-num text-white focus:border-amber-500 focus:outline-none"
                 />
                 <span className="text-[10px] text-zinc-400 mr-0.5">mm</span>
@@ -1248,15 +1245,13 @@ export const ShapeSketchModal: React.FC<ShapeSketchModalProps> = ({
                 </span>
                 <label className="flex items-center gap-1">
                   <span className="text-[11px] text-zinc-400">X</span>
-                  <input
-                    type="number"
+                  <NumericInput
+                    step={10}
                     value={points[selectedIdx][0]}
-                    onChange={(e) => {
-                      const val = Number(e.target.value);
-                      if (Number.isNaN(val)) return;
+                    onChange={(val) => {
                       setPoints((prev) => {
                         const next = [...prev];
-                        next[selectedIdx] = [Math.round(val), next[selectedIdx][1]];
+                        next[selectedIdx] = [val, next[selectedIdx][1]];
                         return next;
                       });
                     }}
@@ -1265,15 +1260,13 @@ export const ShapeSketchModal: React.FC<ShapeSketchModalProps> = ({
                 </label>
                 <label className="flex items-center gap-1">
                   <span className="text-[11px] text-zinc-400">Y</span>
-                  <input
-                    type="number"
+                  <NumericInput
+                    step={10}
                     value={points[selectedIdx][1]}
-                    onChange={(e) => {
-                      const val = Number(e.target.value);
-                      if (Number.isNaN(val)) return;
+                    onChange={(val) => {
                       setPoints((prev) => {
                         const next = [...prev];
-                        next[selectedIdx] = [next[selectedIdx][0], Math.round(val)];
+                        next[selectedIdx] = [next[selectedIdx][0], val];
                         return next;
                       });
                     }}
@@ -1341,15 +1334,12 @@ export const ShapeSketchModal: React.FC<ShapeSketchModalProps> = ({
             <div className="space-y-1.5">
               <div className="flex items-center justify-between">
                 <span className="text-xs font-medium text-zinc-300">Grubość płyty (mm)</span>
-                <input
-                  type="number"
+                <NumericInput
                   min={4}
                   max={120}
+                  step={1}
                   value={thicknessMm}
-                  onChange={(e) => {
-                    const v = Number(e.target.value);
-                    if (!Number.isNaN(v)) setThicknessMm(Math.max(4, Math.min(120, Math.round(v))));
-                  }}
+                  onChange={(val) => setThicknessMm(val)}
                   className="w-16 rounded-md border border-zinc-800 bg-zinc-900 px-2 py-1 text-right text-xs font-mono-num text-white focus:border-amber-500 focus:outline-none"
                 />
               </div>

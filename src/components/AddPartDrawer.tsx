@@ -461,11 +461,14 @@ export const AddPartDrawer: React.FC<AddPartDrawerProps> = ({
       onClick={(e) => {
         if (e.target === e.currentTarget) onClose();
       }}
-      className="fixed inset-0 z-50 flex items-end md:items-center justify-center bg-black/55 p-0 md:p-4"
+      className="fixed inset-0 z-50 flex items-end md:items-center justify-center bg-black/60 backdrop-blur-[3px] p-0 md:p-4"
     >
-      <div className="w-full md:max-w-4xl rounded-t-2xl md:rounded-2xl border border-zinc-800 bg-[#141518] text-zinc-100 shadow-2xl flex flex-col max-h-[92dvh] md:max-h-[86dvh] overflow-hidden">
+      <div className="studio-sheet animate-studio-sheet w-full md:max-w-4xl rounded-t-3xl md:rounded-3xl text-zinc-100 flex flex-col max-h-[92dvh] md:max-h-[86dvh] overflow-hidden">
+        <div className="md:hidden flex justify-center pt-2.5 pb-0.5 shrink-0">
+          <div className="h-1 w-10 rounded-full bg-white/20" />
+        </div>
         {/* Top Modal Header + Search Input */}
-        <div className="flex flex-col gap-3 border-b border-zinc-800 px-4 sm:px-5 py-3.5 shrink-0">
+        <div className="flex flex-col gap-3 border-b border-white/[0.08] px-4 sm:px-5 py-3.5 shrink-0">
           <div className="flex items-center justify-between gap-3">
             <div className="min-w-0">
               <h2 className="text-base font-semibold text-white truncate">
@@ -478,7 +481,7 @@ export const AddPartDrawer: React.FC<AddPartDrawerProps> = ({
             <button
               type="button"
               onClick={onClose}
-              className="flex h-10 w-10 items-center justify-center rounded-xl text-zinc-400 hover:bg-zinc-800 hover:text-white cursor-pointer shrink-0"
+              className="flex h-9 w-9 items-center justify-center rounded-xl text-zinc-400 hover:bg-white/[0.08] hover:text-white transition-colors cursor-pointer shrink-0"
               aria-label="Zamknij bibliotekę"
             >
               <X className="h-4 w-4" />
@@ -493,7 +496,7 @@ export const AddPartDrawer: React.FC<AddPartDrawerProps> = ({
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               placeholder="Szukaj w całym katalogu: pralka, geberit, lodówka, wanna, sofa, TV, półka..."
-              className="h-10 w-full rounded-xl border border-zinc-800 bg-zinc-900/90 pl-9 pr-9 text-xs sm:text-sm text-zinc-100 placeholder:text-zinc-500 focus:border-amber-500 focus:outline-none"
+              className="h-10 w-full rounded-xl border border-white/[0.09] bg-white/[0.05] pl-9 pr-9 text-xs sm:text-sm text-zinc-100 placeholder:text-zinc-500 focus:border-amber-500 focus:outline-none"
             />
             {searchQuery && (
               <button

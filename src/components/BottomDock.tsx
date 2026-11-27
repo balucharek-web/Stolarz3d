@@ -35,6 +35,7 @@ import {
   RotateCw,
   Ruler,
   Scissors,
+  Search,
   SlidersHorizontal,
   Sparkles,
   Square,
@@ -130,6 +131,7 @@ interface BottomDockProps {
   onOpenCutList: () => void;
   onOpenSketch2D?: () => void;
   onOpenShortcuts?: () => void;
+  onOpenCommandPalette?: () => void;
   onSnapshot: () => void;
 }
 
@@ -212,6 +214,7 @@ export const BottomDock: React.FC<BottomDockProps> = ({
   onOpenCutList,
   onOpenSketch2D,
   onOpenShortcuts,
+  onOpenCommandPalette,
   onSnapshot,
 }) => {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
@@ -245,6 +248,12 @@ export const BottomDock: React.FC<BottomDockProps> = ({
       tool === 'measure'
   );
 
+  const ctxBtn =
+    'flex h-7 items-center gap-1 rounded-lg border border-white/[0.08] bg-white/[0.04] px-2 text-xs font-medium text-zinc-200 hover:bg-white/[0.1] hover:text-white transition-colors whitespace-nowrap cursor-pointer';
+
+  const alignBtn =
+    'flex h-7 w-7 items-center justify-center rounded-lg border border-white/[0.08] bg-white/[0.04] text-zinc-300 hover:bg-white/[0.1] hover:text-white transition-colors cursor-pointer';
+
   return (
     <>
       {/* =====================================================================
@@ -252,7 +261,7 @@ export const BottomDock: React.FC<BottomDockProps> = ({
       ===================================================================== */}
       <aside
         aria-label="Narzędzia CAD"
-        className="hidden md:flex fixed left-3 top-1/2 -translate-y-1/2 z-30 flex-col items-center gap-1 rounded-2xl border border-zinc-800 bg-[#141518]/[0.96] p-1.5 shadow-2xl backdrop-blur-md"
+        className="hidden md:flex studio-glass fixed left-3.5 top-1/2 -translate-y-1/2 z-30 flex-col items-center gap-1 rounded-2xl p-1.5"
       >
         {visibleRailTools.map(({ id, label, shortcut, icon: Icon }) => {
           const active = tool === id;
@@ -261,35 +270,39 @@ export const BottomDock: React.FC<BottomDockProps> = ({
               key={id}
               type="button"
               onClick={() => onChangeTool(id)}
-              title={`${label} (${shortcut})`}
               aria-label={`${label} (${shortcut})`}
-              className={`group relative flex h-10 w-10 items-center justify-center rounded-xl transition-colors cursor-pointer ${
+              className={`group relative flex h-10 w-10 items-center justify-center rounded-xl transition-all cursor-pointer ${
                 active
-                  ? 'bg-amber-500 text-zinc-950 shadow-sm'
-                  : 'text-zinc-300 hover:bg-zinc-800 hover:text-white'
+                  ? 'bg-amber-500 text-zinc-950 shadow-[0_2px_12px_rgba(245,158,11,0.35)]'
+                  : 'text-zinc-300 hover:bg-white/[0.08] hover:text-white'
               }`}
             >
               <Icon className="h-[18px] w-[18px]" />
+              {/* Floating Tooltip + Shortcut Keycap */}
+              <span
+                role="tooltip"
+                className="pointer-events-none absolute left-[calc(100%+10px)] top-1/2 -translate-y-1/2 -translate-x-1 opacity-0 group-hover:opacity-100 group-hover:translate-x-0 transition-all duration-150 flex items-center gap-1.5 rounded-lg border border-white/[0.1] bg-[#101216]/95 px-2.5 py-1 text-[11px] font-medium text-zinc-100 shadow-xl whitespace-nowrap"
+              >
+                <span>{label}</span>
+                <kbd className="rounded bg-white/[0.08] px-1 py-0.5 text-[10px] font-mono-num text-zinc-400">
+                  {shortcut}
+                </kbd>
+              </span>
             </button>
           );
         })}
 
-        <div className="my-0.5 h-px w-7 bg-zinc-800" />
+        <div className="my-1 h-px w-6 bg-white/[0.08]" />
 
         {/* SketchUp-Style Group vs Single Part Selection Toggle */}
         <button
           type="button"
           onClick={onToggleSelectionScope}
-          title={
-            selectionScope === 'group'
-              ? 'Tryb kliknięcia: Cała szafka / grupa (dwuklik = pojedyncza płyta)'
-              : 'Tryb kliknięcia: Pojedyncza płyta (kliknij, aby przełączyć na całe grupy)'
-          }
           aria-label="Przełącz tryb zaznaczania grupa lub płyta"
-          className={`flex h-10 w-10 flex-col items-center justify-center rounded-xl transition-colors cursor-pointer ${
+          className={`group relative flex h-10 w-10 flex-col items-center justify-center rounded-xl transition-all cursor-pointer ${
             selectionScope === 'group'
-              ? 'bg-sky-500/15 text-sky-300 border border-sky-500/40'
-              : 'text-zinc-300 hover:bg-zinc-800 hover:text-white'
+              ? 'bg-sky-500/15 text-sky-300 border border-sky-400/30'
+              : 'text-zinc-300 hover:bg-white/[0.08] hover:text-white'
           }`}
         >
           {selectionScope === 'group' ? (
@@ -300,30 +313,54 @@ export const BottomDock: React.FC<BottomDockProps> = ({
           <span className="text-[8px] font-semibold leading-none mt-0.5">
             {selectionScope === 'group' ? 'Grupa' : 'Płyta'}
           </span>
+          <span
+            role="tooltip"
+            className="pointer-events-none absolute left-[calc(100%+10px)] top-1/2 -translate-y-1/2 -translate-x-1 opacity-0 group-hover:opacity-100 group-hover:translate-x-0 transition-all duration-150 rounded-lg border border-white/[0.1] bg-[#101216]/95 px-2.5 py-1 text-[11px] font-medium text-zinc-100 shadow-xl whitespace-nowrap"
+          >
+            {selectionScope === 'group'
+              ? 'Klik zaznacza całą szafkę (2× = płyta)'
+              : 'Klik zaznacza pojedynczą płytę'}
+          </span>
         </button>
 
-        <div className="my-0.5 h-px w-7 bg-zinc-800" />
+        <div className="my-1 h-px w-6 bg-white/[0.08]" />
 
         {/* Undo / Redo */}
         <button
           type="button"
           onClick={onUndo}
           disabled={!canUndo}
-          title="Cofnij (Ctrl+Z)"
           aria-label="Cofnij"
-          className="flex h-9 w-10 items-center justify-center rounded-xl text-zinc-300 hover:bg-zinc-800 hover:text-white disabled:opacity-30 disabled:cursor-not-allowed transition-colors cursor-pointer"
+          className="group relative flex h-9 w-10 items-center justify-center rounded-xl text-zinc-300 hover:bg-white/[0.08] hover:text-white disabled:opacity-25 disabled:cursor-not-allowed transition-colors cursor-pointer"
         >
           <Undo2 className="h-4 w-4" />
+          <span
+            role="tooltip"
+            className="pointer-events-none absolute left-[calc(100%+10px)] top-1/2 -translate-y-1/2 -translate-x-1 opacity-0 group-hover:opacity-100 group-hover:translate-x-0 transition-all duration-150 flex items-center gap-1.5 rounded-lg border border-white/[0.1] bg-[#101216]/95 px-2.5 py-1 text-[11px] font-medium text-zinc-100 shadow-xl whitespace-nowrap"
+          >
+            <span>Cofnij</span>
+            <kbd className="rounded bg-white/[0.08] px-1 py-0.5 text-[10px] font-mono-num text-zinc-400">
+              Ctrl+Z
+            </kbd>
+          </span>
         </button>
         <button
           type="button"
           onClick={onRedo}
           disabled={!canRedo}
-          title="Ponów (Ctrl+Y)"
           aria-label="Ponów"
-          className="flex h-9 w-10 items-center justify-center rounded-xl text-zinc-300 hover:bg-zinc-800 hover:text-white disabled:opacity-30 disabled:cursor-not-allowed transition-colors cursor-pointer"
+          className="group relative flex h-9 w-10 items-center justify-center rounded-xl text-zinc-300 hover:bg-white/[0.08] hover:text-white disabled:opacity-25 disabled:cursor-not-allowed transition-colors cursor-pointer"
         >
           <Redo2 className="h-4 w-4" />
+          <span
+            role="tooltip"
+            className="pointer-events-none absolute left-[calc(100%+10px)] top-1/2 -translate-y-1/2 -translate-x-1 opacity-0 group-hover:opacity-100 group-hover:translate-x-0 transition-all duration-150 flex items-center gap-1.5 rounded-lg border border-white/[0.1] bg-[#101216]/95 px-2.5 py-1 text-[11px] font-medium text-zinc-100 shadow-xl whitespace-nowrap"
+          >
+            <span>Ponów</span>
+            <kbd className="rounded bg-white/[0.08] px-1 py-0.5 text-[10px] font-mono-num text-zinc-400">
+              Ctrl+Y
+            </kbd>
+          </span>
         </button>
       </aside>
 
@@ -338,16 +375,16 @@ export const BottomDock: React.FC<BottomDockProps> = ({
             activeGroupEditLabel ||
             tool === 'screw' ||
             tool === 'measure') && (
-            <div className="mx-2 mb-1.5 pointer-events-auto flex items-center justify-between gap-1.5 rounded-xl border border-zinc-800 bg-[#141518]/[0.96] px-2.5 py-1.5 text-zinc-100 shadow-lg">
+            <div className="studio-glass animate-studio-pop mx-2.5 mb-2 pointer-events-auto flex items-center justify-between gap-1.5 rounded-2xl px-2.5 py-1.5 text-zinc-100">
               {selectedFastenerLabel ? (
                 <>
-                  <span className="text-[11px] font-medium text-zinc-200 truncate">
+                  <span className="text-xs font-medium text-zinc-200 truncate pl-1">
                     {selectedFastenerLabel}
                   </span>
                   <button
                     type="button"
                     onClick={onDeleteSelectedFastener}
-                    className="flex min-h-[36px] items-center gap-1 rounded-lg bg-red-600/25 px-3 text-xs font-medium text-red-200 active:bg-red-600/40 whitespace-nowrap shrink-0"
+                    className="flex min-h-[38px] items-center gap-1.5 rounded-xl bg-red-500/20 px-3 text-xs font-medium text-red-200 active:bg-red-500/35 whitespace-nowrap shrink-0"
                   >
                     <Trash2 className="h-3.5 w-3.5" />
                     <span>Usuń</span>
@@ -355,14 +392,14 @@ export const BottomDock: React.FC<BottomDockProps> = ({
                 </>
               ) : tool === 'measure' ? (
                 <>
-                  <span className="text-[11px] font-medium text-sky-300 truncate pl-1">
+                  <span className="text-xs font-medium text-sky-300 truncate pl-1">
                     Tapnij 2 punkty w 3D, aby zmierzyć
                   </span>
                   {measurementsCount > 0 && (
                     <button
                       type="button"
                       onClick={onClearMeasurements}
-                      className="flex min-h-[34px] items-center gap-1 rounded-lg border border-zinc-700 bg-zinc-900 px-2.5 text-xs text-zinc-200 whitespace-nowrap shrink-0"
+                      className="flex min-h-[36px] items-center gap-1 rounded-xl border border-white/[0.1] bg-white/[0.06] px-2.5 text-xs text-zinc-200 whitespace-nowrap shrink-0"
                     >
                       <Trash2 className="h-3.5 w-3.5" />
                       <span>Wyczyść ({measurementsCount})</span>
@@ -375,10 +412,10 @@ export const BottomDock: React.FC<BottomDockProps> = ({
                     aria-label="Rodzaj wkrętu"
                     value={activeScrewType}
                     onChange={(e) => onChangeScrewType(e.target.value as ScrewType)}
-                    className="min-h-[36px] min-w-0 flex-1 rounded-lg border border-zinc-700 bg-zinc-900 px-2 text-xs font-medium text-zinc-100 focus:border-amber-500 focus:outline-none"
+                    className="min-h-[38px] min-w-0 flex-1 rounded-xl border border-white/[0.1] bg-white/[0.06] px-2.5 text-xs font-medium text-zinc-100 focus:border-amber-500 focus:outline-none"
                   >
                     {SCREW_CATALOG.map((s) => (
-                      <option key={s.id} value={s.id}>
+                      <option key={s.id} value={s.id} className="bg-zinc-900">
                         {s.shortName}
                       </option>
                     ))}
@@ -386,10 +423,10 @@ export const BottomDock: React.FC<BottomDockProps> = ({
                   <button
                     type="button"
                     onClick={onToggleScrewJointsOnly}
-                    className={`flex min-h-[36px] items-center gap-1 rounded-lg border px-2 text-[11px] font-medium whitespace-nowrap shrink-0 ${
+                    className={`flex min-h-[38px] items-center gap-1 rounded-xl border px-2.5 text-xs font-medium whitespace-nowrap shrink-0 ${
                       screwJointsOnly
-                        ? 'border-emerald-500/60 bg-emerald-500/15 text-emerald-300'
-                        : 'border-zinc-700 bg-zinc-900 text-zinc-400'
+                        ? 'border-emerald-400/40 bg-emerald-500/15 text-emerald-300'
+                        : 'border-white/[0.08] bg-white/[0.04] text-zinc-400'
                     }`}
                   >
                     <span>Styki</span>
@@ -397,7 +434,7 @@ export const BottomDock: React.FC<BottomDockProps> = ({
                   <button
                     type="button"
                     onClick={onAutoFasteners}
-                    className="flex min-h-[36px] items-center gap-1 rounded-lg border border-amber-500/40 bg-amber-500/15 px-2.5 text-xs font-medium text-amber-300 active:bg-amber-500/25 whitespace-nowrap shrink-0"
+                    className="flex min-h-[38px] items-center gap-1 rounded-xl bg-amber-500 px-3 text-xs font-semibold text-zinc-950 active:bg-amber-400 whitespace-nowrap shrink-0"
                   >
                     <Sparkles className="h-3.5 w-3.5" />
                     <span>Auto</span>
@@ -405,21 +442,21 @@ export const BottomDock: React.FC<BottomDockProps> = ({
                 </>
               ) : !selectedPartName && activeGroupEditLabel ? (
                 <>
-                  <span className="text-[11px] text-sky-300 truncate pl-1">
-                    Wnętrze grupy: {activeGroupEditLabel}
+                  <span className="text-xs text-sky-300 truncate pl-1">
+                    Wnętrze: {activeGroupEditLabel}
                   </span>
                   <button
                     type="button"
                     onClick={onExitGroupEdit}
-                    className="flex min-h-[34px] items-center gap-1 rounded-lg bg-sky-500/20 border border-sky-500/50 px-2.5 text-xs font-semibold text-sky-200 whitespace-nowrap shrink-0"
+                    className="flex min-h-[36px] items-center gap-1 rounded-xl bg-sky-500/20 border border-sky-400/35 px-3 text-xs font-semibold text-sky-200 whitespace-nowrap shrink-0"
                   >
                     <span>Wyjdź z grupy</span>
                   </button>
                 </>
               ) : (
                 <>
-                  <div className="min-w-0 flex-1 pl-0.5">
-                    <div className="text-xs font-medium text-zinc-100 truncate">
+                  <div className="min-w-0 flex-1 pl-1">
+                    <div className="text-xs font-semibold text-white truncate">
                       {selectedCount > 1
                         ? `Grupa (${selectedCount} elem.)`
                         : selectedPartName}
@@ -428,7 +465,7 @@ export const BottomDock: React.FC<BottomDockProps> = ({
                       <button
                         type="button"
                         onClick={onExitGroupEdit}
-                        className="text-[10px] font-medium text-sky-300 underline"
+                        className="text-[11px] font-medium text-sky-300"
                       >
                         ← Wróć do całej grupy
                       </button>
@@ -436,7 +473,7 @@ export const BottomDock: React.FC<BottomDockProps> = ({
                       <button
                         type="button"
                         onClick={onEnterSinglePartEdit}
-                        className="text-[10px] font-medium text-sky-300 underline"
+                        className="text-[11px] font-medium text-sky-300"
                       >
                         Edytuj pojedynczą płytę
                       </button>
@@ -448,10 +485,10 @@ export const BottomDock: React.FC<BottomDockProps> = ({
                       onClick={onToggleNudgePad}
                       aria-label="Pad precyzyjnego przesuwania"
                       title="Pad precyzji ±mm"
-                      className={`flex min-h-[36px] min-w-[34px] items-center justify-center rounded-lg border transition-colors ${
+                      className={`flex h-9 w-9 items-center justify-center rounded-xl border transition-colors ${
                         nudgePadOpen
-                          ? 'border-amber-500 bg-amber-500/20 text-amber-300'
-                          : 'border-zinc-800 bg-zinc-900 text-zinc-200 active:bg-zinc-800'
+                          ? 'border-amber-400/60 bg-amber-500/20 text-amber-300'
+                          : 'border-white/[0.08] bg-white/[0.05] text-zinc-200 active:bg-white/[0.12]'
                       }`}
                     >
                       <Gamepad2 className="h-4 w-4" />
@@ -461,7 +498,7 @@ export const BottomDock: React.FC<BottomDockProps> = ({
                         type="button"
                         onClick={onRotateSelected90}
                         aria-label="Obróć o 90 stopni"
-                        className="flex min-h-[36px] min-w-[34px] items-center justify-center rounded-lg border border-zinc-800 bg-zinc-900 text-zinc-200 active:bg-zinc-800"
+                        className="flex h-9 w-9 items-center justify-center rounded-xl border border-white/[0.08] bg-white/[0.05] text-zinc-200 active:bg-white/[0.12]"
                       >
                         <RotateCw className="h-3.5 w-3.5" />
                       </button>
@@ -471,7 +508,7 @@ export const BottomDock: React.FC<BottomDockProps> = ({
                         type="button"
                         onClick={onDeleteSelected}
                         aria-label="Usuń zaznaczone"
-                        className="flex min-h-[36px] min-w-[34px] items-center justify-center rounded-lg border border-red-900/50 bg-red-950/40 text-red-300 active:bg-red-900/50"
+                        className="flex h-9 w-9 items-center justify-center rounded-xl border border-red-500/25 bg-red-500/10 text-red-300 active:bg-red-500/25"
                       >
                         <Trash2 className="h-3.5 w-3.5" />
                       </button>
@@ -480,15 +517,16 @@ export const BottomDock: React.FC<BottomDockProps> = ({
                       <button
                         type="button"
                         onClick={onEditParametricCabinet}
-                        className="flex min-h-[36px] items-center gap-1 rounded-lg border border-emerald-500/50 bg-emerald-500/15 px-2 text-xs font-semibold text-emerald-200 active:bg-emerald-500/30 whitespace-nowrap"
+                        aria-label="Edytuj szafkę w kreatorze"
+                        className="flex h-9 w-9 items-center justify-center rounded-xl border border-white/[0.12] bg-white/[0.08] text-zinc-100 active:bg-white/[0.16]"
                       >
-                        <LayoutPanelTop className="h-3.5 w-3.5" />
+                        <LayoutPanelTop className="h-4 w-4 text-amber-400" />
                       </button>
                     )}
                     <button
                       type="button"
                       onClick={onOpenInspector}
-                      className="flex min-h-[36px] items-center gap-1 rounded-lg bg-amber-500 px-2.5 text-xs font-semibold text-zinc-950 active:bg-amber-400 whitespace-nowrap"
+                      className="flex min-h-[38px] items-center gap-1.5 rounded-xl bg-amber-500 px-3 text-xs font-semibold text-zinc-950 active:bg-amber-400 whitespace-nowrap"
                     >
                       <SlidersHorizontal className="h-3.5 w-3.5" />
                       <span>Edytuj</span>
@@ -504,22 +542,22 @@ export const BottomDock: React.FC<BottomDockProps> = ({
           <>
             <div
               onClick={() => setMobileMenuOpen(false)}
-              className="fixed inset-0 z-0 bg-black/45 pointer-events-auto"
+              className="fixed inset-0 z-0 bg-black/50 backdrop-blur-[2px] pointer-events-auto"
               aria-hidden="true"
             />
-            <div className="relative z-10 mx-2 mb-1.5 pointer-events-auto max-h-[72dvh] flex flex-col rounded-2xl border border-zinc-800 bg-[#141518] text-zinc-100 shadow-2xl overflow-hidden">
+            <div className="studio-sheet animate-studio-sheet relative z-10 mx-0 pointer-events-auto max-h-[76dvh] flex flex-col rounded-t-3xl border-b-0 text-zinc-100 overflow-hidden">
               {/* Drag Handle + Header + 3-Way Tab Selector */}
-              <div className="px-3.5 pt-2 pb-2.5 border-b border-zinc-800 space-y-2.5 shrink-0">
+              <div className="px-4 pt-2.5 pb-3 border-b border-white/[0.08] space-y-3 shrink-0">
                 <div className="flex justify-center">
-                  <div className="h-1 w-10 rounded-full bg-zinc-700" />
+                  <div className="h-1 w-10 rounded-full bg-white/20" />
                 </div>
 
                 <div className="flex items-center justify-between gap-2">
-                  <div className="flex items-center gap-0.5 rounded-lg bg-zinc-900 p-0.5 border border-zinc-800">
+                  <div className="flex items-center gap-0.5 rounded-xl bg-white/[0.05] p-0.5 border border-white/[0.08]">
                     <button
                       type="button"
                       onClick={() => onChangeUiMode('simple')}
-                      className={`rounded-md px-2.5 py-1 text-[11px] font-medium transition-colors ${
+                      className={`min-h-[32px] rounded-lg px-3 text-xs font-medium transition-colors ${
                         !isExpert
                           ? 'bg-amber-500 text-zinc-950 font-semibold'
                           : 'text-zinc-400'
@@ -530,7 +568,7 @@ export const BottomDock: React.FC<BottomDockProps> = ({
                     <button
                       type="button"
                       onClick={() => onChangeUiMode('expert')}
-                      className={`rounded-md px-2.5 py-1 text-[11px] font-medium transition-colors ${
+                      className={`min-h-[32px] rounded-lg px-3 text-xs font-medium transition-colors ${
                         isExpert
                           ? 'bg-amber-500 text-zinc-950 font-semibold'
                           : 'text-zinc-400'
@@ -540,17 +578,33 @@ export const BottomDock: React.FC<BottomDockProps> = ({
                     </button>
                   </div>
 
-                  <button
-                    type="button"
-                    onClick={() => setMobileMenuOpen(false)}
-                    className="flex h-8 w-8 items-center justify-center rounded-lg text-zinc-400 active:bg-zinc-800"
-                    aria-label="Zamknij menu"
-                  >
-                    <X className="h-4 w-4" />
-                  </button>
+                  <div className="flex items-center gap-1.5">
+                    {onOpenCommandPalette && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setMobileMenuOpen(false);
+                          onOpenCommandPalette();
+                        }}
+                        className="flex h-9 items-center gap-1.5 rounded-xl border border-white/[0.08] bg-white/[0.05] px-2.5 text-xs font-medium text-zinc-200 active:bg-white/[0.12]"
+                        aria-label="Szukaj polecenia"
+                      >
+                        <Search className="h-3.5 w-3.5 text-amber-400" />
+                        <span>Szukaj</span>
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => setMobileMenuOpen(false)}
+                      className="flex h-9 w-9 items-center justify-center rounded-xl text-zinc-400 active:bg-white/[0.08]"
+                      aria-label="Zamknij menu"
+                    >
+                      <X className="h-4 w-4" />
+                    </button>
+                  </div>
                 </div>
 
-                <div className="grid grid-cols-3 gap-1 rounded-xl bg-zinc-900 p-1 border border-zinc-800">
+                <div className="grid grid-cols-3 gap-1 rounded-xl bg-white/[0.04] p-1 border border-white/[0.07]">
                   {(
                     [
                       { id: 'tools', label: 'Narzędzia' },
@@ -562,9 +616,9 @@ export const BottomDock: React.FC<BottomDockProps> = ({
                       key={t.id}
                       type="button"
                       onClick={() => setMobileTab(t.id)}
-                      className={`min-h-[34px] rounded-lg text-xs font-medium transition-colors ${
+                      className={`min-h-[36px] rounded-lg text-xs font-medium transition-colors ${
                         mobileTab === t.id
-                          ? 'bg-zinc-800 text-amber-300 font-semibold'
+                          ? 'bg-white/[0.12] text-white font-semibold shadow-sm'
                           : 'text-zinc-400'
                       }`}
                     >
@@ -575,12 +629,40 @@ export const BottomDock: React.FC<BottomDockProps> = ({
               </div>
 
               {/* Scrollable Active Tab Body */}
-              <div className="cad-scroll overflow-y-auto p-3.5 space-y-3">
+              <div className="cad-scroll overflow-y-auto px-4 py-3.5 space-y-4">
                 {mobileTab === 'tools' && (
                   <>
-                    {/* Show only CAD tools not already pinned on the 5-button bottom thumb bar */}
+                    {/* Quick Builders */}
+                    <div className="grid grid-cols-2 gap-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setMobileMenuOpen(false);
+                          onOpenCabinetBuilder();
+                        }}
+                        className="flex min-h-[46px] items-center justify-center gap-2 rounded-xl bg-amber-500 px-3 text-xs font-semibold text-zinc-950 active:bg-amber-400"
+                      >
+                        <LayoutPanelTop className="h-4 w-4" />
+                        <span>Kreator szafki</span>
+                      </button>
+                      {onOpenSketch2D && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setMobileMenuOpen(false);
+                            onOpenSketch2D();
+                          }}
+                          className="flex min-h-[46px] items-center justify-center gap-2 rounded-xl border border-white/[0.08] bg-white/[0.05] px-3 text-xs font-medium text-zinc-100 active:bg-white/[0.1]"
+                        >
+                          <PenTool className="h-4 w-4 text-amber-400" />
+                          <span>Szkic 2D</span>
+                        </button>
+                      )}
+                    </div>
+
+                    {/* Expert Extra CAD Tools */}
                     {isExpert && (
-                      <div className="grid grid-cols-2 gap-2">
+                      <div className="grid grid-cols-2 gap-2 pt-3 border-t border-white/[0.08]">
                         {(
                           [
                             { id: 'rotate', label: 'Obróć 3D', icon: RotateCw },
@@ -596,8 +678,8 @@ export const BottomDock: React.FC<BottomDockProps> = ({
                             }}
                             className={`flex min-h-[44px] items-center justify-center gap-2 rounded-xl border text-xs font-medium ${
                               tool === id
-                                ? 'border-amber-500 bg-amber-500/20 text-amber-300 font-semibold'
-                                : 'border-zinc-800 bg-zinc-900 text-zinc-200'
+                                ? 'border-amber-400/60 bg-amber-500/18 text-amber-200 font-semibold'
+                                : 'border-white/[0.08] bg-white/[0.04] text-zinc-200 active:bg-white/[0.1]'
                             }`}
                           >
                             <Icon className="h-4 w-4 shrink-0" />
@@ -607,72 +689,44 @@ export const BottomDock: React.FC<BottomDockProps> = ({
                       </div>
                     )}
 
-                    <div
-                      className={`grid grid-cols-2 gap-2 ${
-                        isExpert ? 'pt-1 border-t border-zinc-800' : ''
-                      }`}
-                    >
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setMobileMenuOpen(false);
-                          onOpenCabinetBuilder();
-                        }}
-                        className="flex min-h-[44px] items-center justify-center gap-1.5 rounded-xl border border-emerald-500/45 bg-emerald-500/12 px-3 text-xs font-semibold text-emerald-200"
-                      >
-                        <LayoutPanelTop className="h-4 w-4" />
-                        <span>Kreator szafki</span>
-                      </button>
-                      {onOpenSketch2D && (
+                    {/* Selection & Snapping Controls */}
+                    <div className="space-y-2 pt-3 border-t border-white/[0.08]">
+                      <div className="grid grid-cols-2 gap-2">
                         <button
                           type="button"
-                          onClick={() => {
-                            setMobileMenuOpen(false);
-                            onOpenSketch2D();
-                          }}
-                          className="flex min-h-[44px] items-center justify-center gap-1.5 rounded-xl border border-zinc-800 bg-zinc-900 px-3 text-xs font-medium text-zinc-200"
+                          onClick={onToggleSelectionScope}
+                          className={`flex min-h-[44px] items-center justify-center gap-1.5 rounded-xl border px-3 text-xs font-medium ${
+                            selectionScope === 'group'
+                              ? 'border-sky-400/40 bg-sky-500/15 text-sky-200'
+                              : 'border-white/[0.08] bg-white/[0.04] text-zinc-200'
+                          }`}
                         >
-                          <PenTool className="h-4 w-4 text-amber-400" />
-                          <span>Szkic płyty 2D</span>
+                          {selectionScope === 'group' ? (
+                            <Boxes className="h-4 w-4" />
+                          ) : (
+                            <Square className="h-4 w-4" />
+                          )}
+                          <span>
+                            Klik: {selectionScope === 'group' ? 'Cała grupa' : '1 płyta'}
+                          </span>
                         </button>
-                      )}
-                    </div>
-
-                    <div className="grid grid-cols-2 gap-2 pt-1 border-t border-zinc-800">
-                      <button
-                        type="button"
-                        onClick={onToggleSelectionScope}
-                        className={`flex min-h-[44px] items-center justify-center gap-1.5 rounded-xl border px-3 text-xs font-medium ${
-                          selectionScope === 'group'
-                            ? 'border-sky-500/60 bg-sky-500/15 text-sky-200'
-                            : 'border-zinc-800 bg-zinc-900 text-zinc-200'
-                        }`}
-                      >
-                        {selectionScope === 'group' ? (
-                          <Boxes className="h-4 w-4" />
-                        ) : (
-                          <Square className="h-4 w-4" />
-                        )}
-                        <span>
-                          Klik: {selectionScope === 'group' ? 'Cała grupa' : '1 płyta'}
-                        </span>
-                      </button>
-                      <button
-                        type="button"
-                        onClick={onToggleMagneticSnap}
-                        className={`flex min-h-[44px] items-center justify-center gap-1.5 rounded-xl border px-3 text-xs font-medium ${
-                          magneticSnap
-                            ? 'border-amber-500/60 bg-amber-500/15 text-amber-300'
-                            : 'border-zinc-800 bg-zinc-900 text-zinc-200'
-                        }`}
-                      >
-                        <Magnet className="h-4 w-4" />
-                        <span>Magnes: {magneticSnap ? 'Wł.' : 'Wył.'}</span>
-                      </button>
+                        <button
+                          type="button"
+                          onClick={onToggleMagneticSnap}
+                          className={`flex min-h-[44px] items-center justify-center gap-1.5 rounded-xl border px-3 text-xs font-medium ${
+                            magneticSnap
+                              ? 'border-amber-400/50 bg-amber-500/15 text-amber-200'
+                              : 'border-white/[0.08] bg-white/[0.04] text-zinc-200'
+                          }`}
+                        >
+                          <Magnet className="h-4 w-4" />
+                          <span>Magnes: {magneticSnap ? 'Wł.' : 'Wył.'}</span>
+                        </button>
+                      </div>
                       <button
                         type="button"
                         onClick={onCycleSnap}
-                        className="col-span-2 min-h-[42px] rounded-xl border border-zinc-800 bg-zinc-900 px-3 text-xs font-medium text-zinc-200 font-mono-num"
+                        className="w-full min-h-[44px] rounded-xl border border-white/[0.08] bg-white/[0.04] px-3 text-xs font-medium text-zinc-200 font-mono-num active:bg-white/[0.1]"
                       >
                         Skok siatki: {snapMm > 0 ? `${snapMm} mm` : 'Bez siatki'}
                       </button>
@@ -683,9 +737,9 @@ export const BottomDock: React.FC<BottomDockProps> = ({
                 {mobileTab === 'view' && (
                   <>
                     {/* Sliders */}
-                    <div className="space-y-2.5">
+                    <div className="space-y-3">
                       <div className="flex items-center gap-3">
-                        <span className="text-xs text-zinc-300 whitespace-nowrap w-20">
+                        <span className="text-xs text-zinc-300 whitespace-nowrap w-24">
                           Otwórz fronty
                         </span>
                         <input
@@ -704,7 +758,7 @@ export const BottomDock: React.FC<BottomDockProps> = ({
                       </div>
                       {isExpert && (
                         <div className="flex items-center gap-3">
-                          <span className="text-xs text-zinc-300 whitespace-nowrap w-20">
+                          <span className="text-xs text-zinc-300 whitespace-nowrap w-24">
                             Rozstrzał 3D
                           </span>
                           <input
@@ -725,7 +779,7 @@ export const BottomDock: React.FC<BottomDockProps> = ({
                     </div>
 
                     {/* Camera Presets */}
-                    <div className="grid grid-cols-4 gap-1.5 pt-1">
+                    <div className="grid grid-cols-4 gap-1.5 pt-3 border-t border-white/[0.08]">
                       {(
                         [
                           { id: 'iso', label: '3D' },
@@ -741,21 +795,21 @@ export const BottomDock: React.FC<BottomDockProps> = ({
                             onCameraPreset(cam.id);
                             setMobileMenuOpen(false);
                           }}
-                          className="min-h-[42px] rounded-xl border border-zinc-800 bg-zinc-900 text-xs font-medium text-zinc-200 active:bg-zinc-800"
+                          className="min-h-[44px] rounded-xl border border-white/[0.08] bg-white/[0.04] text-xs font-medium text-zinc-200 active:bg-white/[0.12]"
                         >
                           {cam.label}
                         </button>
                       ))}
                     </div>
 
-                    {/* Visual Toggles (aligned 1:1 with Desktop Simple vs Expert) */}
-                    <div className="grid grid-cols-2 gap-2 pt-1">
+                    {/* Visual Toggles */}
+                    <div className="grid grid-cols-2 gap-2 pt-3 border-t border-white/[0.08]">
                       <button
                         type="button"
                         onClick={onCycleLighting}
                         className={`${
                           isExpert ? '' : 'col-span-2'
-                        } flex min-h-[42px] items-center justify-center gap-1.5 rounded-xl border border-zinc-800 bg-zinc-900 px-3 text-xs font-medium text-zinc-200`}
+                        } flex min-h-[44px] items-center justify-center gap-1.5 rounded-xl border border-white/[0.08] bg-white/[0.04] px-3 text-xs font-medium text-zinc-200 active:bg-white/[0.1]`}
                       >
                         <Sun className="h-4 w-4 text-amber-400" />
                         <span>Światło: {LIGHTING_LABELS[lighting]}</span>
@@ -766,10 +820,10 @@ export const BottomDock: React.FC<BottomDockProps> = ({
                           <button
                             type="button"
                             onClick={onToggleLedUnderCabinet}
-                            className={`flex min-h-[42px] items-center justify-center gap-1.5 rounded-xl border px-3 text-xs font-medium ${
+                            className={`flex min-h-[44px] items-center justify-center gap-1.5 rounded-xl border px-3 text-xs font-medium ${
                               ledUnderCabinet
-                                ? 'border-amber-400/70 bg-amber-500/20 text-amber-200'
-                                : 'border-zinc-800 bg-zinc-900 text-zinc-200'
+                                ? 'border-amber-400/50 bg-amber-500/15 text-amber-200'
+                                : 'border-white/[0.08] bg-white/[0.04] text-zinc-200'
                             }`}
                           >
                             <Lightbulb className="h-4 w-4" />
@@ -778,10 +832,10 @@ export const BottomDock: React.FC<BottomDockProps> = ({
                           <button
                             type="button"
                             onClick={onToggleShowDimensions}
-                            className={`flex min-h-[42px] items-center justify-center gap-1.5 rounded-xl border px-3 text-xs font-medium ${
+                            className={`flex min-h-[44px] items-center justify-center gap-1.5 rounded-xl border px-3 text-xs font-medium ${
                               showDimensions
-                                ? 'border-sky-500/60 bg-sky-500/15 text-sky-300'
-                                : 'border-zinc-800 bg-zinc-900 text-zinc-200'
+                                ? 'border-sky-400/50 bg-sky-500/15 text-sky-200'
+                                : 'border-white/[0.08] bg-white/[0.04] text-zinc-200'
                             }`}
                           >
                             <Ruler className="h-4 w-4" />
@@ -790,10 +844,10 @@ export const BottomDock: React.FC<BottomDockProps> = ({
                           <button
                             type="button"
                             onClick={onToggleXray}
-                            className={`flex min-h-[42px] items-center justify-center gap-1.5 rounded-xl border px-3 text-xs font-medium ${
+                            className={`flex min-h-[44px] items-center justify-center gap-1.5 rounded-xl border px-3 text-xs font-medium ${
                               xrayMode
-                                ? 'border-amber-500/60 bg-amber-500/15 text-amber-300'
-                                : 'border-zinc-800 bg-zinc-900 text-zinc-200'
+                                ? 'border-amber-400/50 bg-amber-500/15 text-amber-200'
+                                : 'border-white/[0.08] bg-white/[0.04] text-zinc-200'
                             }`}
                           >
                             <Layers className="h-4 w-4" />
@@ -802,7 +856,7 @@ export const BottomDock: React.FC<BottomDockProps> = ({
                           <button
                             type="button"
                             onClick={onToggleShowFasteners}
-                            className="col-span-2 flex min-h-[42px] items-center justify-center gap-1.5 rounded-xl border border-zinc-800 bg-zinc-900 px-3 text-xs font-medium text-zinc-200"
+                            className="col-span-2 flex min-h-[44px] items-center justify-center gap-1.5 rounded-xl border border-white/[0.08] bg-white/[0.04] px-3 text-xs font-medium text-zinc-200"
                           >
                             {showFasteners ? (
                               <Eye className="h-4 w-4" />
@@ -817,10 +871,10 @@ export const BottomDock: React.FC<BottomDockProps> = ({
                               onToggleAssemblyMode();
                               setMobileMenuOpen(false);
                             }}
-                            className={`col-span-2 flex min-h-[42px] items-center justify-center gap-1.5 rounded-xl border px-3 text-xs font-medium ${
+                            className={`col-span-2 flex min-h-[44px] items-center justify-center gap-1.5 rounded-xl border px-3 text-xs font-medium ${
                               assemblyStep > 0
-                                ? 'border-emerald-500/60 bg-emerald-500/15 text-emerald-300'
-                                : 'border-zinc-800 bg-zinc-900 text-zinc-200'
+                                ? 'border-emerald-400/50 bg-emerald-500/15 text-emerald-200'
+                                : 'border-white/[0.08] bg-white/[0.04] text-zinc-200'
                             }`}
                           >
                             <ListOrdered className="h-4 w-4" />
@@ -831,7 +885,7 @@ export const BottomDock: React.FC<BottomDockProps> = ({
                         <button
                           type="button"
                           onClick={() => onChangeUiMode('expert')}
-                          className="col-span-2 flex min-h-[42px] items-center justify-center gap-1.5 rounded-xl border border-zinc-800 bg-zinc-900/70 px-3 text-xs font-medium text-amber-300 active:bg-zinc-800"
+                          className="col-span-2 flex min-h-[44px] items-center justify-center gap-1.5 rounded-xl border border-white/[0.08] bg-white/[0.04] px-3 text-xs font-medium text-amber-300 active:bg-white/[0.1]"
                         >
                           <Sparkles className="h-3.5 w-3.5 shrink-0" />
                           <span>Włącz tryb Ekspert (RTG, LED, rozstrzał, montaż)</span>
@@ -842,73 +896,80 @@ export const BottomDock: React.FC<BottomDockProps> = ({
                 )}
 
                 {mobileTab === 'project' && (
-                  <div className="grid grid-cols-2 gap-2">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setMobileMenuOpen(false);
-                        onOpenPartsList();
-                      }}
-                      className="flex min-h-[48px] items-center gap-2.5 rounded-xl border border-zinc-800 bg-zinc-900 px-3 text-xs font-medium text-zinc-100 active:bg-zinc-800"
-                    >
-                      <Layers className="h-4 w-4 text-amber-400 shrink-0" />
-                      <span className="truncate">Drzewo sceny</span>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setMobileMenuOpen(false);
-                        onOpenMaterials();
-                      }}
-                      className="flex min-h-[48px] items-center gap-2.5 rounded-xl border border-amber-500/40 bg-amber-500/10 px-3 text-xs font-semibold text-amber-200 active:bg-amber-500/20"
-                    >
-                      <Palette className="h-4 w-4 text-amber-400 shrink-0" />
-                      <span className="truncate">Materiały i ceny</span>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setMobileMenuOpen(false);
-                        onOpenCutList();
-                      }}
-                      className="flex min-h-[48px] items-center gap-2.5 rounded-xl border border-zinc-800 bg-zinc-900 px-3 text-xs font-medium text-zinc-100 active:bg-zinc-800"
-                    >
-                      <Scissors className="h-4 w-4 text-emerald-400 shrink-0" />
-                      <span className="truncate">Rozkrój i PDF</span>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setMobileMenuOpen(false);
-                        onOpenTemplates();
-                      }}
-                      className="flex min-h-[48px] items-center gap-2.5 rounded-xl border border-zinc-800 bg-zinc-900 px-3 text-xs font-medium text-zinc-100 active:bg-zinc-800"
-                    >
-                      <FolderOpen className="h-4 w-4 text-sky-400 shrink-0" />
-                      <span className="truncate">Szablony i DIY</span>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setMobileMenuOpen(false);
-                        onOpenProjects();
-                      }}
-                      className="flex min-h-[48px] items-center gap-2.5 rounded-xl border border-zinc-800 bg-zinc-900 px-3 text-xs font-medium text-zinc-100 active:bg-zinc-800"
-                    >
-                      <FolderOpen className="h-4 w-4 text-zinc-400 shrink-0" />
-                      <span className="truncate">Moje projekty</span>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setMobileMenuOpen(false);
-                        onSnapshot();
-                      }}
-                      className="flex min-h-[48px] items-center gap-2.5 rounded-xl border border-zinc-800 bg-zinc-900 px-3 text-xs font-medium text-zinc-100 active:bg-zinc-800"
-                    >
-                      <Camera className="h-4 w-4 text-zinc-300 shrink-0" />
-                      <span className="truncate">Zapisz PNG</span>
-                    </button>
+                  <div className="divide-y divide-white/[0.07]">
+                    {(
+                      [
+                        {
+                          label: 'Rozkrój płyt i wycena PDF',
+                          desc: 'Optymalizacja cięcia, obrzeża, kosztorys',
+                          icon: Scissors,
+                          accent: true,
+                          action: onOpenCutList,
+                        },
+                        {
+                          label: 'Materiały, dekory i ceny',
+                          desc: 'Płyty laminowane, drewno, własne tekstury',
+                          icon: Palette,
+                          action: onOpenMaterials,
+                        },
+                        {
+                          label: 'Drzewo sceny i warstwy',
+                          desc: 'Przeglądaj grupy, ukrywaj i blokuj elementy',
+                          icon: Layers,
+                          action: onOpenPartsList,
+                        },
+                        {
+                          label: 'Szablony z Firestore',
+                          desc: 'Gotowe projekty startowe i własne szablony',
+                          icon: FolderOpen,
+                          action: onOpenTemplates,
+                        },
+                        {
+                          label: 'Moje projekty',
+                          desc: 'Przełączaj, duplikuj i zmieniaj nazwy',
+                          icon: FolderOpen,
+                          action: onOpenProjects,
+                        },
+                        {
+                          label: 'Zapisz wizualizację PNG',
+                          desc: 'Eksportuj aktualny widok 3D jako obraz',
+                          icon: Camera,
+                          action: onSnapshot,
+                        },
+                      ] as Array<{
+                        label: string;
+                        desc: string;
+                        icon: React.ComponentType<{ className?: string }>;
+                        accent?: boolean;
+                        action: () => void;
+                      }>
+                    ).map(({ label, desc, icon: Icon, accent, action }) => (
+                      <button
+                        key={label}
+                        type="button"
+                        onClick={() => {
+                          setMobileMenuOpen(false);
+                          action();
+                        }}
+                        className="flex w-full min-h-[52px] items-center gap-3 py-2.5 px-1 text-left active:bg-white/[0.05] transition-colors"
+                      >
+                        <span
+                          className={`flex h-9 w-9 items-center justify-center rounded-xl shrink-0 ${
+                            accent
+                              ? 'bg-amber-500/20 text-amber-300'
+                              : 'bg-white/[0.06] text-zinc-300'
+                          }`}
+                        >
+                          <Icon className="h-4 w-4" />
+                        </span>
+                        <div className="min-w-0 flex-1">
+                          <div className="text-xs font-semibold text-zinc-100 truncate">
+                            {label}
+                          </div>
+                          <div className="text-[11px] text-zinc-500 truncate">{desc}</div>
+                        </div>
+                      </button>
+                    ))}
                     {onOpenShortcuts && (
                       <button
                         type="button"
@@ -916,10 +977,19 @@ export const BottomDock: React.FC<BottomDockProps> = ({
                           setMobileMenuOpen(false);
                           onOpenShortcuts();
                         }}
-                        className="col-span-2 flex min-h-[44px] items-center justify-center gap-2 rounded-xl border border-zinc-800 bg-zinc-900/80 px-3 text-xs font-medium text-zinc-200 active:bg-zinc-800"
+                        className="flex w-full min-h-[48px] items-center gap-3 py-2.5 px-1 text-left active:bg-white/[0.05] transition-colors"
                       >
-                        <HelpCircle className="h-4 w-4 text-sky-400 shrink-0" />
-                        <span>Pomoc, skróty i gesty</span>
+                        <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-white/[0.06] text-zinc-300 shrink-0">
+                          <HelpCircle className="h-4 w-4" />
+                        </span>
+                        <div className="min-w-0 flex-1">
+                          <div className="text-xs font-semibold text-zinc-100">
+                            Pomoc, skróty i gesty
+                          </div>
+                          <div className="text-[11px] text-zinc-500">
+                            Obsługa dotykiem i skróty klawiszowe
+                          </div>
+                        </div>
                       </button>
                     )}
                   </div>
@@ -929,10 +999,10 @@ export const BottomDock: React.FC<BottomDockProps> = ({
           </>
         )}
 
-        {/* Mobile Fixed Bottom Thumb Bar (5 ergonomic targets) */}
+        {/* Mobile Fixed Bottom Thumb Bar (5 ergonomic targets, subtle top indicator) */}
         <nav
           aria-label="Narzędzia projektowania"
-          className="relative z-10 pointer-events-auto border-t border-zinc-800 bg-[#141518] px-1.5 pt-1 pb-[max(0.375rem,env(safe-area-inset-bottom))]"
+          className="relative z-10 pointer-events-auto border-t border-white/[0.08] bg-[#101216]/96 backdrop-blur-xl px-1.5 pt-1 pb-[max(0.375rem,env(safe-area-inset-bottom))]"
         >
           <div className="grid grid-cols-5 gap-1">
             {(
@@ -954,13 +1024,19 @@ export const BottomDock: React.FC<BottomDockProps> = ({
                     setMobileMenuOpen(false);
                     onChangeTool(id);
                   }}
-                  className={`flex min-h-[46px] flex-col items-center justify-center gap-0.5 rounded-xl text-[10px] font-medium transition-colors ${
+                  className={`relative flex min-h-[46px] flex-col items-center justify-center gap-1 rounded-xl text-[10px] font-medium transition-colors ${
                     active
-                      ? 'bg-amber-500 text-zinc-950 font-semibold'
-                      : 'text-zinc-300 active:bg-zinc-800'
+                      ? 'bg-amber-500/15 text-amber-300 font-semibold'
+                      : 'text-zinc-400 active:bg-white/[0.06] active:text-zinc-100'
                   }`}
                 >
-                  <Icon className="h-4 w-4" />
+                  {active && (
+                    <span
+                      aria-hidden="true"
+                      className="absolute top-0 left-1/2 -translate-x-1/2 h-[2px] w-6 rounded-full bg-amber-400"
+                    />
+                  )}
+                  <Icon className="h-[18px] w-[18px]" />
                   <span className="leading-none">{label}</span>
                 </button>
               );
@@ -969,13 +1045,19 @@ export const BottomDock: React.FC<BottomDockProps> = ({
             <button
               type="button"
               onClick={() => setMobileMenuOpen((o) => !o)}
-              className={`flex min-h-[46px] flex-col items-center justify-center gap-0.5 rounded-xl text-[10px] font-medium transition-colors ${
+              className={`relative flex min-h-[46px] flex-col items-center justify-center gap-1 rounded-xl text-[10px] font-medium transition-colors ${
                 mobileMenuOpen
-                  ? 'bg-zinc-800 text-amber-400 font-semibold'
-                  : 'text-zinc-300 active:bg-zinc-800'
+                  ? 'bg-white/[0.1] text-amber-300 font-semibold'
+                  : 'text-zinc-400 active:bg-white/[0.06] active:text-zinc-100'
               }`}
             >
-              <SlidersHorizontal className="h-4 w-4" />
+              {mobileMenuOpen && (
+                <span
+                  aria-hidden="true"
+                  className="absolute top-0 left-1/2 -translate-x-1/2 h-[2px] w-6 rounded-full bg-amber-400"
+                />
+              )}
+              <SlidersHorizontal className="h-[18px] w-[18px]" />
               <span className="leading-none">Menu</span>
             </button>
           </div>
@@ -983,59 +1065,60 @@ export const BottomDock: React.FC<BottomDockProps> = ({
       </div>
 
       {/* =====================================================================
-          DESKTOP SLIM 1-ROW BOTTOM VIEW & CONTEXT BAR (>= md)
+          DESKTOP SLIM FLOATING GLASS VIEW & CONTEXT DOCK (>= md)
       ===================================================================== */}
       <div
-        className="hidden md:block fixed bottom-0 left-1/2 z-30 w-[min(980px,calc(100vw-136px))] pb-2.5 pointer-events-none transition-transform duration-200 ease-out"
+        className="hidden md:block fixed bottom-0 left-1/2 z-30 w-[min(1000px,calc(100vw-140px))] pb-3 pointer-events-none transition-transform duration-200 ease-out"
         style={{
           transform: collapsed
-            ? 'translate(-50%, calc(100% - 32px))'
+            ? 'translate(-50%, calc(100% - 34px))'
             : 'translate(-50%, 0)',
         }}
       >
-        <div className="flex justify-center pointer-events-auto">
+        {/* Minimal Architectural Collapse Pill */}
+        <div className="flex justify-center mb-1 pointer-events-auto">
           <button
             type="button"
             onClick={onToggleCollapse}
-            className="flex items-center gap-1.5 rounded-t-lg border border-b-0 border-zinc-800 bg-[#141518] px-3 py-0.5 text-[11px] font-medium text-zinc-400 hover:text-white transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+            className="flex items-center gap-1.5 rounded-full border border-white/[0.09] bg-[#101216]/90 backdrop-blur-md px-3 py-0.5 text-[10px] font-medium text-zinc-400 hover:text-zinc-100 shadow-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer"
             title="Pokaż lub ukryj pasek widoku (klawisz H)"
           >
             {collapsed ? (
               <>
-                <ChevronUp className="h-3.5 w-3.5 text-amber-400" />
+                <ChevronUp className="h-3 w-3 text-amber-400" />
                 <span>Widok i opcje</span>
               </>
             ) : (
               <>
-                <ChevronDown className="h-3.5 w-3.5 text-zinc-500" />
-                <span>Ukryj pasek</span>
+                <ChevronDown className="h-3 w-3 text-zinc-500" />
+                <span>Ukryj</span>
               </>
             )}
           </button>
         </div>
 
-        <div className="pointer-events-auto rounded-2xl border border-zinc-800 bg-[#141518]/[0.96] text-zinc-100 shadow-2xl px-3 py-2 backdrop-blur-md">
-          {/* Contextual Selection / Tool Strip (Only rendered when active!) */}
+        <div className="studio-glass pointer-events-auto rounded-2xl text-zinc-100 px-3.5 py-2">
+          {/* Contextual Selection / Tool Strip (Only rendered when active) */}
           {showContextStrip && (
-            <div className="mb-2 flex flex-wrap items-center justify-between gap-2 border-b border-zinc-800/90 pb-2 text-xs">
+            <div className="mb-2 flex flex-wrap items-center justify-between gap-2 border-b border-white/[0.08] pb-2 text-xs">
               {selectedFastenerLabel ? (
                 <div className="flex items-center gap-2 min-w-0">
                   <Wrench className="h-3.5 w-3.5 text-amber-400 shrink-0" />
-                  <span className="truncate font-medium text-zinc-200">
+                  <span className="truncate font-medium text-zinc-100">
                     Łącznik: {selectedFastenerLabel}
                   </span>
                 </div>
               ) : tool === 'screw' ? (
-                <div className="flex items-center gap-2 min-w-0">
-                  <Crosshair className="h-3.5 w-3.5 text-emerald-400 shrink-0" />
+                <div className="flex items-center gap-1.5 min-w-0">
+                  <Crosshair className="h-3.5 w-3.5 text-amber-400 shrink-0" />
                   <select
                     aria-label="Rodzaj wkrętu"
                     value={activeScrewType}
                     onChange={(e) => onChangeScrewType(e.target.value as ScrewType)}
-                    className="h-7 rounded-lg border border-zinc-700 bg-zinc-900 px-2 text-xs font-medium text-zinc-100 focus:border-amber-500 focus:outline-none cursor-pointer"
+                    className="h-7 rounded-lg border border-white/[0.1] bg-white/[0.06] px-2 text-xs font-medium text-zinc-100 focus:border-amber-500 focus:outline-none cursor-pointer"
                   >
                     {SCREW_CATALOG.map((s) => (
-                      <option key={s.id} value={s.id}>
+                      <option key={s.id} value={s.id} className="bg-zinc-900">
                         {s.shortName}
                       </option>
                     ))}
@@ -1043,10 +1126,10 @@ export const BottomDock: React.FC<BottomDockProps> = ({
                   <button
                     type="button"
                     onClick={onToggleScrewJointsOnly}
-                    className={`flex h-7 items-center gap-1 rounded-lg border px-2 text-xs font-medium whitespace-nowrap cursor-pointer ${
+                    className={`flex h-7 items-center gap-1 rounded-lg border px-2 text-xs font-medium whitespace-nowrap cursor-pointer transition-colors ${
                       screwJointsOnly
-                        ? 'border-emerald-500/60 bg-emerald-500/15 text-emerald-300'
-                        : 'border-zinc-800 bg-zinc-900 text-zinc-300'
+                        ? 'border-emerald-400/40 bg-emerald-500/15 text-emerald-300'
+                        : 'border-white/[0.08] bg-white/[0.04] text-zinc-300'
                     }`}
                   >
                     <Magnet className="h-3.5 w-3.5" />
@@ -1055,7 +1138,7 @@ export const BottomDock: React.FC<BottomDockProps> = ({
                   <button
                     type="button"
                     onClick={onAutoFasteners}
-                    className="flex h-7 items-center gap-1 rounded-lg border border-amber-500/40 bg-amber-500/15 px-2.5 text-xs font-medium text-amber-300 hover:bg-amber-500/25 whitespace-nowrap cursor-pointer"
+                    className="flex h-7 items-center gap-1 rounded-lg bg-amber-500 px-2.5 text-xs font-semibold text-zinc-950 hover:bg-amber-400 whitespace-nowrap cursor-pointer transition-colors"
                   >
                     <Sparkles className="h-3.5 w-3.5" />
                     <span>Auto wkręty</span>
@@ -1070,7 +1153,7 @@ export const BottomDock: React.FC<BottomDockProps> = ({
                 </div>
               ) : selectedCount >= 2 ? (
                 <div className="flex items-center gap-1 min-w-0 flex-wrap">
-                  <span className="font-semibold text-amber-300 whitespace-nowrap mr-1">
+                  <span className="font-semibold text-amber-300 whitespace-nowrap mr-1 font-mono-num">
                     {selectedInGroup ? `Grupa (${selectedCount})` : `${selectedCount} elem.`}
                   </span>
                   {selectedInGroup && (
@@ -1078,7 +1161,7 @@ export const BottomDock: React.FC<BottomDockProps> = ({
                       type="button"
                       onClick={onEnterSinglePartEdit}
                       title="Wejdź do wnętrza grupy, aby edytować pojedynczą płytę (lub kliknij 2× w 3D)"
-                      className="h-7 rounded-md border border-sky-500/45 bg-sky-500/12 px-2 text-[11px] font-medium text-sky-200 hover:bg-sky-500/20 mr-1 cursor-pointer whitespace-nowrap"
+                      className="h-7 rounded-lg border border-sky-400/35 bg-sky-500/12 px-2 text-[11px] font-medium text-sky-200 hover:bg-sky-500/20 mr-1 cursor-pointer whitespace-nowrap transition-colors"
                     >
                       Edytuj pojedynczą płytę
                     </button>
@@ -1087,7 +1170,7 @@ export const BottomDock: React.FC<BottomDockProps> = ({
                     type="button"
                     onClick={() => onAlignSelected('left')}
                     title="Wyrównaj do lewej"
-                    className="flex h-7 w-7 items-center justify-center rounded-md border border-zinc-800 bg-zinc-900 text-zinc-300 hover:border-amber-500/60 hover:text-white cursor-pointer"
+                    className={alignBtn}
                   >
                     <AlignStartVertical className="h-3.5 w-3.5" />
                   </button>
@@ -1095,7 +1178,7 @@ export const BottomDock: React.FC<BottomDockProps> = ({
                     type="button"
                     onClick={() => onAlignSelected('centerX')}
                     title="Wyśrodkuj X"
-                    className="flex h-7 w-7 items-center justify-center rounded-md border border-zinc-800 bg-zinc-900 text-zinc-300 hover:border-amber-500/60 hover:text-white cursor-pointer"
+                    className={alignBtn}
                   >
                     <AlignCenterHorizontal className="h-3.5 w-3.5" />
                   </button>
@@ -1103,7 +1186,7 @@ export const BottomDock: React.FC<BottomDockProps> = ({
                     type="button"
                     onClick={() => onAlignSelected('right')}
                     title="Wyrównaj do prawej"
-                    className="flex h-7 w-7 items-center justify-center rounded-md border border-zinc-800 bg-zinc-900 text-zinc-300 hover:border-amber-500/60 hover:text-white cursor-pointer"
+                    className={alignBtn}
                   >
                     <AlignEndVertical className="h-3.5 w-3.5" />
                   </button>
@@ -1111,7 +1194,7 @@ export const BottomDock: React.FC<BottomDockProps> = ({
                     type="button"
                     onClick={() => onAlignSelected('bottom')}
                     title="Wyrównaj do dołu"
-                    className="flex h-7 w-7 items-center justify-center rounded-md border border-zinc-800 bg-zinc-900 text-zinc-300 hover:border-amber-500/60 hover:text-white cursor-pointer"
+                    className={alignBtn}
                   >
                     <AlignEndHorizontal className="h-3.5 w-3.5" />
                   </button>
@@ -1119,7 +1202,7 @@ export const BottomDock: React.FC<BottomDockProps> = ({
                     type="button"
                     onClick={() => onAlignSelected('top')}
                     title="Wyrównaj do góry"
-                    className="flex h-7 w-7 items-center justify-center rounded-md border border-zinc-800 bg-zinc-900 text-zinc-300 hover:border-amber-500/60 hover:text-white cursor-pointer"
+                    className={alignBtn}
                   >
                     <AlignStartHorizontal className="h-3.5 w-3.5" />
                   </button>
@@ -1127,7 +1210,7 @@ export const BottomDock: React.FC<BottomDockProps> = ({
                     type="button"
                     onClick={() => onAlignSelected('front')}
                     title="Wyrównaj lico (+Z)"
-                    className="h-7 rounded-md border border-zinc-800 bg-zinc-900 px-1.5 text-[11px] font-medium text-zinc-300 hover:border-amber-500/60 hover:text-white cursor-pointer"
+                    className={`${ctxBtn} px-2 text-[11px]`}
                   >
                     Lico
                   </button>
@@ -1137,7 +1220,7 @@ export const BottomDock: React.FC<BottomDockProps> = ({
                         type="button"
                         onClick={() => onDistributeSelected('x')}
                         title="Rozmieść równomiernie X"
-                        className="flex h-7 items-center gap-1 rounded-md border border-zinc-800 bg-zinc-900 px-1.5 text-[11px] text-zinc-300 hover:border-amber-500/60 hover:text-white cursor-pointer"
+                        className={`${ctxBtn} text-[11px]`}
                       >
                         <AlignHorizontalDistributeCenter className="h-3.5 w-3.5" />
                         <span>X</span>
@@ -1146,7 +1229,7 @@ export const BottomDock: React.FC<BottomDockProps> = ({
                         type="button"
                         onClick={() => onDistributeSelected('y')}
                         title="Rozmieść równomiernie Y"
-                        className="flex h-7 items-center gap-1 rounded-md border border-zinc-800 bg-zinc-900 px-1.5 text-[11px] text-zinc-300 hover:border-amber-500/60 hover:text-white cursor-pointer"
+                        className={`${ctxBtn} text-[11px]`}
                       >
                         <AlignVerticalDistributeCenter className="h-3.5 w-3.5" />
                         <span>Y</span>
@@ -1156,14 +1239,14 @@ export const BottomDock: React.FC<BottomDockProps> = ({
                 </div>
               ) : (
                 <div className="flex items-center gap-2 min-w-0">
-                  <span className="truncate font-medium text-zinc-200">
+                  <span className="truncate font-semibold text-white">
                     {selectedPartName ?? `Wnętrze: ${activeGroupEditLabel}`}
                   </span>
                   {activeGroupEditLabel ? (
                     <button
                       type="button"
                       onClick={onExitGroupEdit}
-                      className="rounded-md border border-sky-500/50 bg-sky-500/15 px-2 py-0.5 text-[11px] font-medium text-sky-200 hover:bg-sky-500/25 cursor-pointer whitespace-nowrap"
+                      className="rounded-lg border border-sky-400/40 bg-sky-500/15 px-2 py-0.5 text-[11px] font-medium text-sky-200 hover:bg-sky-500/25 cursor-pointer whitespace-nowrap"
                     >
                       ← Wyjdź z grupy
                     </button>
@@ -1171,7 +1254,7 @@ export const BottomDock: React.FC<BottomDockProps> = ({
                     <button
                       type="button"
                       onClick={onSelectWholeGroup}
-                      className="rounded-md border border-sky-500/40 bg-sky-500/12 px-2 py-0.5 text-[11px] font-medium text-sky-200 hover:bg-sky-500/20 cursor-pointer whitespace-nowrap"
+                      className="rounded-lg border border-sky-400/35 bg-sky-500/12 px-2 py-0.5 text-[11px] font-medium text-sky-200 hover:bg-sky-500/20 cursor-pointer whitespace-nowrap"
                     >
                       Zaznacz całą grupę
                     </button>
@@ -1185,7 +1268,7 @@ export const BottomDock: React.FC<BottomDockProps> = ({
                   <button
                     type="button"
                     onClick={onClearMeasurements}
-                    className="flex h-7 items-center gap-1 rounded-lg border border-zinc-700 bg-zinc-900 px-2.5 text-xs font-medium text-zinc-200 hover:bg-zinc-800 whitespace-nowrap cursor-pointer"
+                    className={ctxBtn}
                   >
                     <Trash2 className="h-3.5 w-3.5 text-sky-400" />
                     <span>Wyczyść ({measurementsCount})</span>
@@ -1194,7 +1277,7 @@ export const BottomDock: React.FC<BottomDockProps> = ({
                   <button
                     type="button"
                     onClick={onDeleteSelectedFastener}
-                    className="flex h-7 items-center gap-1 rounded-lg bg-red-600/20 px-2.5 text-xs font-medium text-red-300 hover:bg-red-600/35 whitespace-nowrap cursor-pointer"
+                    className="flex h-7 items-center gap-1 rounded-lg bg-red-500/20 px-2.5 text-xs font-medium text-red-200 hover:bg-red-500/35 whitespace-nowrap cursor-pointer transition-colors"
                   >
                     <Trash2 className="h-3.5 w-3.5" />
                     <span>Usuń łącznik</span>
@@ -1205,7 +1288,7 @@ export const BottomDock: React.FC<BottomDockProps> = ({
                       <button
                         type="button"
                         onClick={onGroupSelected}
-                        className="flex h-7 items-center gap-1 rounded-lg border border-sky-500/50 bg-sky-500/15 px-2 text-xs font-semibold text-sky-300 hover:bg-sky-500/25 whitespace-nowrap cursor-pointer"
+                        className="flex h-7 items-center gap-1 rounded-lg border border-sky-400/40 bg-sky-500/15 px-2 text-xs font-semibold text-sky-200 hover:bg-sky-500/25 whitespace-nowrap cursor-pointer transition-colors"
                       >
                         <Group className="h-3.5 w-3.5" />
                         <span>Grupuj</span>
@@ -1215,9 +1298,9 @@ export const BottomDock: React.FC<BottomDockProps> = ({
                       <button
                         type="button"
                         onClick={onUngroupSelected}
-                        className="flex h-7 items-center gap-1 rounded-lg border border-zinc-700 bg-zinc-900 px-2 text-xs font-medium text-zinc-300 hover:bg-zinc-800 whitespace-nowrap cursor-pointer"
+                        className={ctxBtn}
                       >
-                        <Ungroup className="h-3.5 w-3.5" />
+                        <Ungroup className="h-3.5 w-3.5 text-zinc-400" />
                         <span>Rozgrupuj</span>
                       </button>
                     )}
@@ -1227,8 +1310,8 @@ export const BottomDock: React.FC<BottomDockProps> = ({
                       title="Otwórz pad precyzyjnego przesuwania (±1 / 10 / 50 mm)"
                       className={`flex h-7 items-center gap-1 rounded-lg border px-2 text-xs font-medium transition-colors whitespace-nowrap cursor-pointer ${
                         nudgePadOpen
-                          ? 'border-amber-500 bg-amber-500/20 text-amber-300'
-                          : 'border-zinc-800 bg-zinc-900 text-zinc-200 hover:border-amber-500/50'
+                          ? 'border-amber-400/60 bg-amber-500/20 text-amber-200'
+                          : 'border-white/[0.08] bg-white/[0.04] text-zinc-200 hover:bg-white/[0.1]'
                       }`}
                     >
                       <Gamepad2 className="h-3.5 w-3.5" />
@@ -1239,7 +1322,7 @@ export const BottomDock: React.FC<BottomDockProps> = ({
                         type="button"
                         onClick={onRotateSelected90}
                         title="Obróć o 90°"
-                        className="flex h-7 items-center gap-1 rounded-lg border border-zinc-800 bg-zinc-900 px-2 text-xs font-medium text-zinc-200 hover:border-amber-500/50 whitespace-nowrap cursor-pointer"
+                        className={ctxBtn}
                       >
                         <RotateCw className="h-3.5 w-3.5 text-zinc-400" />
                         <span>90°</span>
@@ -1250,9 +1333,9 @@ export const BottomDock: React.FC<BottomDockProps> = ({
                         type="button"
                         onClick={onDuplicateSelected}
                         title="Duplikuj (Ctrl+D)"
-                        className="flex h-7 items-center gap-1 rounded-lg border border-zinc-800 bg-zinc-900 px-2 text-xs font-medium text-zinc-200 hover:border-amber-500/50 whitespace-nowrap cursor-pointer"
+                        className={alignBtn}
                       >
-                        <Copy className="h-3.5 w-3.5 text-zinc-400" />
+                        <Copy className="h-3.5 w-3.5" />
                       </button>
                     )}
                     {onDropSelectedToFloor && (
@@ -1260,9 +1343,9 @@ export const BottomDock: React.FC<BottomDockProps> = ({
                         type="button"
                         onClick={onDropSelectedToFloor}
                         title="Postaw na podłodze (Y = 0)"
-                        className="flex h-7 items-center gap-1 rounded-lg border border-zinc-800 bg-zinc-900 px-2 text-xs font-medium text-zinc-200 hover:border-amber-500/50 whitespace-nowrap cursor-pointer"
+                        className={alignBtn}
                       >
-                        <ArrowDownToLine className="h-3.5 w-3.5 text-zinc-400" />
+                        <ArrowDownToLine className="h-3.5 w-3.5" />
                       </button>
                     )}
                     {onDeleteSelected && (
@@ -1270,7 +1353,7 @@ export const BottomDock: React.FC<BottomDockProps> = ({
                         type="button"
                         onClick={onDeleteSelected}
                         title="Usuń (Delete)"
-                        className="flex h-7 w-7 items-center justify-center rounded-lg border border-red-900/50 bg-red-950/35 text-red-300 hover:bg-red-900/50 cursor-pointer"
+                        className="flex h-7 w-7 items-center justify-center rounded-lg border border-red-500/25 bg-red-500/10 text-red-300 hover:bg-red-500/25 transition-colors cursor-pointer"
                       >
                         <Trash2 className="h-3.5 w-3.5" />
                       </button>
@@ -1279,16 +1362,16 @@ export const BottomDock: React.FC<BottomDockProps> = ({
                       <button
                         type="button"
                         onClick={onEditParametricCabinet}
-                        className="flex h-7 items-center gap-1 rounded-lg border border-emerald-500/50 bg-emerald-500/15 px-2.5 text-xs font-semibold text-emerald-300 hover:bg-emerald-500/25 whitespace-nowrap cursor-pointer"
+                        className={ctxBtn}
                       >
-                        <LayoutPanelTop className="h-3.5 w-3.5" />
+                        <LayoutPanelTop className="h-3.5 w-3.5 text-amber-400" />
                         <span>Kreator</span>
                       </button>
                     )}
                     <button
                       type="button"
                       onClick={onOpenInspector}
-                      className="flex h-7 items-center gap-1.5 rounded-lg bg-amber-500 px-2.5 text-xs font-semibold text-zinc-950 hover:bg-amber-400 whitespace-nowrap cursor-pointer"
+                      className="flex h-7 items-center gap-1.5 rounded-lg bg-amber-500 px-2.5 text-xs font-semibold text-zinc-950 hover:bg-amber-400 transition-colors whitespace-nowrap cursor-pointer"
                     >
                       <SlidersHorizontal className="h-3.5 w-3.5" />
                       <span>Właściwości</span>
@@ -1307,7 +1390,7 @@ export const BottomDock: React.FC<BottomDockProps> = ({
                 <button
                   type="button"
                   onClick={() => onChangeOpenAmount(openAmount > 0.1 ? 0 : 1)}
-                  className={`flex items-center gap-1 text-[11px] font-medium whitespace-nowrap cursor-pointer ${
+                  className={`flex items-center gap-1 text-[11px] font-medium whitespace-nowrap cursor-pointer transition-colors ${
                     openAmount > 0.05 ? 'text-amber-300' : 'text-zinc-300 hover:text-white'
                   }`}
                   title="Otwórz/zamknij fronty i szuflady (O)"
@@ -1346,15 +1429,17 @@ export const BottomDock: React.FC<BottomDockProps> = ({
               )}
             </div>
 
+            <div className="hidden lg:block h-4 w-px bg-white/[0.08]" aria-hidden="true" />
+
             {/* Center: Precision & Visual Toggles */}
-            <div className="flex flex-wrap items-center gap-1">
+            <div className="flex flex-wrap items-center gap-0.5">
               <button
                 type="button"
                 onClick={onToggleMagneticSnap}
                 className={`flex h-8 items-center gap-1 rounded-lg px-2 text-xs font-medium transition-colors whitespace-nowrap cursor-pointer ${
                   magneticSnap
                     ? 'bg-amber-500/15 text-amber-300'
-                    : 'text-zinc-400 hover:bg-zinc-800 hover:text-white'
+                    : 'text-zinc-400 hover:bg-white/[0.07] hover:text-white'
                 }`}
                 title="Magnes — przyciąganie do krawędzi płyt (M)"
               >
@@ -1365,7 +1450,7 @@ export const BottomDock: React.FC<BottomDockProps> = ({
               <button
                 type="button"
                 onClick={onCycleSnap}
-                className="h-8 rounded-lg px-2 text-xs font-medium text-zinc-300 hover:bg-zinc-800 hover:text-white whitespace-nowrap cursor-pointer font-mono-num"
+                className="h-8 rounded-lg px-2 text-xs font-medium text-zinc-300 hover:bg-white/[0.07] hover:text-white whitespace-nowrap cursor-pointer font-mono-num transition-colors"
                 title="Skok przyciągania do siatki"
               >
                 {snapMm > 0 ? `${snapMm}mm` : '0mm'}
@@ -1374,7 +1459,7 @@ export const BottomDock: React.FC<BottomDockProps> = ({
               <button
                 type="button"
                 onClick={onCycleLighting}
-                className="flex h-8 items-center gap-1 rounded-lg px-2 text-xs font-medium text-zinc-300 hover:bg-zinc-800 hover:text-white whitespace-nowrap cursor-pointer"
+                className="flex h-8 items-center gap-1 rounded-lg px-2 text-xs font-medium text-zinc-300 hover:bg-white/[0.07] hover:text-white whitespace-nowrap cursor-pointer transition-colors"
                 title="Oświetlenie sceny 3D"
               >
                 <Sun className="h-3.5 w-3.5 text-amber-400" />
@@ -1383,13 +1468,15 @@ export const BottomDock: React.FC<BottomDockProps> = ({
 
               {isExpert && (
                 <>
+                  <div className="mx-1 h-4 w-px bg-white/[0.08]" aria-hidden="true" />
+
                   <button
                     type="button"
                     onClick={onToggleShowDimensions}
                     className={`flex h-8 items-center gap-1 rounded-lg px-2 text-xs font-medium transition-colors whitespace-nowrap cursor-pointer ${
                       showDimensions
                         ? 'bg-sky-500/15 text-sky-300'
-                        : 'text-zinc-400 hover:bg-zinc-800 hover:text-white'
+                        : 'text-zinc-400 hover:bg-white/[0.07] hover:text-white'
                     }`}
                     title="Prześwity w świetle (D)"
                   >
@@ -1403,7 +1490,7 @@ export const BottomDock: React.FC<BottomDockProps> = ({
                     className={`flex h-8 items-center gap-1 rounded-lg px-2 text-xs font-medium transition-colors whitespace-nowrap cursor-pointer ${
                       xrayMode
                         ? 'bg-amber-500/15 text-amber-300'
-                        : 'text-zinc-400 hover:bg-zinc-800 hover:text-white'
+                        : 'text-zinc-400 hover:bg-white/[0.07] hover:text-white'
                     }`}
                     title="Tryb RTG (X)"
                   >
@@ -1417,7 +1504,7 @@ export const BottomDock: React.FC<BottomDockProps> = ({
                     className={`flex h-8 items-center gap-1 rounded-lg px-2 text-xs font-medium transition-colors whitespace-nowrap cursor-pointer ${
                       ledUnderCabinet
                         ? 'bg-amber-500/15 text-amber-300'
-                        : 'text-zinc-400 hover:bg-zinc-800 hover:text-white'
+                        : 'text-zinc-400 hover:bg-white/[0.07] hover:text-white'
                     }`}
                     title="Podświetlenie LED (L)"
                   >
@@ -1430,8 +1517,8 @@ export const BottomDock: React.FC<BottomDockProps> = ({
                     onClick={onToggleShowFasteners}
                     className={`flex h-8 items-center gap-1 rounded-lg px-2 text-xs font-medium transition-colors whitespace-nowrap cursor-pointer ${
                       showFasteners
-                        ? 'text-zinc-200 hover:bg-zinc-800'
-                        : 'text-zinc-500 hover:bg-zinc-800'
+                        ? 'text-zinc-200 hover:bg-white/[0.07]'
+                        : 'text-zinc-500 hover:bg-white/[0.07]'
                     }`}
                     title={showFasteners ? 'Ukryj wkręty' : 'Pokaż wkręty'}
                   >
@@ -1448,7 +1535,7 @@ export const BottomDock: React.FC<BottomDockProps> = ({
                     className={`flex h-8 items-center gap-1 rounded-lg px-2 text-xs font-medium transition-colors whitespace-nowrap cursor-pointer ${
                       assemblyStep > 0
                         ? 'bg-emerald-500/20 text-emerald-300'
-                        : 'text-zinc-400 hover:bg-zinc-800 hover:text-white'
+                        : 'text-zinc-400 hover:bg-white/[0.07] hover:text-white'
                     }`}
                     title="Instrukcja montażu krok po kroku"
                   >
@@ -1462,15 +1549,15 @@ export const BottomDock: React.FC<BottomDockProps> = ({
             {/* Right: Simple / Expert Segmented Switch + Shortcuts */}
             <div className="flex items-center gap-1.5">
               <div
-                className="flex items-center rounded-lg border border-zinc-800 bg-zinc-900 p-0.5"
+                className="flex items-center rounded-xl border border-white/[0.08] bg-white/[0.04] p-0.5"
                 title="Tryb Prosty ukrywa zaawansowane opcje warsztatowe (wkręty, RTG, CNC). Tryb Ekspert odblokowuje wszystko."
               >
                 <button
                   type="button"
                   onClick={() => onChangeUiMode('simple')}
-                  className={`rounded-md px-2 py-1 text-[11px] font-medium transition-colors whitespace-nowrap cursor-pointer ${
+                  className={`rounded-lg px-2.5 py-1 text-[11px] font-medium transition-colors whitespace-nowrap cursor-pointer ${
                     !isExpert
-                      ? 'bg-amber-500 text-zinc-950 font-semibold'
+                      ? 'bg-amber-500 text-zinc-950 font-semibold shadow-sm'
                       : 'text-zinc-400 hover:text-zinc-200'
                   }`}
                 >
@@ -1479,9 +1566,9 @@ export const BottomDock: React.FC<BottomDockProps> = ({
                 <button
                   type="button"
                   onClick={() => onChangeUiMode('expert')}
-                  className={`rounded-md px-2 py-1 text-[11px] font-medium transition-colors whitespace-nowrap cursor-pointer ${
+                  className={`rounded-lg px-2.5 py-1 text-[11px] font-medium transition-colors whitespace-nowrap cursor-pointer ${
                     isExpert
-                      ? 'bg-amber-500 text-zinc-950 font-semibold'
+                      ? 'bg-amber-500 text-zinc-950 font-semibold shadow-sm'
                       : 'text-zinc-400 hover:text-zinc-200'
                   }`}
                 >
@@ -1493,7 +1580,7 @@ export const BottomDock: React.FC<BottomDockProps> = ({
                 <button
                   type="button"
                   onClick={onOpenShortcuts}
-                  className="flex h-8 w-8 items-center justify-center rounded-lg text-zinc-400 hover:bg-zinc-800 hover:text-white cursor-pointer"
+                  className="flex h-8 w-8 items-center justify-center rounded-lg text-zinc-400 hover:bg-white/[0.07] hover:text-white transition-colors cursor-pointer"
                   title="Skróty klawiszowe (?)"
                   aria-label="Skróty klawiszowe"
                 >

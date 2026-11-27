@@ -3,6 +3,7 @@ import {
   collection,
   deleteDoc,
   doc,
+  enableNetwork,
   getDoc,
   onSnapshot,
   query,
@@ -12,7 +13,12 @@ import {
   where,
   type Unsubscribe,
 } from 'firebase/firestore';
-import { db, handleFirestoreError, OperationType } from '../firebase';
+import {
+  db,
+  handleFirestoreError,
+  isFirestoreOfflineError,
+  OperationType,
+} from '../firebase';
 import {
   DEFAULT_QUOTE_SETTINGS,
   type FurniturePart,
@@ -139,6 +145,27 @@ function sanitizeQuoteForFirestore(quote: QuoteSettings): Record<string, unknown
   return stripUndefined({ ...DEFAULT_QUOTE_SETTINGS, ...quote }) as Record<string, unknown>;
 }
 
+async function withTransientRetry<T>(fn: () => Promise<T>, maxAttempts = 3): Promise<T> {
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      return await fn();
+    } catch (error) {
+      lastError = error;
+      if (!isFirestoreOfflineError(error) || attempt >= maxAttempts) {
+        throw error;
+      }
+      try {
+        await enableNetwork(db);
+      } catch {
+        // ignore if already enabled
+      }
+      await new Promise((resolve) => setTimeout(resolve, attempt * 800));
+    }
+  }
+  throw lastError;
+}
+
 /** Ensures Master Gate parent profile /users/{uid} exists before writing subcollections */
 export async function ensureWorkspaceProfile(user: User): Promise<void> {
   const uid = user.uid;
@@ -148,20 +175,22 @@ export async function ensureWorkspaceProfile(user: User): Promise<void> {
     .slice(0, MAX_NAME_LENGTH);
 
   try {
-    const snap = await getDoc(ref);
-    if (!snap.exists()) {
-      await setDoc(ref, {
-        ownerId: uid,
-        displayName,
-        createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
-      });
-    } else if (snap.data()?.displayName !== displayName) {
-      await updateDoc(ref, {
-        displayName,
-        updatedAt: serverTimestamp(),
-      });
-    }
+    await withTransientRetry(async () => {
+      const snap = await getDoc(ref);
+      if (!snap.exists()) {
+        await setDoc(ref, {
+          ownerId: uid,
+          displayName,
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        });
+      } else if (snap.data()?.displayName !== displayName) {
+        await updateDoc(ref, {
+          displayName,
+          updatedAt: serverTimestamp(),
+        });
+      }
+    });
   } catch (error) {
     handleFirestoreError(error, OperationType.WRITE, path);
   }
@@ -283,30 +312,32 @@ export async function saveCloudProject(
   const ref = doc(db, 'users', uid, 'projects', fields.id);
 
   try {
-    let existsInCloud = knownCloudIds ? knownCloudIds.has(fields.id) : false;
-    if (!existsInCloud) {
-      const snap = await getDoc(ref);
-      existsInCloud = snap.exists();
-    }
+    await withTransientRetry(async () => {
+      let existsInCloud = knownCloudIds ? knownCloudIds.has(fields.id) : false;
+      if (!existsInCloud) {
+        const snap = await getDoc(ref);
+        existsInCloud = snap.exists();
+      }
 
-    if (existsInCloud) {
-      await updateDoc(ref, {
-        name: fields.name,
-        parts: fields.parts,
-        fasteners: fields.fasteners,
-        room: fields.room,
-        cabinetConfigs: fields.cabinetConfigs,
-        clientUpdatedAt: fields.clientUpdatedAt,
-        updatedAt: serverTimestamp(),
-      });
-    } else {
-      await setDoc(ref, {
-        ...fields,
-        createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
-      });
-      knownCloudIds?.add(fields.id);
-    }
+      if (existsInCloud) {
+        await updateDoc(ref, {
+          name: fields.name,
+          parts: fields.parts,
+          fasteners: fields.fasteners,
+          room: fields.room,
+          cabinetConfigs: fields.cabinetConfigs,
+          clientUpdatedAt: fields.clientUpdatedAt,
+          updatedAt: serverTimestamp(),
+        });
+      } else {
+        await setDoc(ref, {
+          ...fields,
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        });
+        knownCloudIds?.add(fields.id);
+      }
+    });
     return fields.id;
   } catch (error) {
     handleFirestoreError(error, OperationType.WRITE, path);
@@ -339,24 +370,26 @@ export async function saveCloudWorkspaceSettings(
   const safeQuote = sanitizeQuoteForFirestore(quoteSettings);
 
   try {
-    const snap = await getDoc(ref);
-    if (snap.exists()) {
-      await updateDoc(ref, {
-        materialsConfig: safeMaterials,
-        quoteSettings: safeQuote,
-        clientUpdatedAt,
-        updatedAt: serverTimestamp(),
-      });
-    } else {
-      await setDoc(ref, {
-        ownerId: uid,
-        materialsConfig: safeMaterials,
-        quoteSettings: safeQuote,
-        clientUpdatedAt,
-        createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
-      });
-    }
+    await withTransientRetry(async () => {
+      const snap = await getDoc(ref);
+      if (snap.exists()) {
+        await updateDoc(ref, {
+          materialsConfig: safeMaterials,
+          quoteSettings: safeQuote,
+          clientUpdatedAt,
+          updatedAt: serverTimestamp(),
+        });
+      } else {
+        await setDoc(ref, {
+          ownerId: uid,
+          materialsConfig: safeMaterials,
+          quoteSettings: safeQuote,
+          clientUpdatedAt,
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        });
+      }
+    });
   } catch (error) {
     handleFirestoreError(error, OperationType.WRITE, path);
   }
@@ -461,22 +494,24 @@ export async function saveCloudTemplate(
   const ref = doc(db, 'users', uid, 'templates', fields.id);
 
   try {
-    const snap = await getDoc(ref);
-    if (snap.exists()) {
-      await updateDoc(ref, {
-        name: fields.name,
-        subtitle: fields.subtitle,
-        category: fields.category,
-        project: fields.project,
-        updatedAt: serverTimestamp(),
-      });
-    } else {
-      await setDoc(ref, {
-        ...fields,
-        createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
-      });
-    }
+    await withTransientRetry(async () => {
+      const snap = await getDoc(ref);
+      if (snap.exists()) {
+        await updateDoc(ref, {
+          name: fields.name,
+          subtitle: fields.subtitle,
+          category: fields.category,
+          project: fields.project,
+          updatedAt: serverTimestamp(),
+        });
+      } else {
+        await setDoc(ref, {
+          ...fields,
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        });
+      }
+    });
     return fields.id;
   } catch (error) {
     handleFirestoreError(error, OperationType.WRITE, path);

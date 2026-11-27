@@ -22,6 +22,7 @@ import {
 } from '../engine/parametric';
 import { computeProjectWeightSummary } from '../engine/carpentry';
 import { CabinetSideSectionSvg } from './CabinetPreviewSvg';
+import { NumericInput } from './NumericInput';
 
 interface CabinetBuilderModalProps {
   open: boolean;
@@ -755,37 +756,34 @@ export const CabinetBuilderModal: React.FC<CabinetBuilderModalProps> = ({
               <div className="grid grid-cols-3 gap-2.5">
                 <label className="block">
                   <span className="text-[11px] text-zinc-400">Szerokość (mm)</span>
-                  <input
-                    type="number"
+                  <NumericInput
                     min={240}
                     max={3000}
                     step={20}
                     value={cfg.widthMm}
-                    onChange={(e) => patch({ widthMm: Number(e.target.value) || 600 })}
+                    onChange={(val) => patch({ widthMm: val })}
                     className="mt-1 w-full rounded-lg border border-zinc-800 bg-zinc-900 px-2.5 py-2 text-xs font-mono-num text-white focus:border-amber-500 focus:outline-none"
                   />
                 </label>
                 <label className="block">
                   <span className="text-[11px] text-zinc-400">Wysokość (mm)</span>
-                  <input
-                    type="number"
+                  <NumericInput
                     min={240}
                     max={2750}
                     step={20}
                     value={cfg.heightMm}
-                    onChange={(e) => patch({ heightMm: Number(e.target.value) || 720 })}
+                    onChange={(val) => patch({ heightMm: val })}
                     className="mt-1 w-full rounded-lg border border-zinc-800 bg-zinc-900 px-2.5 py-2 text-xs font-mono-num text-white focus:border-amber-500 focus:outline-none"
                   />
                 </label>
                 <label className="block">
                   <span className="text-[11px] text-zinc-400">Głębokość (mm)</span>
-                  <input
-                    type="number"
+                  <NumericInput
                     min={200}
                     max={900}
                     step={10}
                     value={cfg.depthMm}
-                    onChange={(e) => patch({ depthMm: Number(e.target.value) || 560 })}
+                    onChange={(val) => patch({ depthMm: val })}
                     className="mt-1 w-full rounded-lg border border-zinc-800 bg-zinc-900 px-2.5 py-2 text-xs font-mono-num text-white focus:border-amber-500 focus:outline-none"
                   />
                 </label>
@@ -857,30 +855,24 @@ export const CabinetBuilderModal: React.FC<CabinetBuilderModalProps> = ({
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
                 <label className="block">
                   <span className="text-[11px] text-zinc-400">Szuflady</span>
-                  <input
-                    type="number"
+                  <NumericInput
                     min={0}
                     max={6}
+                    step={1}
                     disabled={isSliding || isCorner}
                     value={isSliding || isCorner ? 0 : cfg.drawerCount}
-                    onChange={(e) =>
-                      patch({
-                        drawerCount: Math.max(0, Math.min(6, Number(e.target.value) || 0)),
-                      })
-                    }
+                    onChange={(val) => patch({ drawerCount: val })}
                     className="mt-1 w-full rounded-lg border border-zinc-800 bg-zinc-900 px-2.5 py-2 text-xs font-mono-num text-white disabled:opacity-40 focus:border-amber-500 focus:outline-none"
                   />
                 </label>
                 <label className="block">
                   <span className="text-[11px] text-zinc-400">Półki / sekcja</span>
-                  <input
-                    type="number"
+                  <NumericInput
                     min={0}
                     max={8}
+                    step={1}
                     value={cfg.shelfCount}
-                    onChange={(e) =>
-                      patch({ shelfCount: Math.max(0, Math.min(8, Number(e.target.value) || 0)) })
-                    }
+                    onChange={(val) => patch({ shelfCount: val })}
                     className="mt-1 w-full rounded-lg border border-zinc-800 bg-zinc-900 px-2.5 py-2 text-xs font-mono-num text-white focus:border-amber-500 focus:outline-none"
                   />
                 </label>
@@ -965,16 +957,15 @@ export const CabinetBuilderModal: React.FC<CabinetBuilderModalProps> = ({
                   <span className="text-[11px] text-zinc-400">
                     {cfg.plinthStyle === 'none' ? 'Zawieszenie (mm)' : 'Cokół (mm)'}
                   </span>
-                  <input
-                    type="number"
+                  <NumericInput
                     min={0}
                     max={cfg.plinthStyle === 'none' ? 2000 : 200}
                     step={10}
                     value={cfg.plinthStyle === 'none' ? cfg.elevationYmm : cfg.plinthHeightMm}
-                    onChange={(e) =>
+                    onChange={(val) =>
                       cfg.plinthStyle === 'none'
-                        ? patch({ elevationYmm: Number(e.target.value) || 0 })
-                        : patch({ plinthHeightMm: Number(e.target.value) || 0 })
+                        ? patch({ elevationYmm: val })
+                        : patch({ plinthHeightMm: val })
                     }
                     className="mt-1 w-full rounded-lg border border-zinc-800 bg-zinc-900 px-2.5 py-2 text-xs font-mono-num text-white focus:border-amber-500 focus:outline-none"
                   />

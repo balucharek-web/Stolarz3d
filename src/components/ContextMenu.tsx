@@ -102,7 +102,7 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
   const top = Math.max(54, Math.min(window.innerHeight - menuH - 12, menu.y));
 
   const itemCls =
-    'flex w-full items-center justify-between gap-2 rounded-lg px-2.5 py-2 text-left text-xs font-medium text-zinc-200 hover:bg-zinc-800 hover:text-white transition-colors cursor-pointer';
+    'flex w-full items-center justify-between gap-2 rounded-lg px-2.5 py-2 text-left text-xs font-medium text-zinc-200 hover:bg-white/[0.08] hover:text-white transition-colors cursor-pointer';
 
   return (
     <div
@@ -110,11 +110,11 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
       role="menu"
       onContextMenu={(e) => e.preventDefault()}
       style={{ left, top, width: menuW }}
-      className="fixed z-50 rounded-xl border border-zinc-700/90 bg-[#141518] p-1.5 text-zinc-100 shadow-2xl select-none"
+      className="studio-glass animate-studio-pop fixed z-50 rounded-2xl p-1.5 text-zinc-100 select-none"
     >
       {menu.kind === 'part' && (
         <>
-          <div className="mb-1 border-b border-zinc-800 px-2.5 py-1.5">
+          <div className="mb-1 border-b border-white/[0.08] px-2.5 py-1.5">
             <p className="truncate text-[11px] font-semibold text-amber-400">
               {selectedCount > 1 ? `Zaznaczono: ${selectedCount} płyty` : menu.partName}
             </p>

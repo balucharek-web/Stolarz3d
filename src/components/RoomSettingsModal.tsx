@@ -2748,13 +2748,10 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
                       <div className="grid grid-cols-2 gap-2">
                         <label className="block">
                           <span className="text-[11px] text-zinc-400">Współrzędna X (mm)</span>
-                          <input
-                            type="number"
+                          <NumericInput
                             step={50}
                             value={Math.round(selectedVertex.xMm)}
-                            onChange={(e) => {
-                              const val = Number(e.target.value);
-                              if (!Number.isFinite(val)) return;
+                            onChange={(val) => {
                               commitDraft((prev) => ({
                                 ...prev,
                                 floorPoints: getRoomPolygonPoints(prev).map((v, i) =>
@@ -2762,18 +2759,15 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
                                 ),
                               }));
                             }}
-                            className="mt-1 w-full rounded-lg border border-zinc-700 bg-zinc-900 px-2.5 py-2 text-xs font-mono tabular-nums text-white"
+                            className="mt-1 w-full rounded-lg border border-zinc-700 bg-zinc-900 px-2.5 py-2 text-xs font-mono tabular-nums text-white focus:border-amber-500 focus:outline-none"
                           />
                         </label>
                         <label className="block">
                           <span className="text-[11px] text-zinc-400">Współrzędna Z (mm)</span>
-                          <input
-                            type="number"
+                          <NumericInput
                             step={50}
                             value={Math.round(selectedVertex.zMm)}
-                            onChange={(e) => {
-                              const val = Number(e.target.value);
-                              if (!Number.isFinite(val)) return;
+                            onChange={(val) => {
                               commitDraft((prev) => ({
                                 ...prev,
                                 floorPoints: getRoomPolygonPoints(prev).map((v, i) =>
@@ -2781,7 +2775,7 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
                                 ),
                               }));
                             }}
-                            className="mt-1 w-full rounded-lg border border-zinc-700 bg-zinc-900 px-2.5 py-2 text-xs font-mono tabular-nums text-white"
+                            className="mt-1 w-full rounded-lg border border-zinc-700 bg-zinc-900 px-2.5 py-2 text-xs font-mono tabular-nums text-white focus:border-amber-500 focus:outline-none"
                           />
                         </label>
                       </div>
@@ -2973,47 +2967,42 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
                       <div className="grid grid-cols-2 gap-2">
                         <label className="block">
                           <span className="text-[11px] text-zinc-400">Szerokość (mm)</span>
-                          <input
-                            type="number"
+                          <NumericInput
                             min={100}
                             max={4000}
                             step={10}
                             value={Math.round(selectedAppliance.width)}
-                            onChange={(e) =>
-                              updateAppliancePart(selectedAppliance.id, {
-                                width: Math.max(100, Number(e.target.value) || selectedAppliance.width),
-                              })
+                            onChange={(val) =>
+                              updateAppliancePart(selectedAppliance.id, { width: val })
                             }
-                            className="mt-1 w-full rounded-lg border border-zinc-700 bg-zinc-900 px-2 py-1.5 text-xs font-mono tabular-nums text-white"
+                            className="mt-1 w-full rounded-lg border border-zinc-700 bg-zinc-900 px-2 py-1.5 text-xs font-mono tabular-nums text-white focus:border-amber-500 focus:outline-none"
                           />
                         </label>
                         <label className="block">
                           <span className="text-[11px] text-zinc-400">Głębokość (mm)</span>
-                          <input
-                            type="number"
+                          <NumericInput
                             min={30}
                             max={3000}
                             step={10}
                             value={Math.round(selectedAppliance.depth)}
-                            onChange={(e) =>
-                              updateAppliancePart(selectedAppliance.id, {
-                                depth: Math.max(30, Number(e.target.value) || selectedAppliance.depth),
-                              })
+                            onChange={(val) =>
+                              updateAppliancePart(selectedAppliance.id, { depth: val })
                             }
-                            className="mt-1 w-full rounded-lg border border-zinc-700 bg-zinc-900 px-2 py-1.5 text-xs font-mono tabular-nums text-white"
+                            className="mt-1 w-full rounded-lg border border-zinc-700 bg-zinc-900 px-2 py-1.5 text-xs font-mono tabular-nums text-white focus:border-amber-500 focus:outline-none"
                           />
                         </label>
                         <label className="block">
                           <span className="text-[11px] text-zinc-400">Wysokość (mm)</span>
-                          <input
-                            type="number"
+                          <NumericInput
                             min={20}
                             max={3000}
                             step={10}
                             value={Math.round(selectedAppliance.height)}
-                            onChange={(e) => {
-                              const nextH = Math.max(20, Number(e.target.value) || selectedAppliance.height);
-                              const bottomY = Math.max(0, Math.round(selectedAppliance.position[1] - selectedAppliance.height / 2));
+                            onChange={(nextH) => {
+                              const bottomY = Math.max(
+                                0,
+                                Math.round(selectedAppliance.position[1] - selectedAppliance.height / 2)
+                              );
                               updateAppliancePart(selectedAppliance.id, {
                                 height: nextH,
                                 position: [
@@ -3023,13 +3012,12 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
                                 ],
                               });
                             }}
-                            className="mt-1 w-full rounded-lg border border-zinc-700 bg-zinc-900 px-2 py-1.5 text-xs font-mono tabular-nums text-white"
+                            className="mt-1 w-full rounded-lg border border-zinc-700 bg-zinc-900 px-2 py-1.5 text-xs font-mono tabular-nums text-white focus:border-amber-500 focus:outline-none"
                           />
                         </label>
                         <label className="block">
                           <span className="text-[11px] text-zinc-400">Dół od podłogi (mm)</span>
-                          <input
-                            type="number"
+                          <NumericInput
                             min={0}
                             max={2600}
                             step={20}
@@ -3037,8 +3025,7 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
                               0,
                               Math.round(selectedAppliance.position[1] - selectedAppliance.height / 2)
                             )}
-                            onChange={(e) => {
-                              const bottomMm = Math.max(0, Number(e.target.value) || 0);
+                            onChange={(bottomMm) => {
                               updateAppliancePart(selectedAppliance.id, {
                                 position: [
                                   selectedAppliance.position[0],
@@ -3047,7 +3034,7 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
                                 ],
                               });
                             }}
-                            className="mt-1 w-full rounded-lg border border-zinc-700 bg-zinc-900 px-2 py-1.5 text-xs font-mono tabular-nums text-white"
+                            className="mt-1 w-full rounded-lg border border-zinc-700 bg-zinc-900 px-2 py-1.5 text-xs font-mono tabular-nums text-white focus:border-amber-500 focus:outline-none"
                           />
                         </label>
                       </div>
@@ -3126,65 +3113,53 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
                       <div className="grid grid-cols-2 gap-2">
                         <label className="block">
                           <span className="text-[11px] text-zinc-400">Od początku ściany</span>
-                          <input
-                            type="number"
+                          <NumericInput
                             min={0}
                             step={50}
                             value={Math.round(selectedOpening.offsetMm)}
-                            onChange={(e) =>
-                              updateOpening(selectedOpening.id, {
-                                offsetMm: Math.max(0, Number(e.target.value) || 0),
-                              })
+                            onChange={(val) =>
+                              updateOpening(selectedOpening.id, { offsetMm: val })
                             }
-                            className="mt-1 w-full rounded-lg border border-zinc-700 bg-zinc-900 px-2 py-1.5 text-xs font-mono tabular-nums text-white"
+                            className="mt-1 w-full rounded-lg border border-zinc-700 bg-zinc-900 px-2 py-1.5 text-xs font-mono tabular-nums text-white focus:border-amber-500 focus:outline-none"
                           />
                         </label>
                         <label className="block">
                           <span className="text-[11px] text-zinc-400">Szerokość (mm)</span>
-                          <input
-                            type="number"
+                          <NumericInput
                             min={400}
                             max={5000}
                             step={50}
                             value={Math.round(selectedOpening.widthMm)}
-                            onChange={(e) =>
-                              updateOpening(selectedOpening.id, {
-                                widthMm: Math.max(400, Number(e.target.value) || 900),
-                              })
+                            onChange={(val) =>
+                              updateOpening(selectedOpening.id, { widthMm: val })
                             }
-                            className="mt-1 w-full rounded-lg border border-zinc-700 bg-zinc-900 px-2 py-1.5 text-xs font-mono tabular-nums text-white"
+                            className="mt-1 w-full rounded-lg border border-zinc-700 bg-zinc-900 px-2 py-1.5 text-xs font-mono tabular-nums text-white focus:border-amber-500 focus:outline-none"
                           />
                         </label>
                         <label className="block">
                           <span className="text-[11px] text-zinc-400">Wysokość (mm)</span>
-                          <input
-                            type="number"
+                          <NumericInput
                             min={400}
                             max={draft.heightMm}
                             step={50}
                             value={Math.round(selectedOpening.heightMm)}
-                            onChange={(e) =>
-                              updateOpening(selectedOpening.id, {
-                                heightMm: Math.max(400, Number(e.target.value) || 2050),
-                              })
+                            onChange={(val) =>
+                              updateOpening(selectedOpening.id, { heightMm: val })
                             }
-                            className="mt-1 w-full rounded-lg border border-zinc-700 bg-zinc-900 px-2 py-1.5 text-xs font-mono tabular-nums text-white"
+                            className="mt-1 w-full rounded-lg border border-zinc-700 bg-zinc-900 px-2 py-1.5 text-xs font-mono tabular-nums text-white focus:border-amber-500 focus:outline-none"
                           />
                         </label>
                         <label className="block">
                           <span className="text-[11px] text-zinc-400">Parapet / próg (mm)</span>
-                          <input
-                            type="number"
+                          <NumericInput
                             min={0}
                             max={2000}
                             step={50}
                             value={Math.round(selectedOpening.sillHeightMm)}
-                            onChange={(e) =>
-                              updateOpening(selectedOpening.id, {
-                                sillHeightMm: Math.max(0, Number(e.target.value) || 0),
-                              })
+                            onChange={(val) =>
+                              updateOpening(selectedOpening.id, { sillHeightMm: val })
                             }
-                            className="mt-1 w-full rounded-lg border border-zinc-700 bg-zinc-900 px-2 py-1.5 text-xs font-mono tabular-nums text-white"
+                            className="mt-1 w-full rounded-lg border border-zinc-700 bg-zinc-900 px-2 py-1.5 text-xs font-mono tabular-nums text-white focus:border-amber-500 focus:outline-none"
                           />
                         </label>
                       </div>
@@ -3270,78 +3245,63 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
                         </label>
                         <label className="block">
                           <span className="text-[11px] text-zinc-400">Od startu (mm)</span>
-                          <input
-                            type="number"
+                          <NumericInput
                             min={0}
                             step={50}
                             value={Math.round(selectedObstacle.offsetMm)}
-                            onChange={(e) =>
-                              updateWallObstacle(selectedObstacle.id, {
-                                offsetMm: Math.max(0, Number(e.target.value) || 0),
-                              })
+                            onChange={(val) =>
+                              updateWallObstacle(selectedObstacle.id, { offsetMm: val })
                             }
-                            className="mt-1 w-full rounded-lg border border-zinc-700 bg-zinc-900 px-2 py-1.5 text-xs font-mono tabular-nums text-white"
+                            className="mt-1 w-full rounded-lg border border-zinc-700 bg-zinc-900 px-2 py-1.5 text-xs font-mono tabular-nums text-white focus:border-amber-500 focus:outline-none"
                           />
                         </label>
                         <label className="block">
                           <span className="text-[11px] text-zinc-400">Od podłogi (mm)</span>
-                          <input
-                            type="number"
+                          <NumericInput
                             min={0}
                             step={50}
                             value={Math.round(selectedObstacle.elevationMm)}
-                            onChange={(e) =>
-                              updateWallObstacle(selectedObstacle.id, {
-                                elevationMm: Math.max(0, Number(e.target.value) || 0),
-                              })
+                            onChange={(val) =>
+                              updateWallObstacle(selectedObstacle.id, { elevationMm: val })
                             }
-                            className="mt-1 w-full rounded-lg border border-zinc-700 bg-zinc-900 px-2 py-1.5 text-xs font-mono tabular-nums text-white"
+                            className="mt-1 w-full rounded-lg border border-zinc-700 bg-zinc-900 px-2 py-1.5 text-xs font-mono tabular-nums text-white focus:border-amber-500 focus:outline-none"
                           />
                         </label>
                         <label className="block">
                           <span className="text-[11px] text-zinc-400">Odstaje (mm)</span>
-                          <input
-                            type="number"
+                          <NumericInput
                             min={10}
                             max={1200}
                             step={10}
                             value={Math.round(selectedObstacle.depthMm)}
-                            onChange={(e) =>
-                              updateWallObstacle(selectedObstacle.id, {
-                                depthMm: Math.max(10, Math.min(1200, Number(e.target.value) || 30)),
-                              })
+                            onChange={(val) =>
+                              updateWallObstacle(selectedObstacle.id, { depthMm: val })
                             }
-                            className="mt-1 w-full rounded-lg border border-zinc-700 bg-zinc-900 px-2 py-1.5 text-xs font-mono tabular-nums text-white"
+                            className="mt-1 w-full rounded-lg border border-zinc-700 bg-zinc-900 px-2 py-1.5 text-xs font-mono tabular-nums text-white focus:border-amber-500 focus:outline-none"
                           />
                         </label>
                         <label className="block">
                           <span className="text-[11px] text-zinc-400">Szerokość (mm)</span>
-                          <input
-                            type="number"
+                          <NumericInput
                             min={40}
                             step={20}
                             value={Math.round(selectedObstacle.widthMm)}
-                            onChange={(e) =>
-                              updateWallObstacle(selectedObstacle.id, {
-                                widthMm: Math.max(40, Number(e.target.value) || 120),
-                              })
+                            onChange={(val) =>
+                              updateWallObstacle(selectedObstacle.id, { widthMm: val })
                             }
-                            className="mt-1 w-full rounded-lg border border-zinc-700 bg-zinc-900 px-2 py-1.5 text-xs font-mono tabular-nums text-white"
+                            className="mt-1 w-full rounded-lg border border-zinc-700 bg-zinc-900 px-2 py-1.5 text-xs font-mono tabular-nums text-white focus:border-amber-500 focus:outline-none"
                           />
                         </label>
                         <label className="block">
                           <span className="text-[11px] text-zinc-400">Wysokość (mm)</span>
-                          <input
-                            type="number"
+                          <NumericInput
                             min={40}
                             step={20}
                             value={Math.round(selectedObstacle.heightMm)}
-                            onChange={(e) =>
-                              updateWallObstacle(selectedObstacle.id, {
-                                heightMm: Math.max(40, Number(e.target.value) || 120),
-                              })
+                            onChange={(val) =>
+                              updateWallObstacle(selectedObstacle.id, { heightMm: val })
                             }
-                            className="mt-1 w-full rounded-lg border border-zinc-700 bg-zinc-900 px-2 py-1.5 text-xs font-mono tabular-nums text-white"
+                            className="mt-1 w-full rounded-lg border border-zinc-700 bg-zinc-900 px-2 py-1.5 text-xs font-mono tabular-nums text-white focus:border-amber-500 focus:outline-none"
                           />
                         </label>
                       </div>
@@ -3721,21 +3681,13 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
                     {style.showBaseboards && (
                       <label className="flex items-center justify-between gap-3 text-xs text-zinc-400">
                         <span>Wysokość listwy (mm)</span>
-                        <input
-                          type="number"
+                        <NumericInput
                           min={40}
                           max={160}
                           step={10}
                           value={style.baseboardHeightMm}
-                          onChange={(e) =>
-                            patchStyle({
-                              baseboardHeightMm: Math.max(
-                                40,
-                                Math.min(160, Number(e.target.value) || 80)
-                              ),
-                            })
-                          }
-                          className="w-24 rounded-lg border border-zinc-800 bg-zinc-900 px-2.5 py-1.5 text-xs font-mono tabular-nums text-white"
+                          onChange={(val) => patchStyle({ baseboardHeightMm: val })}
+                          className="w-24 rounded-lg border border-zinc-800 bg-zinc-900 px-2.5 py-1.5 text-xs font-mono tabular-nums text-white focus:border-amber-500 focus:outline-none"
                         />
                       </label>
                     )}
@@ -3780,30 +3732,24 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
                         <div className="grid grid-cols-2 gap-2">
                           <label className="block">
                             <span className="text-[11px] text-zinc-400">Kolankowa (mm)</span>
-                            <input
-                              type="number"
+                            <NumericInput
                               min={300}
                               max={draft.heightMm - 100}
                               step={50}
                               value={slope.kneeWallHeightMm}
-                              onChange={(e) =>
-                                patchSlope({ kneeWallHeightMm: Number(e.target.value) || 1100 })
-                              }
-                              className="mt-1 w-full rounded-lg border border-zinc-800 bg-zinc-900 px-2 py-1.5 text-xs font-mono tabular-nums text-white"
+                              onChange={(val) => patchSlope({ kneeWallHeightMm: val })}
+                              className="mt-1 w-full rounded-lg border border-zinc-800 bg-zinc-900 px-2 py-1.5 text-xs font-mono tabular-nums text-white focus:border-amber-500 focus:outline-none"
                             />
                           </label>
                           <label className="block">
                             <span className="text-[11px] text-zinc-400">Szer. skosu (mm)</span>
-                            <input
-                              type="number"
+                            <NumericInput
                               min={300}
                               max={draft.widthMm}
                               step={50}
                               value={slope.slopeWidthMm}
-                              onChange={(e) =>
-                                patchSlope({ slopeWidthMm: Number(e.target.value) || 1400 })
-                              }
-                              className="mt-1 w-full rounded-lg border border-zinc-800 bg-zinc-900 px-2 py-1.5 text-xs font-mono tabular-nums text-white"
+                              onChange={(val) => patchSlope({ slopeWidthMm: val })}
+                              className="mt-1 w-full rounded-lg border border-zinc-800 bg-zinc-900 px-2 py-1.5 text-xs font-mono tabular-nums text-white focus:border-amber-500 focus:outline-none"
                             />
                           </label>
                         </div>

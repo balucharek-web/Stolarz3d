@@ -31,6 +31,7 @@ import {
   ScrewType,
 } from '../types/furniture';
 import { getProjectDimensionsMm } from '../engine/geometry';
+import { NumericInput } from './NumericInput';
 import {
   computePartWeightKg,
   computeProjectWeightSummary,
@@ -1119,48 +1120,46 @@ export const CutListModal: React.FC<CutListModalProps> = ({
                       </label>
                       <label>
                         <span className="text-[10px] text-zinc-400">Grub. [mm]</span>
-                        <input
-                          type="number"
+                        <NumericInput
                           min={3}
                           max={40}
+                          step={1}
                           value={newOffThick}
-                          onChange={(e) => setNewOffThick(Number(e.target.value) || 18)}
-                          className="mt-0.5 w-full rounded-lg border border-zinc-800 bg-zinc-950 px-2 py-1.5 text-[11px] font-mono-num text-white"
+                          onChange={(val) => setNewOffThick(val)}
+                          className="mt-0.5 w-full rounded-lg border border-zinc-800 bg-zinc-950 px-2 py-1.5 text-[11px] font-mono-num text-white focus:border-amber-500 focus:outline-none"
                         />
                       </label>
                       <label>
                         <span className="text-[10px] text-zinc-400">Dł. (słój)</span>
-                        <input
-                          type="number"
+                        <NumericInput
                           min={150}
                           max={2800}
                           step={50}
                           value={newOffLen}
-                          onChange={(e) => setNewOffLen(Number(e.target.value) || 1000)}
-                          className="mt-0.5 w-full rounded-lg border border-zinc-800 bg-zinc-950 px-2 py-1.5 text-[11px] font-mono-num text-white"
+                          onChange={(val) => setNewOffLen(val)}
+                          className="mt-0.5 w-full rounded-lg border border-zinc-800 bg-zinc-950 px-2 py-1.5 text-[11px] font-mono-num text-white focus:border-amber-500 focus:outline-none"
                         />
                       </label>
                       <label>
                         <span className="text-[10px] text-zinc-400">Szer.</span>
-                        <input
-                          type="number"
+                        <NumericInput
                           min={120}
                           max={2070}
                           step={50}
                           value={newOffWid}
-                          onChange={(e) => setNewOffWid(Number(e.target.value) || 600)}
-                          className="mt-0.5 w-full rounded-lg border border-zinc-800 bg-zinc-950 px-2 py-1.5 text-[11px] font-mono-num text-white"
+                          onChange={(val) => setNewOffWid(val)}
+                          className="mt-0.5 w-full rounded-lg border border-zinc-800 bg-zinc-950 px-2 py-1.5 text-[11px] font-mono-num text-white focus:border-amber-500 focus:outline-none"
                         />
                       </label>
                       <div className="flex gap-1">
-                        <input
-                          type="number"
+                        <NumericInput
                           min={1}
                           max={20}
+                          step={1}
                           value={newOffQty}
-                          onChange={(e) => setNewOffQty(Number(e.target.value) || 1)}
+                          onChange={(val) => setNewOffQty(val)}
                           title="Ilość sztuk"
-                          className="w-12 rounded-lg border border-zinc-800 bg-zinc-950 px-1.5 py-1.5 text-[11px] font-mono-num text-white"
+                          className="w-12 rounded-lg border border-zinc-800 bg-zinc-950 px-1.5 py-1.5 text-[11px] font-mono-num text-white focus:border-amber-500 focus:outline-none"
                         />
                         <button
                           type="button"
@@ -1807,15 +1806,12 @@ export const CutListModal: React.FC<CutListModalProps> = ({
                         <label className="block text-[10px] text-zinc-400 mb-1 truncate">
                           {label}
                         </label>
-                        <input
-                          type="number"
+                        <NumericInput
                           min={0}
                           step={key === 'fastenerPricePln' ? 0.05 : 1}
+                          allowDecimal
                           value={quoteSettings[key] ?? (key === 'flapLiftPricePln' ? 145 : 0)}
-                          onChange={(e) => {
-                            const v = parseFloat(e.target.value);
-                            if (Number.isFinite(v) && v >= 0) updateQuoteField(key, v);
-                          }}
+                          onChange={(v) => updateQuoteField(key, v)}
                           className="w-full rounded-lg border border-zinc-800 bg-zinc-950 px-2 py-1.5 text-xs font-mono-num text-white focus:border-amber-500 focus:outline-none"
                         />
                       </div>

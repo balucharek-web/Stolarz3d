@@ -3018,10 +3018,9 @@ export const Viewport3D = forwardRef<Viewport3DHandle, Viewport3DProps>(
             </div>
             <div className="flex items-center gap-1.5">
               <input
-                type="number"
-                min={0}
-                max={5000}
-                step={1}
+                type="text"
+                inputMode="numeric"
+                autoComplete="off"
                 autoFocus
                 value={activeClearanceEdit.value}
                 onChange={(ev) =>
@@ -3030,7 +3029,9 @@ export const Viewport3D = forwardRef<Viewport3DHandle, Viewport3DProps>(
                   )
                 }
                 onKeyDown={(ev) => {
-                  if (ev.key === 'Escape') {
+                  if (ev.key === 'Backspace' || ev.key === 'Delete') {
+                    ev.stopPropagation();
+                  } else if (ev.key === 'Escape') {
                     ev.stopPropagation();
                     setActiveClearanceEdit(null);
                   }

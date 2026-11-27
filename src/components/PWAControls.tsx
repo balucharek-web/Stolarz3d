@@ -33,7 +33,7 @@ export const PWAInstallButton: React.FC<PWAInstallButtonProps> = ({
       <button
         type="button"
         onClick={onApplyUpdate}
-        className="flex min-h-[34px] items-center gap-1.5 rounded-lg border border-amber-400/70 bg-amber-500/20 px-2.5 text-xs font-semibold text-amber-200 hover:bg-amber-500/30 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+        className="flex min-h-[34px] items-center gap-1.5 rounded-xl border border-amber-400/50 bg-amber-500/18 px-2.5 text-xs font-semibold text-amber-200 hover:bg-amber-500/28 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
         title="Dostępna nowa wersja aplikacji — kliknij, aby wgrać aktualizację"
       >
         <RefreshCw className="h-3.5 w-3.5 shrink-0" />
@@ -49,7 +49,7 @@ export const PWAInstallButton: React.FC<PWAInstallButtonProps> = ({
         type="button"
         onClick={onCheckForUpdate}
         disabled={checkStatus === 'checking'}
-        className="flex min-h-[34px] items-center gap-1.5 rounded-lg border border-zinc-700 bg-zinc-900 px-2.5 text-xs font-medium text-zinc-200 hover:border-amber-500/60 hover:text-amber-300 transition-colors whitespace-nowrap shrink-0 cursor-pointer disabled:opacity-60"
+        className="flex min-h-[34px] items-center gap-1.5 rounded-xl border border-white/[0.08] bg-white/[0.04] px-2.5 text-xs font-medium text-zinc-300 hover:bg-white/[0.09] hover:text-white transition-colors whitespace-nowrap shrink-0 cursor-pointer disabled:opacity-60"
         title={
           checkStatus === 'up_to_date'
             ? 'Masz najnowszą wersję Stolarz 3D'
@@ -82,10 +82,10 @@ export const PWAInstallButton: React.FC<PWAInstallButtonProps> = ({
       <button
         type="button"
         onClick={() => void install()}
-        className="flex min-h-[34px] items-center gap-1.5 rounded-lg border border-amber-500/60 bg-amber-500/15 px-2.5 text-xs font-semibold text-amber-300 hover:bg-amber-500/25 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+        className="flex min-h-[34px] items-center gap-1.5 rounded-xl border border-white/[0.08] bg-white/[0.04] px-2.5 text-xs font-medium text-zinc-200 hover:bg-white/[0.09] hover:text-white transition-colors whitespace-nowrap shrink-0 cursor-pointer"
         title="Zainstaluj Stolarz 3D na ekranie głównym telefonu lub komputera"
       >
-        <Download className="h-3.5 w-3.5 shrink-0" />
+        <Download className="h-3.5 w-3.5 text-amber-400 shrink-0" />
         <span className="hidden sm:inline">Zainstaluj</span>
       </button>
     );
@@ -98,10 +98,10 @@ export const PWAInstallButton: React.FC<PWAInstallButtonProps> = ({
         <button
           type="button"
           onClick={() => setShowManualGuide(true)}
-          className="flex min-h-[34px] items-center gap-1.5 rounded-lg border border-amber-500/60 bg-amber-500/15 px-2.5 text-xs font-semibold text-amber-300 hover:bg-amber-500/25 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+          className="flex min-h-[34px] items-center gap-1.5 rounded-xl border border-white/[0.08] bg-white/[0.04] px-2.5 text-xs font-medium text-zinc-200 hover:bg-white/[0.09] hover:text-white transition-colors whitespace-nowrap shrink-0 cursor-pointer"
           title="Instrukcja instalacji aplikacji na telefonie"
         >
-          <Smartphone className="h-3.5 w-3.5 shrink-0" />
+          <Smartphone className="h-3.5 w-3.5 text-amber-400 shrink-0" />
           <span className="hidden sm:inline">Zainstaluj</span>
         </button>
 
@@ -242,13 +242,13 @@ export const PWAStatusOverlays: React.FC<PWAStatusOverlaysProps> = ({
       {needRefresh && (
         <div
           role="alert"
-          className="fixed top-14 right-3.5 sm:right-5 z-40 w-[min(360px,calc(100vw-28px))] rounded-xl border border-amber-500/60 bg-[#141518] p-3.5 text-zinc-100 shadow-2xl"
+          className="studio-glass animate-studio-pop fixed top-[60px] right-3.5 sm:right-5 z-40 w-[min(360px,calc(100vw-28px))] rounded-2xl border-amber-400/40 p-3.5 text-zinc-100"
         >
           <div className="flex items-start gap-3">
             <img
               src="./pwa-192x192.png"
               alt="Stolarz 3D"
-              className="h-10 w-10 rounded-lg border border-zinc-700 object-cover shrink-0"
+              className="h-10 w-10 rounded-xl border border-white/[0.1] object-cover shrink-0"
             />
             <div className="min-w-0 flex-1">
               <div className="text-xs font-semibold text-white">
@@ -263,7 +263,7 @@ export const PWAStatusOverlays: React.FC<PWAStatusOverlaysProps> = ({
                   type="button"
                   disabled={isUpdating}
                   onClick={onApplyUpdate}
-                  className="flex items-center gap-1.5 rounded-lg bg-amber-500 px-3 py-1.5 text-xs font-semibold text-zinc-950 hover:bg-amber-400 transition-colors cursor-pointer disabled:opacity-60"
+                  className="flex items-center gap-1.5 rounded-xl bg-amber-500 px-3 py-1.5 text-xs font-semibold text-zinc-950 hover:bg-amber-400 transition-colors cursor-pointer disabled:opacity-60"
                 >
                   <RefreshCw
                     className={`h-3.5 w-3.5 ${isUpdating ? 'animate-spin' : ''}`}
@@ -273,7 +273,7 @@ export const PWAStatusOverlays: React.FC<PWAStatusOverlaysProps> = ({
                 <button
                   type="button"
                   onClick={onDismissUpdate}
-                  className="rounded-lg border border-zinc-700 px-2.5 py-1.5 text-xs font-medium text-zinc-300 hover:bg-zinc-800 hover:text-white transition-colors cursor-pointer"
+                  className="rounded-xl border border-white/[0.1] px-2.5 py-1.5 text-xs font-medium text-zinc-300 hover:bg-white/[0.08] hover:text-white transition-colors cursor-pointer"
                 >
                   Później
                 </button>
@@ -285,7 +285,7 @@ export const PWAStatusOverlays: React.FC<PWAStatusOverlaysProps> = ({
 
       {/* Offline Mode Indicator (non-intrusive, static icon) */}
       {!isOnline && (
-        <div className="fixed top-14 left-1/2 z-30 -translate-x-1/2 flex items-center gap-2 rounded-lg border border-amber-500/50 bg-[#141518] px-3 py-1.5 text-xs font-medium text-amber-200 shadow-lg">
+        <div className="studio-glass fixed top-[60px] left-1/2 z-30 -translate-x-1/2 flex items-center gap-2 rounded-full border-amber-400/40 px-3.5 py-1.5 text-xs font-medium text-amber-200">
           <WifiOff className="h-3.5 w-3.5 text-amber-400 shrink-0" />
           <span className="whitespace-nowrap">
             Tryb offline — pracujesz lokalnie
@@ -295,7 +295,7 @@ export const PWAStatusOverlays: React.FC<PWAStatusOverlaysProps> = ({
 
       {/* One-time Offline Ready Confirmation */}
       {offlineReady && !needRefresh && isOnline && (
-        <div className="fixed top-14 right-3.5 sm:right-5 z-30 flex items-center gap-2 rounded-lg border border-emerald-500/40 bg-[#141518] px-3 py-2 text-xs text-zinc-100 shadow-xl">
+        <div className="studio-glass animate-studio-pop fixed top-[60px] right-3.5 sm:right-5 z-30 flex items-center gap-2 rounded-2xl border-emerald-400/35 px-3.5 py-2 text-xs text-zinc-100">
           <CheckCircle2 className="h-4 w-4 text-emerald-400 shrink-0" />
           <span>Aplikacja zapisana do pracy offline</span>
           <button

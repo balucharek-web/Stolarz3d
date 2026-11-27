@@ -9,7 +9,7 @@ interface ViewCubeProps {
 }
 
 /**
- * Compact CAD View Compass (Desktop/Tablet) tucked cleanly in the top-right corner
+ * Architectural Studio Camera Compass (Desktop/Tablet) tucked cleanly in the top-right corner
  * for 1-click orthographic & isometric camera navigation. Automatically shifts beside
  * InspectorDrawer when open so it never collides or gets covered.
  */
@@ -19,20 +19,20 @@ export const ViewCube: React.FC<ViewCubeProps> = ({
   inspectorOpen = false,
 }) => {
   const btn =
-    'flex h-6 items-center justify-center rounded text-[10px] font-semibold tracking-tight text-zinc-300 hover:bg-amber-500 hover:text-zinc-950 transition-colors cursor-pointer select-none';
+    'flex h-7 items-center justify-center rounded-lg text-[10px] font-medium tracking-tight text-zinc-300 hover:bg-white/[0.1] hover:text-white active:scale-[0.97] transition-all cursor-pointer select-none';
 
   return (
     <div
       aria-label="Kompas widoków kamery 3D"
-      className={`hidden sm:flex fixed top-15 z-20 flex-col gap-1 rounded-xl border border-zinc-800/90 bg-[#141518]/92 p-1.5 shadow-xl transition-[right] duration-200 ${
-        inspectorOpen ? 'right-[364px]' : 'right-4'
+      className={`hidden sm:flex studio-glass fixed top-[62px] z-20 flex-col gap-1 rounded-2xl p-1.5 transition-[right] duration-200 ease-out ${
+        inspectorOpen ? 'right-[372px]' : 'right-3.5'
       }`}
     >
-      <div className="grid grid-cols-3 gap-0.5 w-[108px]">
+      <div className="grid grid-cols-3 gap-1 w-[124px]">
         <button
           type="button"
           onClick={() => onSelectView('iso')}
-          className={`${btn} bg-zinc-900 text-amber-400`}
+          className={`${btn} bg-amber-500/15 text-amber-300 hover:bg-amber-500 hover:text-zinc-950 font-semibold`}
           title="Widok izometryczny 3D"
         >
           3D
@@ -40,7 +40,7 @@ export const ViewCube: React.FC<ViewCubeProps> = ({
         <button
           type="button"
           onClick={() => onSelectView('top')}
-          className={`${btn} bg-zinc-900`}
+          className={`${btn} bg-white/[0.04]`}
           title="Widok z góry (rzut)"
         >
           Góra
@@ -48,17 +48,17 @@ export const ViewCube: React.FC<ViewCubeProps> = ({
         <button
           type="button"
           onClick={onFocusAll}
-          className={`${btn} bg-zinc-900 text-zinc-400`}
-          title="Dopasuj cały mebel (F)"
+          className={`${btn} bg-white/[0.04] text-zinc-400`}
+          title="Dopasuj cały projekt (F)"
           aria-label="Dopasuj widok"
         >
-          <Focus className="h-3 w-3" />
+          <Focus className="h-3.5 w-3.5" />
         </button>
 
         <button
           type="button"
           onClick={() => onSelectView('left')}
-          className={`${btn} bg-zinc-900`}
+          className={`${btn} bg-white/[0.04]`}
           title="Widok z lewej strony"
         >
           Lewy
@@ -66,7 +66,7 @@ export const ViewCube: React.FC<ViewCubeProps> = ({
         <button
           type="button"
           onClick={() => onSelectView('front')}
-          className={`${btn} bg-zinc-800 text-white`}
+          className={`${btn} bg-white/[0.1] text-white font-semibold`}
           title="Widok z przodu"
         >
           Przód
@@ -74,7 +74,7 @@ export const ViewCube: React.FC<ViewCubeProps> = ({
         <button
           type="button"
           onClick={() => onSelectView('right')}
-          className={`${btn} bg-zinc-900`}
+          className={`${btn} bg-white/[0.04]`}
           title="Widok z prawej strony"
         >
           Prawy
@@ -83,7 +83,7 @@ export const ViewCube: React.FC<ViewCubeProps> = ({
       <button
         type="button"
         onClick={() => onSelectView('back')}
-        className={`${btn} w-full h-5 bg-zinc-900/80 text-zinc-400`}
+        className={`${btn} w-full h-6 bg-white/[0.03] text-zinc-400`}
         title="Widok z tyłu (plecy mebla)"
       >
         Tył
