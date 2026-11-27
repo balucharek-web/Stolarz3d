@@ -211,6 +211,30 @@ export const WALL_OBSTACLE_PRESETS: Record<
     depthMm: 25,
     elevationMm: 2250,
   },
+  wc_geberit: {
+    label: 'WC podtynkowe (Geberit)',
+    shortLabel: 'WC Geberit',
+    widthMm: 500,
+    heightMm: 1200,
+    depthMm: 720,
+    elevationMm: 0,
+  },
+  wc_low_cistern: {
+    label: 'Muszla WC dolnopłukowa',
+    shortLabel: 'WC dolnopł.',
+    widthMm: 380,
+    heightMm: 790,
+    depthMm: 650,
+    elevationMm: 0,
+  },
+  wc_high_cistern: {
+    label: 'Muszla WC górnopłukowa',
+    shortLabel: 'WC górnopł.',
+    widthMm: 380,
+    heightMm: 2050,
+    depthMm: 580,
+    elevationMm: 0,
+  },
 };
 
 export function wallIndexToLabel(index: number): string {

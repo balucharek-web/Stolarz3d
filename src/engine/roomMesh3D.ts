@@ -15,6 +15,7 @@ import {
   type WallSegment,
 } from './roomGeometry';
 import { getRoomObstacleWorldBox } from './carpentry';
+import { buildSanitaryToilet3D, isSanitaryToiletType } from './sanitary3D';
 
 const MM_TO_M = 0.001;
 
@@ -724,7 +725,11 @@ function buildWallSegment3D(
     const cy = obs.elevationMm * MM_TO_M + oh / 2;
     const cz = od / 2;
 
-    if (obs.type === 'radiator') {
+    if (isSanitaryToiletType(obs.type)) {
+      const wcGroup = buildSanitaryToilet3D(obs.type, ow, oh, od);
+      wcGroup.position.set(cx, obs.elevationMm * MM_TO_M, 0);
+      wallGroup.add(wcGroup);
+    } else if (obs.type === 'radiator') {
       // Main panel radiator body + vertical fin ribs
       const bodyGeo = new THREE.BoxGeometry(ow, oh, od);
       const bodyMat = new THREE.MeshStandardMaterial({

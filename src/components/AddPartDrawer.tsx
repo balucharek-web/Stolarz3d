@@ -168,7 +168,12 @@ export const AddPartDrawer: React.FC<AddPartDrawerProps> = ({
   if (!open) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/50 p-0 sm:p-4">
+    <div
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+      className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/50 p-0 sm:p-4"
+    >
       <div className="w-full sm:max-w-lg rounded-t-2xl sm:rounded-2xl border border-zinc-800 bg-[#141518] text-zinc-100 shadow-2xl flex flex-col max-h-[85dvh]">
         <div className="flex items-center justify-between border-b border-zinc-800 px-5 py-3.5">
           <div>
@@ -316,7 +321,7 @@ export const AddPartDrawer: React.FC<AddPartDrawerProps> = ({
           <div className="space-y-2 border-t border-zinc-800/80 pt-4">
             <div className="flex items-center justify-between">
               <h3 className="text-xs font-semibold text-zinc-300">
-                3. Wnętrze szaf i AGD 3D (bez rozkroju płyt)
+                3. Wnętrze szaf, AGD i sanitariaty WC 3D (bez rozkroju płyt)
               </h3>
               <span className="text-[10px] text-zinc-500">Wliczane w kosztorys</span>
             </div>

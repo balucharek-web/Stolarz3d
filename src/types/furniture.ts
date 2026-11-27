@@ -28,7 +28,10 @@ export type ApplianceModel =
   | 'induction_hob'
   | 'kitchen_sink'
   | 'builtin_oven'
-  | 'wire_cargo';
+  | 'wire_cargo'
+  | 'wc_geberit'
+  | 'wc_low_cistern'
+  | 'wc_high_cistern';
 
 export type AlignMode =
   | 'left'
@@ -361,7 +364,10 @@ export type RoomWallObstacleType =
   | 'switch'
   | 'radiator'
   | 'pipe'
-  | 'vent';
+  | 'vent'
+  | 'wc_geberit'
+  | 'wc_low_cistern'
+  | 'wc_high_cistern';
 
 export interface RoomWallObstacle {
   id: string;
@@ -802,6 +808,36 @@ export const APPLIANCE_CATALOG: ApplianceMeta[] = [
     depth: 550,
     defaultY: 500,
     defaultPricePln: 1850,
+  },
+  {
+    id: 'wc_geberit',
+    name: 'WC podtynkowe (Geberit)',
+    desc: '500 × 1200 × 720 mm · Stelaż z zabudową, przycisk i miska wisząca',
+    width: 500,
+    height: 1200,
+    depth: 720,
+    defaultY: 600,
+    defaultPricePln: 1950,
+  },
+  {
+    id: 'wc_low_cistern',
+    name: 'Muszla WC dolnopłukowa (kompakt)',
+    desc: '380 × 790 × 650 mm · Klasyczny kompakt WC stojący ze spłuczką',
+    width: 380,
+    height: 790,
+    depth: 650,
+    defaultY: 395,
+    defaultPricePln: 790,
+  },
+  {
+    id: 'wc_high_cistern',
+    name: 'Muszla WC górnopłukowa',
+    desc: '380 × 2050 × 580 mm · Muszla stojąca + górna spłuczka z rurą',
+    width: 380,
+    height: 2050,
+    depth: 580,
+    defaultY: 1025,
+    defaultPricePln: 980,
   },
 ];
 

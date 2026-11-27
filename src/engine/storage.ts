@@ -70,6 +70,9 @@ const VALID_APPLIANCES = new Set<ApplianceModel>([
   'kitchen_sink',
   'builtin_oven',
   'wire_cargo',
+  'wc_geberit',
+  'wc_low_cistern',
+  'wc_high_cistern',
 ]);
 
 const VALID_HANDLES = new Set<HandleSide>(['left', 'right', 'top', 'none']);
@@ -171,6 +174,9 @@ const VALID_WALL_OBSTACLE_TYPES = new Set<RoomWallObstacleType>([
   'radiator',
   'pipe',
   'vent',
+  'wc_geberit',
+  'wc_low_cistern',
+  'wc_high_cistern',
 ]);
 const VALID_WALL_FINISHES = new Set<RoomWallFinish>([
   'white_plaster',
@@ -294,7 +300,7 @@ function sanitizeRoomConfig(raw: unknown): RoomConfig | undefined {
         elevationMm: toFiniteNumber(o.elevationMm, 300, 0, 4000),
         widthMm: toFiniteNumber(o.widthMm, 160, 30, 4000),
         heightMm: toFiniteNumber(o.heightMm, 90, 30, 4000),
-        depthMm: toFiniteNumber(o.depthMm, 30, 10, 600),
+        depthMm: toFiniteNumber(o.depthMm, 30, 10, 1200),
       });
     }
   }

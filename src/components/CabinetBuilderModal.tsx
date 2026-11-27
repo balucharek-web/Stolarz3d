@@ -175,8 +175,13 @@ export const CabinetBuilderModal: React.FC<CabinetBuilderModalProps> = ({
   const upperZoneH = previewSummary.isHybrid ? bodyH - drawZoneH : bodyH;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/60 p-0 sm:p-4">
-      <div className="w-full sm:max-w-4xl rounded-t-2xl sm:rounded-2xl border border-zinc-800 bg-[#141518] text-zinc-100 shadow-2xl flex flex-col max-h-[92dvh]">
+    <div
+      className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/60 p-0 sm:p-4"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+    >
+      <div className="w-full sm:max-w-4xl rounded-t-2xl sm:rounded-2xl border border-zinc-800 bg-[#141518] text-zinc-100 shadow-2xl flex flex-col max-h-[92dvh] overflow-hidden">
         {/* Header */}
         <div className="flex items-center justify-between gap-3 border-b border-zinc-800 px-5 py-3.5">
           <div className="min-w-0">
@@ -228,11 +233,11 @@ export const CabinetBuilderModal: React.FC<CabinetBuilderModalProps> = ({
             })}
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-12 gap-5">
-            {/* Left: Live 2D Orthographic Front Blueprint */}
-            <div className="md:col-span-5 flex flex-col gap-3">
-              <div className="rounded-xl border border-zinc-800 bg-zinc-950/80 p-3">
-                <div className="flex items-center justify-between text-[11px] text-zinc-400 mb-2">
+          <div className="grid grid-cols-1 md:grid-cols-12 gap-4 sm:gap-5 items-start">
+            {/* Left: Live 2D Orthographic Front Blueprint (sticky on mobile & desktop!) */}
+            <div className="md:col-span-5 sticky top-0 z-10 bg-[#141518] pb-2 md:pb-0 flex flex-col gap-3">
+              <div className="rounded-xl border border-zinc-800 bg-zinc-950/95 p-2.5 sm:p-3 shadow-md md:shadow-none">
+                <div className="flex items-center justify-between text-[11px] text-zinc-400 mb-1.5 sm:mb-2">
                   <span>Podgląd techniczny (przód)</span>
                   <span className="font-mono-num text-amber-300">
                     Światło: {previewSummary.innerW} mm
@@ -240,7 +245,7 @@ export const CabinetBuilderModal: React.FC<CabinetBuilderModalProps> = ({
                 </div>
                 <svg
                   viewBox={`0 0 ${vbW} ${vbH}`}
-                  className="w-full h-auto max-h-[250px] rounded-lg bg-[#1A1C22]"
+                  className="w-full h-auto max-h-[155px] sm:max-h-[240px] rounded-lg bg-[#1A1C22]"
                 >
                   {/* Optional Countertop */}
                   {cfg.addCountertop && (

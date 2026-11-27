@@ -57,7 +57,12 @@ export const StartWorkspaceModal: React.FC<StartWorkspaceModalProps> = ({
   if (!open) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-3 sm:p-5 backdrop-blur-[2px]">
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-3 sm:p-5 backdrop-blur-[2px]"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+    >
       <div className="w-full max-w-3xl max-h-[92dvh] rounded-2xl border border-zinc-800 bg-[#141518] text-zinc-100 shadow-2xl flex flex-col overflow-hidden">
         {/* Header */}
         <div className="flex items-start justify-between gap-4 border-b border-zinc-800 px-5 sm:px-6 py-4 shrink-0">
@@ -100,7 +105,7 @@ export const StartWorkspaceModal: React.FC<StartWorkspaceModalProps> = ({
                   Rysuj pomieszczenie 2D / 3D
                 </div>
                 <p className="mt-1 text-xs text-zinc-300 leading-relaxed">
-                  Narysuj ściany, wstaw drzwi, okna, grzejniki i gniazdka, a potem ustaw wewnątrz mebel.
+                  Narysuj ściany, wstaw drzwi, okna, grzejniki, gniazdka i WC (Geberit / kompakt), a potem ustaw mebel.
                 </p>
               </div>
             </button>

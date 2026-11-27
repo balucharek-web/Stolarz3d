@@ -1,12 +1,16 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle,
+  CheckSquare,
   ChevronLeft,
   ChevronRight,
+  Focus,
+  HelpCircle,
   Home,
   LayoutPanelTop,
   PenTool,
   Plus,
+  Undo2,
   X,
 } from 'lucide-react';
 import {
@@ -91,6 +95,7 @@ import { ContextMenu, type ContextMenuTarget } from './components/ContextMenu';
 import { ViewCube } from './components/ViewCube';
 import { PWAInstallButton, PWAStatusOverlays } from './components/PWAControls';
 import { StartWorkspaceModal } from './components/StartWorkspaceModal';
+import { ShortcutsHelpModal } from './components/ShortcutsHelpModal';
 import { usePWAUpdate } from './hooks/usePWAUpdate';
 
 const SNAP_STEPS = [10, 5, 25, 0];
@@ -198,6 +203,8 @@ export default function App() {
     }
   });
   const [contextMenu, setContextMenu] = useState<ContextMenuTarget | null>(null);
+  const [shortcutsOpen, setShortcutsOpen] = useState<boolean>(false);
+  const [multiSelectMode, setMultiSelectMode] = useState<boolean>(false);
   const [toastMsg, setToastMsg] = useState<string | null>(null);
 
   const toastTimerRef = useRef<number | null>(null);
@@ -425,26 +432,29 @@ export default function App() {
     [showToast]
   );
 
-  const handleSelectPart = useCallback((id: string | null, additive = false) => {
-    setSelectedFastenerId(null);
-    if (!id) {
-      setSelectedPartId(null);
-      setSelectedPartIds([]);
-      setInspectorOpen(false);
-      return;
-    }
-    if (additive) {
-      setSelectedPartIds((prev) => {
-        const exists = prev.includes(id);
-        const next = exists ? prev.filter((x) => x !== id) : [...prev, id];
-        setSelectedPartId(next.length > 0 ? next[next.length - 1] : null);
-        return next;
-      });
-    } else {
-      setSelectedPartId(id);
-      setSelectedPartIds([id]);
-    }
-  }, []);
+  const handleSelectPart = useCallback(
+    (id: string | null, additive = false) => {
+      setSelectedFastenerId(null);
+      if (!id) {
+        setSelectedPartId(null);
+        setSelectedPartIds([]);
+        setInspectorOpen(false);
+        return;
+      }
+      if (additive || multiSelectMode) {
+        setSelectedPartIds((prev) => {
+          const exists = prev.includes(id);
+          const next = exists ? prev.filter((x) => x !== id) : [...prev, id];
+          setSelectedPartId(next.length > 0 ? next[next.length - 1] : null);
+          return next;
+        });
+      } else {
+        setSelectedPartId(id);
+        setSelectedPartIds([id]);
+      }
+    },
+    [multiSelectMode]
+  );
 
   const handleSelectFastener = useCallback((id: string | null) => {
     setSelectedFastenerId(id);
@@ -1152,7 +1162,8 @@ export default function App() {
     addPartOpen ||
     cabinetBuilderOpen ||
     materialsModalOpen ||
-    roomModalOpen;
+    roomModalOpen ||
+    shortcutsOpen;
 
   // Isolated Keyboard shortcuts for fast desktop CAD workflow
   useEffect(() => {
@@ -1168,6 +1179,10 @@ export default function App() {
       }
 
       if (e.key === 'Escape') {
+        if (shortcutsOpen) {
+          setShortcutsOpen(false);
+          return;
+        }
         if (roomModalOpen) {
           setRoomModalOpen(false);
           return;
@@ -1295,6 +1310,9 @@ export default function App() {
         case 'x':
           setXrayMode((x) => !x);
           break;
+        case '?':
+          setShortcutsOpen((s) => !s);
+          break;
         case 'delete':
         case 'backspace':
           if (selectedFastenerId) {
@@ -1310,6 +1328,7 @@ export default function App() {
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [
     anyModalOpen,
+    shortcutsOpen,
     roomModalOpen,
     materialsModalOpen,
     cabinetBuilderOpen,
@@ -1515,8 +1534,8 @@ export default function App() {
 
   return (
     <div className="relative h-[100dvh] w-screen overflow-hidden bg-[#EAECEF]">
-      {/* Minimal 3-Zone Top Bar (Height 48px — stays slim on mobile & desktop) */}
-      <header className="fixed top-0 inset-x-0 z-30 flex h-12 items-center justify-between gap-3 sm:gap-6 border-b border-zinc-800 bg-[#141518] px-3.5 sm:px-5 text-zinc-100">
+      {/* Minimal 3-Zone Top Bar (Height 48px — stays slim & overflow-safe on mobile & desktop) */}
+      <header className="fixed top-0 inset-x-0 z-30 flex h-12 max-w-full items-center justify-between gap-2 lg:gap-4 border-b border-zinc-800 bg-[#141518] px-2.5 sm:px-4 text-zinc-100 overflow-hidden">
         {/* Zone 1: Single-line Brand Wordmark (opens Start Launcher) */}
         <button
           type="button"
@@ -1527,8 +1546,8 @@ export default function App() {
           Stolarz 3D
         </button>
 
-        {/* Zone 2: Clean Single-Line Nav Actions (Desktop) */}
-        <nav className="hidden md:flex items-center gap-5 text-xs font-medium text-zinc-300">
+        {/* Zone 2: Clean Single-Line Nav Actions (Desktop — flex-1 min-w-0 prevents right-side clipping on PC) */}
+        <nav className="hidden md:flex flex-1 min-w-0 items-center justify-center gap-2.5 lg:gap-4 xl:gap-5 overflow-x-auto cad-scroll text-[11px] lg:text-xs font-medium text-zinc-300">
           <button
             type="button"
             onClick={() =>
@@ -1574,19 +1593,19 @@ export default function App() {
             onClick={() => setCutListOpen(true)}
             className="hover:text-white transition-colors whitespace-nowrap shrink-0 cursor-pointer"
           >
-            Rozkrój / Wycena
+            Rozkrój
           </button>
           <button
             type="button"
             onClick={handleSnapshot}
             className="hover:text-white transition-colors whitespace-nowrap shrink-0 cursor-pointer"
           >
-            Zdjęcie PNG
+            PNG
           </button>
         </nav>
 
         {/* Zone 3: Primary Actions */}
-        <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
+        <div className="flex items-center gap-1 sm:gap-1.5 shrink-0">
           <PWAInstallButton
             needRefresh={pwa.needRefresh}
             checkStatus={pwa.checkStatus}
@@ -1596,15 +1615,16 @@ export default function App() {
           <button
             type="button"
             onClick={() => setRoomModalOpen(true)}
-            className={`flex min-h-[34px] items-center gap-1.5 rounded-lg border px-2.5 text-xs font-medium transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+            className={`flex min-h-[34px] items-center gap-1 rounded-lg border px-2 sm:px-2.5 text-xs font-medium transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
               project.room?.enabled
-                ? 'border-sky-500/60 bg-sky-500/15 text-sky-300 hover:bg-sky-500/25'
+                ? 'border-sky-500/70 bg-sky-500/20 text-sky-200 hover:bg-sky-500/30 font-semibold'
                 : 'border-zinc-700 bg-zinc-900 text-zinc-200 hover:border-sky-500/50 hover:text-sky-300'
             }`}
-            title="Konfigurator pomieszczenia 2D/3D: rysowanie ścian, drzwi, okien, skosu i przeszkód"
+            title="Konfigurator pomieszczenia 2D/3D: rysowanie ścian, drzwi, okien, sanitariatów i przeszkód"
           >
             <Home className="h-3.5 w-3.5 shrink-0" />
-            <span className="hidden lg:inline">Pomieszczenie</span>
+            <span className="xl:hidden">Rzut 2D</span>
+            <span className="hidden xl:inline">Pomieszczenie 2D</span>
           </button>
           <button
             type="button"
@@ -1612,11 +1632,11 @@ export default function App() {
               setEditingCabinetGroupId(null);
               setCabinetBuilderOpen(true);
             }}
-            className="flex min-h-[34px] items-center gap-1.5 rounded-lg border border-emerald-500/50 bg-emerald-500/12 px-2.5 sm:px-3 text-xs font-medium text-emerald-300 hover:bg-emerald-500/20 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+            className="flex min-h-[34px] items-center gap-1 rounded-lg border border-emerald-500/50 bg-emerald-500/12 px-2 sm:px-2.5 text-xs font-medium text-emerald-300 hover:bg-emerald-500/20 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
             title="Kreator parametrycznej szafki, szuflad i frontów"
           >
             <LayoutPanelTop className="h-3.5 w-3.5 shrink-0" />
-            <span className="hidden sm:inline">Szafka</span>
+            <span>Szafka</span>
           </button>
           <button
             type="button"
@@ -1624,19 +1644,28 @@ export default function App() {
               setSketchEditingPart(null);
               setSketchOpen(true);
             }}
-            className="flex min-h-[34px] items-center gap-1.5 rounded-lg border border-zinc-700 bg-zinc-900 px-2.5 sm:px-3 text-xs font-medium text-zinc-100 hover:border-amber-500/70 hover:text-amber-300 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+            className="hidden sm:flex min-h-[34px] items-center gap-1 rounded-lg border border-zinc-700 bg-zinc-900 px-2 sm:px-2.5 text-xs font-medium text-zinc-100 hover:border-amber-500/70 hover:text-amber-300 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
             title="Narysuj własny kształt płyty 2D"
           >
             <PenTool className="h-3.5 w-3.5 text-amber-400 shrink-0" />
-            <span className="hidden sm:inline">Rysuj 2D</span>
+            <span className="hidden lg:inline">Rysuj płytę</span>
           </button>
           <button
             type="button"
             onClick={() => setAddPartOpen(true)}
-            className="flex min-h-[34px] items-center gap-1.5 rounded-lg bg-amber-500 px-2.5 sm:px-3.5 text-xs font-semibold text-zinc-950 hover:bg-amber-400 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+            className="flex min-h-[34px] items-center gap-1 rounded-lg bg-amber-500 px-2.5 sm:px-3 text-xs font-semibold text-zinc-950 hover:bg-amber-400 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
           >
             <Plus className="h-4 w-4 shrink-0" />
             <span>Dodaj</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setShortcutsOpen(true)}
+            className="hidden md:flex min-h-[34px] min-w-[34px] items-center justify-center rounded-lg border border-zinc-800 bg-zinc-900 text-zinc-400 hover:border-zinc-700 hover:text-white transition-colors shrink-0 cursor-pointer"
+            title="Pomoc i skróty klawiszowe (?)"
+            aria-label="Pomoc i skróty klawiszowe"
+          >
+            <HelpCircle className="h-4 w-4" />
           </button>
         </div>
       </header>
@@ -1646,20 +1675,50 @@ export default function App() {
         <button
           type="button"
           onClick={() => setLeftDrawerMode((m) => (m === 'projects' ? null : 'projects'))}
-          className="pointer-events-auto text-left text-xs font-semibold text-zinc-900 hover:text-amber-700 truncate max-w-[260px] sm:max-w-md cursor-pointer"
+          className="pointer-events-auto text-left text-xs font-semibold text-zinc-900 hover:text-amber-700 truncate max-w-[220px] sm:max-w-md cursor-pointer"
           title="Kliknij, aby zarządzać projektami lub zmienić nazwę"
         >
           {project.name}
         </button>
-        <div className="flex items-center gap-1.5 text-[11px] text-zinc-600 font-mono-num">
-          <span>
-            {overallDims.width} × {overallDims.height} × {overallDims.depth} mm
-          </span>
-          <span aria-hidden="true">·</span>
-          <span className="font-sans">{project.parts.length} elem.</span>
-          <span aria-hidden="true">·</span>
-          <span className="font-sans">{project.fasteners.length} wkręt.</span>
-        </div>
+        {project.parts.length === 0 ? (
+          <div className="flex items-center gap-1.5 text-[11px] text-zinc-600 font-mono-num">
+            {project.room?.enabled ? (
+              <>
+                <span>
+                  Pokój {project.room.widthMm} × {project.room.depthMm} × {project.room.heightMm} mm
+                </span>
+                <span aria-hidden="true">·</span>
+                <span className="font-sans">brak mebli</span>
+              </>
+            ) : (
+              <span className="font-sans">Pusta scena · dodaj pokój lub mebel</span>
+            )}
+          </div>
+        ) : (
+          <div className="flex items-center gap-1.5 text-[11px] text-zinc-600 font-mono-num">
+            <span>
+              {overallDims.width} × {overallDims.height} × {overallDims.depth} mm
+            </span>
+            <span aria-hidden="true">·</span>
+            <span className="font-sans">{project.parts.length} elem.</span>
+            <span aria-hidden="true">·</span>
+            <span className="font-sans">{project.fasteners.length} wkręt.</span>
+          </div>
+        )}
+
+        {project.room?.enabled && (
+          <div className="pointer-events-auto mt-1 flex items-center gap-1.5">
+            <button
+              type="button"
+              onClick={() => setRoomModalOpen(true)}
+              className="flex items-center gap-1.5 rounded-lg border border-sky-600/40 bg-[#141518]/90 px-2.5 py-1 text-[11px] font-semibold text-sky-300 shadow-sm hover:bg-[#141518] hover:text-sky-200 transition-colors cursor-pointer"
+              title="Wróć do edytora rzutu 2D pomieszczenia, ścian, drzwi i sanitariatów"
+            >
+              <Home className="h-3.5 w-3.5 text-sky-400 shrink-0" />
+              <span>Edytuj rzut 2D pomieszczenia</span>
+            </button>
+          </div>
+        )}
 
         {(collisionReport.pairs.length > 0 ||
           faultyFastenerCount > 0 ||
@@ -1880,8 +1939,97 @@ export default function App() {
         </div>
       )}
 
+      {/* Mobile Always-Accessible Floating Quick Pill: Undo, Focus Camera, Multi-Select Toggle */}
+      {!anyModalOpen && !startModalOpen && (
+        <div className="md:hidden fixed top-14 right-2.5 z-20 flex flex-col gap-1 rounded-xl border border-zinc-800/90 bg-[#141518]/90 p-1 shadow-lg">
+          <button
+            type="button"
+            onClick={handleUndo}
+            disabled={historyPast.length === 0}
+            aria-label="Cofnij ostatnią zmianę"
+            title="Cofnij"
+            className="flex h-9 w-9 items-center justify-center rounded-lg text-zinc-200 active:bg-zinc-800 disabled:opacity-30"
+          >
+            <Undo2 className="h-4 w-4" />
+          </button>
+          <button
+            type="button"
+            onClick={() => viewportRef.current?.focusAll()}
+            aria-label="Dopasuj widok kamery do projektu"
+            title="Dopasuj widok"
+            className="flex h-9 w-9 items-center justify-center rounded-lg text-zinc-200 active:bg-zinc-800"
+          >
+            <Focus className="h-4 w-4" />
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setMultiSelectMode((prev) => {
+                const next = !prev;
+                showToast(
+                  next
+                    ? 'Tryb zaznaczania wielu płyt włączony — tapnij kolejne elementy'
+                    : 'Wyłączono zaznaczanie wielu płyt'
+                );
+                return next;
+              });
+            }}
+            aria-label="Zaznacz wiele elementów"
+            title="Zaznacz wiele"
+            className={`relative flex h-9 w-9 items-center justify-center rounded-lg transition-colors ${
+              multiSelectMode
+                ? 'bg-amber-500 text-zinc-950'
+                : 'text-zinc-200 active:bg-zinc-800'
+            }`}
+          >
+            <CheckSquare className="h-4 w-4" />
+            {selectedPartIds.length > 1 && (
+              <span className="absolute -top-1 -right-1 flex h-4 min-w-[16px] items-center justify-center rounded-full bg-sky-500 px-1 text-[9px] font-bold text-white font-mono-num">
+                {selectedPartIds.length}
+              </span>
+            )}
+          </button>
+        </div>
+      )}
+
+      {/* Quiet Empty-Scene Action CTA (guides next step after creating a room or blank project) */}
+      {project.parts.length === 0 && !anyModalOpen && !startModalOpen && !leftDrawerMode && (
+        <div className="fixed bottom-[66px] md:bottom-[124px] left-1/2 z-20 -translate-x-1/2 flex flex-wrap items-center justify-center gap-1.5 rounded-2xl border border-zinc-800 bg-[#141518]/[0.94] px-2.5 py-2 shadow-xl max-w-[calc(100vw-20px)]">
+          <button
+            type="button"
+            onClick={() => {
+              setEditingCabinetGroupId(null);
+              setCabinetBuilderOpen(true);
+            }}
+            className="flex min-h-[34px] items-center gap-1.5 rounded-xl bg-emerald-500/20 border border-emerald-500/50 px-3 text-xs font-semibold text-emerald-200 hover:bg-emerald-500/30 transition-colors whitespace-nowrap cursor-pointer"
+          >
+            <LayoutPanelTop className="h-3.5 w-3.5" />
+            <span>+ Kreator szafki</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setAddPartOpen(true)}
+            className="flex min-h-[34px] items-center gap-1.5 rounded-xl bg-amber-500 px-3 text-xs font-semibold text-zinc-950 hover:bg-amber-400 transition-colors whitespace-nowrap cursor-pointer"
+          >
+            <Plus className="h-3.5 w-3.5" />
+            <span>Dodaj płytę / WC</span>
+          </button>
+          {!project.room?.enabled && (
+            <button
+              type="button"
+              onClick={() => setRoomModalOpen(true)}
+              className="flex min-h-[34px] items-center gap-1.5 rounded-xl bg-sky-500/15 border border-sky-500/45 px-3 text-xs font-semibold text-sky-200 hover:bg-sky-500/25 transition-colors whitespace-nowrap cursor-pointer"
+            >
+              <Home className="h-3.5 w-3.5" />
+              <span>Rysuj pokój 2D</span>
+            </button>
+          )}
+        </div>
+      )}
+
       {/* Compact CAD View Compass (Desktop/Tablet) */}
       <ViewCube
+        inspectorOpen={inspectorOpen && Boolean(selectedPart)}
         onSelectView={(preset) => viewportRef.current?.setCameraPreset(preset)}
         onFocusAll={() => viewportRef.current?.focusAll()}
       />
@@ -2036,13 +2184,32 @@ export default function App() {
         onUngroupSelected={handleUngroupSelected}
         onOpenInspector={() => setInspectorOpen(true)}
         onEditParametricCabinet={() => handleOpenParametricEditorForPart(selectedPartId)}
+        onRotateSelected90={() => {
+          if (selectedPartId) handleRotate90Y(selectedPartId);
+        }}
+        onDuplicateSelected={() => {
+          if (selectedPartId) handleDuplicatePart(selectedPartId);
+        }}
+        onDropSelectedToFloor={() => {
+          if (selectedPartId) handleDropToFloor(selectedPartId);
+        }}
+        onDeleteSelected={() => {
+          if (selectedPartId) handleDeletePart(selectedPartId);
+        }}
         onDeleteSelectedFastener={() => {
           if (selectedFastenerId) handleDeleteFastener(selectedFastenerId);
         }}
         onOpenTemplates={() => setLeftDrawerMode('templates')}
         onOpenPartsList={() => setLeftDrawerMode('parts')}
         onOpenCutList={() => setCutListOpen(true)}
+        onOpenSketch2D={() => {
+          setSketchEditingPart(null);
+          setSketchOpen(true);
+        }}
+        onOpenShortcuts={() => setShortcutsOpen(true)}
         onSnapshot={handleSnapshot}
+        roomEnabled={Boolean(project.room?.enabled)}
+        onOpenRoom={() => setRoomModalOpen(true)}
       />
 
       {/* Contextual On-Demand Drawers & Modals */}
@@ -2302,6 +2469,11 @@ export default function App() {
           setStartModalOpen(false);
           handleSwitchProject(id);
         }}
+      />
+
+      <ShortcutsHelpModal
+        open={shortcutsOpen}
+        onClose={() => setShortcutsOpen(false)}
       />
 
       <PWAStatusOverlays

@@ -78,7 +78,7 @@ export const PartsTemplatesDrawer: React.FC<PartsTemplatesDrawerProps> = ({
         onClick={onClose}
         aria-hidden="true"
       />
-      <aside className="fixed inset-x-0 bottom-0 sm:inset-x-auto sm:top-14 sm:left-3 sm:bottom-24 z-40 flex max-h-[78dvh] sm:max-h-none sm:w-[356px] flex-col rounded-t-2xl sm:rounded-2xl border border-zinc-800 bg-[#141518] text-zinc-100 shadow-2xl">
+      <aside className="fixed inset-x-0 bottom-0 sm:inset-x-auto sm:top-14 sm:left-3 sm:bottom-36 lg:bottom-32 z-40 flex max-h-[78dvh] sm:max-h-[calc(100dvh-160px)] sm:w-[min(356px,calc(100vw-24px))] flex-col overflow-hidden rounded-t-2xl sm:rounded-2xl border border-zinc-800 bg-[#141518] text-zinc-100 shadow-2xl">
         <div className="sm:hidden flex justify-center pt-2.5 pb-1">
           <div className="h-1 w-10 rounded-full bg-zinc-700" />
         </div>

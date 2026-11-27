@@ -3,13 +3,17 @@ import {
   AlertTriangle,
   AppWindow,
   Check,
+  ChevronDown,
+  ChevronUp,
   Columns2,
   Compass,
   Crosshair,
   DoorOpen,
+  Droplets,
   Eye,
   EyeOff,
   Flame,
+  Layers,
   Maximize2,
   MousePointer2,
   Pencil,
@@ -24,6 +28,7 @@ import {
   ZoomIn,
   ZoomOut,
 } from 'lucide-react';
+import { NumericInput } from './NumericInput';
 import {
   DEFAULT_ROOM_CONFIG,
   DEFAULT_ROOM_STYLE,
@@ -85,7 +90,10 @@ type CanvasTool =
   | 'place_arch'
   | 'place_radiator'
   | 'place_socket'
-  | 'place_pipe';
+  | 'place_pipe'
+  | 'place_wc_geberit'
+  | 'place_wc_low_cistern'
+  | 'place_wc_high_cistern';
 
 type InspectorTab = 'shape' | 'elements' | 'style' | 'audit';
 
@@ -171,6 +179,8 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
   const [tool, setTool] = useState<CanvasTool>('select');
   const [tab, setTab] = useState<InspectorTab>('shape');
   const [selection, setSelection] = useState<SelectionTarget>({ kind: 'none' });
+  const [mobileInspectorOpen, setMobileInspectorOpen] = useState<boolean>(false);
+  const [pendingPreset, setPendingPreset] = useState<RoomShapePresetId | null>(null);
 
   // Blueprint viewport state (world mm centered at viewCenter, pxPerMm scale)
   const [viewCenter, setViewCenter] = useState<{ x: number; z: number }>({ x: 0, z: 900 });
@@ -187,6 +197,16 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
   const [svgSize, setSvgSize] = useState<{ w: number; h: number }>({ w: 800, h: 560 });
   const dragRef = useRef<DragMode | null>(null);
   const dragSnapshotRef = useRef<RoomConfig | null>(null);
+  // Two-finger pinch-to-zoom & pan state for mobile/tablet touchscreens
+  const activePointersRef = useRef<Map<number, { x: number; y: number }>>(new Map());
+  const pinchStartRef = useRef<{
+    dist: number;
+    midX: number;
+    midY: number;
+    startPxPerMm: number;
+    startCenterX: number;
+    startCenterZ: number;
+  } | null>(null);
 
   const fitViewToRoom = useCallback(
     (targetRoom: RoomConfig, containerW: number, containerH: number) => {
@@ -219,6 +239,8 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
     setSelection({ kind: 'none' });
     setDrawPoints([]);
     setSnapGuides({});
+    setPendingPreset(null);
+    setMobileInspectorOpen(false);
   } else if (!open && lastOpen) {
     setLastOpen(false);
   }
@@ -385,62 +407,73 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
     [drawPoints, pxPerMm, snapCoord, orthoSnap]
   );
 
-  // Find closest wall segment to cursor for placing doors/windows/obstacles
+  // Compute wall placement target for any world coordinate (used for BOTH desktop hover & mobile direct tap!)
+  const computeWallPlacementAt = useCallback(
+    (worldPt: { x: number; z: number }, maxDistPx = 36) => {
+      if (tool === 'select' || tool === 'draw') return null;
+      let bestSeg: WallSegment | null = null;
+      let bestDist = Infinity;
+      let bestOffset = 0;
+
+      for (const seg of segments) {
+        const proj = projectPointOntoWall(worldPt.x, worldPt.z, seg);
+        if (proj.clampedDistMm < bestDist) {
+          bestDist = proj.clampedDistMm;
+          bestSeg = seg;
+          bestOffset = proj.offsetMm;
+        }
+      }
+
+      if (!bestSeg || bestDist * pxPerMm > maxDistPx) return null;
+
+      const isOpening =
+        tool === 'place_door' ||
+        tool === 'place_window' ||
+        tool === 'place_balcony' ||
+        tool === 'place_arch';
+
+      const openingTypeMap: Record<string, RoomOpeningType> = {
+        place_door: 'door_single',
+        place_window: 'window',
+        place_balcony: 'window_balcony',
+        place_arch: 'arch',
+      };
+      const obsTypeMap: Record<string, RoomWallObstacleType> = {
+        place_radiator: 'radiator',
+        place_socket: 'socket',
+        place_pipe: 'pipe',
+        place_wc_geberit: 'wc_geberit',
+        place_wc_low_cistern: 'wc_low_cistern',
+        place_wc_high_cistern: 'wc_high_cistern',
+      };
+
+      const itemWidth = isOpening
+        ? Math.min(OPENING_PRESETS[openingTypeMap[tool]].widthMm, Math.max(300, bestSeg.lengthMm - 80))
+        : Math.min(WALL_OBSTACLE_PRESETS[obsTypeMap[tool]].widthMm, Math.max(40, bestSeg.lengthMm - 40));
+
+      const rawStart = bestOffset - itemWidth / 2;
+      const clampedStart = Math.max(
+        0,
+        Math.min(bestSeg.lengthMm - itemWidth, snapCoord(rawStart))
+      );
+
+      return {
+        seg: bestSeg,
+        isOpening,
+        openingType: isOpening ? openingTypeMap[tool] : undefined,
+        obsType: !isOpening ? obsTypeMap[tool] : undefined,
+        offsetMm: clampedStart,
+        widthMm: itemWidth,
+        remainingRightMm: Math.max(0, Math.round(bestSeg.lengthMm - clampedStart - itemWidth)),
+      };
+    },
+    [tool, segments, pxPerMm, snapCoord]
+  );
+
   const hoverWallPlacement = useMemo(() => {
     if (!cursorWorld || tool === 'select' || tool === 'draw') return null;
-    let bestSeg: WallSegment | null = null;
-    let bestDist = Infinity;
-    let bestOffset = 0;
-
-    for (const seg of segments) {
-      const proj = projectPointOntoWall(cursorWorld.x, cursorWorld.z, seg);
-      if (proj.clampedDistMm < bestDist) {
-        bestDist = proj.clampedDistMm;
-        bestSeg = seg;
-        bestOffset = proj.offsetMm;
-      }
-    }
-
-    if (!bestSeg || bestDist * pxPerMm > 34) return null;
-
-    const isOpening =
-      tool === 'place_door' ||
-      tool === 'place_window' ||
-      tool === 'place_balcony' ||
-      tool === 'place_arch';
-
-    const openingTypeMap: Record<string, RoomOpeningType> = {
-      place_door: 'door_single',
-      place_window: 'window',
-      place_balcony: 'window_balcony',
-      place_arch: 'arch',
-    };
-    const obsTypeMap: Record<string, RoomWallObstacleType> = {
-      place_radiator: 'radiator',
-      place_socket: 'socket',
-      place_pipe: 'pipe',
-    };
-
-    const itemWidth = isOpening
-      ? Math.min(OPENING_PRESETS[openingTypeMap[tool]].widthMm, Math.max(300, bestSeg.lengthMm - 80))
-      : Math.min(WALL_OBSTACLE_PRESETS[obsTypeMap[tool]].widthMm, Math.max(40, bestSeg.lengthMm - 40));
-
-    const rawStart = bestOffset - itemWidth / 2;
-    const clampedStart = Math.max(
-      0,
-      Math.min(bestSeg.lengthMm - itemWidth, snapCoord(rawStart))
-    );
-
-    return {
-      seg: bestSeg,
-      isOpening,
-      openingType: isOpening ? openingTypeMap[tool] : undefined,
-      obsType: !isOpening ? obsTypeMap[tool] : undefined,
-      offsetMm: clampedStart,
-      widthMm: itemWidth,
-      remainingRightMm: Math.max(0, Math.round(bestSeg.lengthMm - clampedStart - itemWidth)),
-    };
-  }, [cursorWorld, tool, segments, pxPerMm, snapCoord]);
+    return computeWallPlacementAt(cursorWorld, 36);
+  }, [cursorWorld, tool, computeWallPlacementAt]);
 
   const finishDrawingPolygon = useCallback(() => {
     if (drawPoints.length < 3) return;
@@ -504,7 +537,7 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [open, tool, drawPoints.length, selection, points.length, handleUndo, finishDrawingPolygon, commitDraft]);
 
-  const handleApplyPreset = (presetId: RoomShapePresetId) => {
+  const applyPresetImmediately = (presetId: RoomShapePresetId) => {
     const preset = buildRoomPreset(presetId, parts, draft.heightMm);
     const nextRoom = syncRoomWithPolygon({
       ...draft,
@@ -518,7 +551,17 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
     setTool('select');
     setDrawPoints([]);
     setSelection({ kind: 'none' });
+    setPendingPreset(null);
     fitViewToRoom(nextRoom, svgSize.w, svgSize.h);
+  };
+
+  const handleApplyPreset = (presetId: RoomShapePresetId) => {
+    const existingCount = (draft.openings?.length ?? 0) + (draft.wallObstacles?.length ?? 0);
+    if (existingCount > 0) {
+      setPendingPreset(presetId);
+      return;
+    }
+    applyPresetImmediately(presetId);
   };
 
   const handleFitRoomToFurniture = () => {
@@ -602,9 +645,27 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
     setTab('elements');
   };
 
-  // Pointer handlers on 2D CAD Blueprint Canvas
+  // Pointer handlers on 2D CAD Blueprint Canvas (supports mouse, touch tap-to-place & 2-finger pinch zoom)
   const handleCanvasPointerDown = (e: React.PointerEvent<SVGSVGElement>) => {
     if (e.button === 2) return;
+    activePointersRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+
+    // Start 2-finger pinch-to-zoom & pan on touchscreens
+    if (activePointersRef.current.size === 2) {
+      const pts = Array.from(activePointersRef.current.values());
+      const dist = Math.max(10, Math.hypot(pts[1].x - pts[0].x, pts[1].y - pts[0].y));
+      pinchStartRef.current = {
+        dist,
+        midX: (pts[0].x + pts[1].x) / 2,
+        midY: (pts[0].y + pts[1].y) / 2,
+        startPxPerMm: pxPerMm,
+        startCenterX: viewCenter.x,
+        startCenterZ: viewCenter.z,
+      };
+      dragRef.current = null;
+      return;
+    }
+
     const world = screenToWorld(e.clientX, e.clientY);
 
     if (tool === 'draw') {
@@ -626,19 +687,14 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
     }
 
     if (tool !== 'select') {
-      if (hoverWallPlacement) {
-        if (hoverWallPlacement.isOpening && hoverWallPlacement.openingType) {
-          addOpeningOnWall(
-            hoverWallPlacement.seg.index,
-            hoverWallPlacement.openingType,
-            hoverWallPlacement.offsetMm
-          );
-        } else if (hoverWallPlacement.obsType) {
-          addWallObstacleOnWall(
-            hoverWallPlacement.seg.index,
-            hoverWallPlacement.obsType,
-            hoverWallPlacement.offsetMm
-          );
+      // Compute directly from tap/click coordinates with generous touch tolerance (works on 1st tap on mobile!)
+      const touchTolerancePx = e.pointerType === 'touch' ? 54 : 38;
+      const target = computeWallPlacementAt(world, touchTolerancePx) ?? hoverWallPlacement;
+      if (target) {
+        if (target.isOpening && target.openingType) {
+          addOpeningOnWall(target.seg.index, target.openingType, target.offsetMm);
+        } else if (target.obsType) {
+          addWallObstacleOnWall(target.seg.index, target.obsType, target.offsetMm);
         }
         setTool('select');
       }
@@ -658,6 +714,28 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
   };
 
   const handleCanvasPointerMove = (e: React.PointerEvent<SVGSVGElement>) => {
+    if (activePointersRef.current.has(e.pointerId)) {
+      activePointersRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    }
+
+    // Handle active 2-finger pinch-to-zoom & pan
+    if (activePointersRef.current.size === 2 && pinchStartRef.current) {
+      const pts = Array.from(activePointersRef.current.values());
+      const dist = Math.max(10, Math.hypot(pts[1].x - pts[0].x, pts[1].y - pts[0].y));
+      const midX = (pts[0].x + pts[1].x) / 2;
+      const midY = (pts[0].y + pts[1].y) / 2;
+      const p0 = pinchStartRef.current;
+      const nextScale = Math.max(0.035, Math.min(0.6, p0.startPxPerMm * (dist / p0.dist)));
+      const dxPx = midX - p0.midX;
+      const dyPx = midY - p0.midY;
+      setPxPerMm(nextScale);
+      setViewCenter({
+        x: p0.startCenterX - dxPx / nextScale,
+        z: p0.startCenterZ - dyPx / nextScale,
+      });
+      return;
+    }
+
     const world = screenToWorld(e.clientX, e.clientY);
     setCursorWorld(world);
 
@@ -769,6 +847,10 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
   };
 
   const handleCanvasPointerUp = (e: React.PointerEvent<SVGSVGElement>) => {
+    activePointersRef.current.delete(e.pointerId);
+    if (activePointersRef.current.size < 2) {
+      pinchStartRef.current = null;
+    }
     if (dragRef.current && dragRef.current.kind !== 'pan' && dragSnapshotRef.current) {
       const snapBefore = dragSnapshotRef.current;
       setHistory((h) => [...h.slice(-24), snapBefore]);
@@ -932,8 +1014,13 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-0 sm:p-3 lg:p-5">
-      <div className="w-full h-[100dvh] sm:h-[94dvh] sm:max-w-[1380px] sm:rounded-2xl border border-zinc-800 bg-[#141518] text-zinc-100 shadow-2xl flex flex-col overflow-hidden">
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-0 sm:p-2 lg:p-4 overflow-hidden"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+    >
+      <div className="w-full h-[100dvh] sm:h-[94dvh] sm:max-w-[min(1380px,calc(100vw-16px))] sm:rounded-2xl border border-zinc-800 bg-[#141518] text-zinc-100 shadow-2xl flex flex-col overflow-hidden">
         {/* Top Header */}
         <div className="flex items-center justify-between gap-3 border-b border-zinc-800 px-4 sm:px-5 py-3 shrink-0 bg-[#141518]">
           <div className="min-w-0">
@@ -996,15 +1083,114 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
         {/* Main Workspace Split: Left 2D Architectural Blueprint + Right Inspector */}
         <div className="flex-1 min-h-0 flex flex-col lg:flex-row overflow-hidden">
           {/* Left: 2D CAD Blueprint Workspace */}
-          <div className="flex-1 min-w-0 min-h-[300px] lg:min-h-0 flex flex-col bg-[#0D0F13] border-b lg:border-b-0 lg:border-r border-zinc-800">
-            {/* CAD Tool Ribbon */}
-            <div className="flex items-center justify-between gap-2 border-b border-zinc-800/90 bg-[#121419] px-3 py-2 overflow-x-auto cad-scroll shrink-0">
-              {/* Primary Tools */}
-              <div className="flex items-center gap-1 shrink-0">
+          <div className="flex-1 min-w-0 min-h-0 flex flex-col bg-[#0D0F13] border-b lg:border-b-0 lg:border-r border-zinc-800">
+            {/* Organized 2-Row CAD Tool Ribbon (zero hidden controls on PC, compact & swipeable on mobile) */}
+            <div className="border-b border-zinc-800/90 bg-[#121419] px-2.5 sm:px-3 py-1.5 space-y-1.5 shrink-0">
+              {/* Strip 1: Primary Mode + Always-Visible Undo / Grid / Zoom */}
+              <div className="flex flex-wrap items-center justify-between gap-1.5">
+                <div className="flex items-center gap-1">
+                  {(
+                    [
+                      { id: 'select', label: 'Edytuj', icon: MousePointer2 },
+                      { id: 'draw', label: 'Rysuj ściany', icon: Pencil },
+                    ] as const
+                  ).map((item) => {
+                    const Icon = item.icon;
+                    const active = tool === item.id;
+                    return (
+                      <button
+                        key={item.id}
+                        type="button"
+                        onClick={() => {
+                          setTool(item.id);
+                          if (item.id === 'draw') {
+                            setDrawPoints([]);
+                            setSelection({ kind: 'none' });
+                          }
+                        }}
+                        className={`flex min-h-[32px] items-center gap-1.5 rounded-lg px-2.5 text-xs font-medium transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                          active
+                            ? 'bg-amber-500 text-zinc-950 font-semibold'
+                            : 'bg-zinc-900 text-zinc-300 border border-zinc-800 hover:border-zinc-700 hover:text-white'
+                        }`}
+                      >
+                        <Icon className="h-3.5 w-3.5 shrink-0" />
+                        <span>{item.label}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+
+                {/* Snap & Zoom Utilities (always visible!) */}
+                <div className="flex items-center gap-1 shrink-0">
+                  <button
+                    type="button"
+                    onClick={handleUndo}
+                    disabled={history.length === 0 && drawPoints.length === 0}
+                    className="flex h-8 w-8 items-center justify-center rounded-lg border border-zinc-800 bg-zinc-900 text-zinc-300 hover:text-white disabled:opacity-35 cursor-pointer"
+                    title="Cofnij (Ctrl+Z)"
+                  >
+                    <Undo2 className="h-3.5 w-3.5" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setSnapMm((s) => (s === 50 ? 10 : s === 10 ? 0 : 50))}
+                    className="min-h-[32px] rounded-lg border border-zinc-800 bg-zinc-900 px-2 text-[11px] font-mono tabular-nums text-zinc-300 hover:text-white whitespace-nowrap shrink-0 cursor-pointer"
+                    title="Skok siatki przyciągania"
+                  >
+                    {snapMm > 0 ? `${snapMm}mm` : 'Swob.'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setOrthoSnap((o) => !o)}
+                    className={`flex min-h-[32px] items-center gap-1 rounded-lg border px-2 text-[11px] font-medium whitespace-nowrap shrink-0 cursor-pointer ${
+                      orthoSnap
+                        ? 'border-sky-500/50 bg-sky-500/15 text-sky-300'
+                        : 'border-zinc-800 bg-zinc-900 text-zinc-400'
+                    }`}
+                    title="Przyciąganie do kątów 90° / 45°"
+                  >
+                    <Compass className="h-3.5 w-3.5" />
+                    <span>90°</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setPxPerMm((z) => Math.max(0.035, z / 1.2))}
+                    className="hidden sm:flex h-8 w-8 items-center justify-center rounded-lg border border-zinc-800 bg-zinc-900 text-zinc-300 hover:text-white cursor-pointer"
+                    title="Oddal"
+                  >
+                    <ZoomOut className="h-3.5 w-3.5" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setPxPerMm((z) => Math.min(0.6, z * 1.2))}
+                    className="hidden sm:flex h-8 w-8 items-center justify-center rounded-lg border border-zinc-800 bg-zinc-900 text-zinc-300 hover:text-white cursor-pointer"
+                    title="Przybliż"
+                  >
+                    <ZoomIn className="h-3.5 w-3.5" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => fitViewToRoom(draft, svgSize.w, svgSize.h)}
+                    className="flex h-8 w-8 items-center justify-center rounded-lg border border-zinc-800 bg-zinc-900 text-zinc-300 hover:text-white cursor-pointer"
+                    title="Dopasuj widok rzutu"
+                  >
+                    <RotateCcw className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+              </div>
+
+              {/* Strip 2: Grouped Architectural & Sanitary Placement Tools (wraps cleanly on desktop, scrollable on mobile) */}
+              <div className="flex lg:flex-wrap items-center gap-1 overflow-x-auto lg:overflow-visible cad-scroll pb-0.5 lg:pb-0">
+                <span className="text-[10px] font-semibold uppercase tracking-wide text-zinc-500 pr-0.5 shrink-0">
+                  Otwory:
+                </span>
                 {(
                   [
-                    { id: 'select', label: 'Edytuj', icon: MousePointer2 },
-                    { id: 'draw', label: 'Rysuj ściany', icon: Pencil },
+                    { id: 'place_door', label: 'Drzwi', icon: DoorOpen },
+                    { id: 'place_window', label: 'Okno', icon: AppWindow },
+                    { id: 'place_balcony', label: 'Balkon', icon: Columns2 },
+                    { id: 'place_arch', label: 'Przejście', icon: Maximize2 },
                   ] as const
                 ).map((item) => {
                   const Icon = item.icon;
@@ -1014,16 +1200,13 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
                       key={item.id}
                       type="button"
                       onClick={() => {
-                        setTool(item.id);
-                        if (item.id === 'draw') {
-                          setDrawPoints([]);
-                          setSelection({ kind: 'none' });
-                        }
+                        setTool(active ? 'select' : item.id);
+                        setDrawPoints([]);
                       }}
-                      className={`flex min-h-[34px] items-center gap-1.5 rounded-lg px-2.5 text-xs font-medium transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                      className={`flex min-h-[30px] items-center gap-1 rounded-md px-2 text-[11px] font-medium transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
                         active
-                          ? 'bg-amber-500 text-zinc-950 font-semibold'
-                          : 'bg-zinc-900 text-zinc-300 border border-zinc-800 hover:border-zinc-700 hover:text-white'
+                          ? 'bg-sky-500 text-zinc-950 font-semibold'
+                          : 'bg-zinc-900/90 text-zinc-300 border border-zinc-800 hover:border-sky-500/50 hover:text-sky-300'
                       }`}
                     >
                       <Icon className="h-3.5 w-3.5 shrink-0" />
@@ -1032,15 +1215,12 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
                   );
                 })}
 
-                <div className="h-5 w-px bg-zinc-800 mx-1 shrink-0" />
-
-                {/* Architectural Placement Tools */}
+                <span className="mx-1 h-4 w-px bg-zinc-800 shrink-0" aria-hidden="true" />
+                <span className="text-[10px] font-semibold uppercase tracking-wide text-zinc-500 pr-0.5 shrink-0">
+                  Inst.:
+                </span>
                 {(
                   [
-                    { id: 'place_door', label: 'Drzwi', icon: DoorOpen },
-                    { id: 'place_window', label: 'Okno', icon: AppWindow },
-                    { id: 'place_balcony', label: 'Balkon', icon: Columns2 },
-                    { id: 'place_arch', label: 'Przejście', icon: Maximize2 },
                     { id: 'place_radiator', label: 'Grzejnik', icon: Flame },
                     { id: 'place_socket', label: 'Gniazdko', icon: PlugZap },
                     { id: 'place_pipe', label: 'Pion', icon: Wrench },
@@ -1056,12 +1236,44 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
                         setTool(active ? 'select' : item.id);
                         setDrawPoints([]);
                       }}
-                      className={`flex min-h-[34px] items-center gap-1.5 rounded-lg px-2.5 text-xs font-medium transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                      className={`flex min-h-[30px] items-center gap-1 rounded-md px-2 text-[11px] font-medium transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
                         active
                           ? 'bg-sky-500 text-zinc-950 font-semibold'
-                          : 'bg-zinc-900/80 text-zinc-300 border border-zinc-800 hover:border-sky-500/50 hover:text-sky-300'
+                          : 'bg-zinc-900/90 text-zinc-300 border border-zinc-800 hover:border-sky-500/50 hover:text-sky-300'
                       }`}
-                      title={`Kliknij wybraną ścianę, aby wstawić: ${item.label}`}
+                    >
+                      <Icon className="h-3.5 w-3.5 shrink-0" />
+                      <span>{item.label}</span>
+                    </button>
+                  );
+                })}
+
+                <span className="mx-1 h-4 w-px bg-zinc-800 shrink-0" aria-hidden="true" />
+                <span className="text-[10px] font-semibold uppercase tracking-wide text-zinc-500 pr-0.5 shrink-0">
+                  WC:
+                </span>
+                {(
+                  [
+                    { id: 'place_wc_geberit', label: 'Geberit', icon: Layers },
+                    { id: 'place_wc_low_cistern', label: 'Dolnopłuk', icon: Droplets },
+                    { id: 'place_wc_high_cistern', label: 'Górnopłuk', icon: Droplets },
+                  ] as const
+                ).map((item) => {
+                  const Icon = item.icon;
+                  const active = tool === item.id;
+                  return (
+                    <button
+                      key={item.id}
+                      type="button"
+                      onClick={() => {
+                        setTool(active ? 'select' : item.id);
+                        setDrawPoints([]);
+                      }}
+                      className={`flex min-h-[30px] items-center gap-1 rounded-md px-2 text-[11px] font-medium transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                        active
+                          ? 'bg-sky-500 text-zinc-950 font-semibold'
+                          : 'bg-zinc-900/90 text-zinc-300 border border-zinc-800 hover:border-sky-500/50 hover:text-sky-300'
+                      }`}
                     >
                       <Icon className="h-3.5 w-3.5 shrink-0" />
                       <span>{item.label}</span>
@@ -1069,68 +1281,10 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
                   );
                 })}
               </div>
-
-              {/* Snap & Zoom Utilities */}
-              <div className="flex items-center gap-1 shrink-0 pl-2">
-                <button
-                  type="button"
-                  onClick={handleUndo}
-                  disabled={history.length === 0 && drawPoints.length === 0}
-                  className="flex h-8 w-8 items-center justify-center rounded-lg border border-zinc-800 bg-zinc-900 text-zinc-300 hover:text-white disabled:opacity-35 cursor-pointer"
-                  title="Cofnij (Ctrl+Z)"
-                >
-                  <Undo2 className="h-3.5 w-3.5" />
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setSnapMm((s) => (s === 50 ? 10 : s === 10 ? 0 : 50))}
-                  className="min-h-[32px] rounded-lg border border-zinc-800 bg-zinc-900 px-2 text-[11px] font-mono tabular-nums text-zinc-300 hover:text-white whitespace-nowrap shrink-0 cursor-pointer"
-                  title="Skok siatki przyciągania"
-                >
-                  {snapMm > 0 ? `Siatka ${snapMm}` : 'Swobodnie'}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setOrthoSnap((o) => !o)}
-                  className={`flex min-h-[32px] items-center gap-1 rounded-lg border px-2 text-[11px] font-medium whitespace-nowrap shrink-0 cursor-pointer ${
-                    orthoSnap
-                      ? 'border-sky-500/50 bg-sky-500/15 text-sky-300'
-                      : 'border-zinc-800 bg-zinc-900 text-zinc-400'
-                  }`}
-                  title="Przyciąganie do kątów 90° / 45°"
-                >
-                  <Compass className="h-3.5 w-3.5" />
-                  <span>90°</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setPxPerMm((z) => Math.max(0.035, z / 1.2))}
-                  className="flex h-8 w-8 items-center justify-center rounded-lg border border-zinc-800 bg-zinc-900 text-zinc-300 hover:text-white cursor-pointer"
-                  title="Oddal"
-                >
-                  <ZoomOut className="h-3.5 w-3.5" />
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setPxPerMm((z) => Math.min(0.6, z * 1.2))}
-                  className="flex h-8 w-8 items-center justify-center rounded-lg border border-zinc-800 bg-zinc-900 text-zinc-300 hover:text-white cursor-pointer"
-                  title="Przybliż"
-                >
-                  <ZoomIn className="h-3.5 w-3.5" />
-                </button>
-                <button
-                  type="button"
-                  onClick={() => fitViewToRoom(draft, svgSize.w, svgSize.h)}
-                  className="flex h-8 w-8 items-center justify-center rounded-lg border border-zinc-800 bg-zinc-900 text-zinc-300 hover:text-white cursor-pointer"
-                  title="Dopasuj widok rzutu"
-                >
-                  <RotateCcw className="h-3.5 w-3.5" />
-                </button>
-              </div>
             </div>
 
             {/* Interactive SVG 2D Floorplan Stage */}
-            <div className="relative flex-1 min-h-0 overflow-hidden select-none">
+            <div className="relative flex-1 min-h-[240px] lg:min-h-0 overflow-hidden select-none">
               <svg
                 ref={svgRef}
                 className={`w-full h-full touch-none ${
@@ -1143,6 +1297,7 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
                 onPointerDown={handleCanvasPointerDown}
                 onPointerMove={handleCanvasPointerMove}
                 onPointerUp={handleCanvasPointerUp}
+                onPointerCancel={handleCanvasPointerUp}
                 onWheel={handleCanvasWheel}
               >
                 {/* Blueprint Grid */}
@@ -1577,6 +1732,11 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
                       seg.start.zMm + seg.tz * u0 + seg.inNz * d
                     );
 
+                    const isWc =
+                      obs.type === 'wc_geberit' ||
+                      obs.type === 'wc_low_cistern' ||
+                      obs.type === 'wc_high_cistern';
+
                     const color =
                       obs.type === 'radiator'
                         ? '#EF4444'
@@ -1584,7 +1744,76 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
                           ? '#FACC15'
                           : obs.type === 'pipe'
                             ? '#94A3B8'
-                            : '#38BDF8';
+                            : isWc
+                              ? '#E2E8F0'
+                              : '#38BDF8';
+
+                    // Architectural 2D CAD WC symbol helper (frame/tank + oval ceramic bowl)
+                    const renderWc2D = () => {
+                      const tankD =
+                        obs.type === 'wc_geberit'
+                          ? Math.min(220, d * 0.3)
+                          : obs.type === 'wc_low_cistern'
+                            ? Math.min(180, d * 0.28)
+                            : Math.min(170, d * 0.3);
+                      const tankP2 = worldToScreen(
+                        seg.start.xMm + seg.tx * u1 + seg.inNx * tankD,
+                        seg.start.zMm + seg.tz * u1 + seg.inNz * tankD
+                      );
+                      const tankP3 = worldToScreen(
+                        seg.start.xMm + seg.tx * u0 + seg.inNx * tankD,
+                        seg.start.zMm + seg.tz * u0 + seg.inNz * tankD
+                      );
+
+                      const midU = (u0 + u1) / 2;
+                      const bowlRearD =
+                        obs.type === 'wc_high_cistern' ? Math.min(80, d * 0.14) : tankD;
+                      const bowlLen = Math.max(260, d - bowlRearD);
+                      const bowlCenterD = bowlRearD + bowlLen * 0.52;
+                      const bc = worldToScreen(
+                        seg.start.xMm + seg.tx * midU + seg.inNx * bowlCenterD,
+                        seg.start.zMm + seg.tz * midU + seg.inNz * bowlCenterD
+                      );
+                      const rxPx = Math.max(6, (Math.min(obs.widthMm * 0.44, 185)) * pxPerMm);
+                      const ryPx = Math.max(8, (bowlLen * 0.48) * pxPerMm);
+                      const wallDeg = (Math.atan2(seg.inNz, seg.inNx) * 180) / Math.PI - 90;
+
+                      return (
+                        <g>
+                          {/* Concealed Geberit box or ceramic cistern */}
+                          <polygon
+                            points={`${p0.sx},${p0.sy} ${p1.sx},${p1.sy} ${tankP2.sx},${tankP2.sy} ${tankP3.sx},${tankP3.sy}`}
+                            fill={obs.type === 'wc_geberit' ? '#64748B' : '#CBD5E1'}
+                            fillOpacity={obs.type === 'wc_high_cistern' ? 0.35 : 0.85}
+                            stroke={isSelected ? '#F59E0B' : '#F8FAFC'}
+                            strokeWidth={isSelected ? 2 : 1.1}
+                            strokeDasharray={obs.type === 'wc_high_cistern' ? '3 2' : undefined}
+                          />
+                          {/* Oval porcelain WC bowl */}
+                          <ellipse
+                            cx={bc.sx}
+                            cy={bc.sy}
+                            rx={rxPx}
+                            ry={ryPx}
+                            transform={`rotate(${wallDeg}, ${bc.sx}, ${bc.sy})`}
+                            fill="#F8FAFC"
+                            fillOpacity={0.9}
+                            stroke={isSelected ? '#F59E0B' : '#475569'}
+                            strokeWidth={isSelected ? 2 : 1.2}
+                          />
+                          <ellipse
+                            cx={bc.sx}
+                            cy={bc.sy}
+                            rx={rxPx * 0.62}
+                            ry={ryPx * 0.62}
+                            transform={`rotate(${wallDeg}, ${bc.sx}, ${bc.sy})`}
+                            fill="none"
+                            stroke="#94A3B8"
+                            strokeWidth={0.9}
+                          />
+                        </g>
+                      );
+                    };
 
                     return (
                       <g
@@ -1594,7 +1823,9 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
                           startElementDrag(e, { kind: 'obstacle', id: obs.id }, { kind: 'obstacle', id: obs.id })
                         }
                       >
-                        {obs.type === 'pipe' ? (
+                        {isWc ? (
+                          renderWc2D()
+                        ) : obs.type === 'pipe' ? (
                           <circle
                             cx={(p0.sx + p2.sx) / 2}
                             cy={(p0.sy + p2.sy) / 2}
@@ -1845,45 +2076,75 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
                     />
                     <span>1,0 m</span>
                   </span>
-                  <span className="hidden sm:inline text-zinc-500">
+                  <span className="text-zinc-400">
                     {tool === 'select'
-                      ? 'Przeciągaj narożniki, ściany, drzwi i okna · Kółko = zoom'
-                      : 'Kliknij dowolną ścianę, aby wstawić wybrany element'}
+                      ? 'Przeciągaj ściany i narożniki · 2 palce / kółko = zoom'
+                      : 'Kliknij lub tapnij wybraną ścianę, aby wstawić element'}
                   </span>
                 </div>
               )}
             </div>
           </div>
 
-          {/* Right: Tabbed Architectural Inspector */}
-          <div className="w-full lg:w-[356px] shrink-0 flex flex-col bg-[#141518] max-h-[42dvh] lg:max-h-none">
-            {/* Inspector Tabs */}
-            <div className="grid grid-cols-4 border-b border-zinc-800 px-2 pt-2 gap-1 shrink-0 bg-[#121317]">
-              {(
-                [
-                  { id: 'shape', label: 'Kształt' },
-                  { id: 'elements', label: 'Elementy' },
-                  { id: 'style', label: 'Styl 3D' },
-                  { id: 'audit', label: totalIssues > 0 ? `Kolizje (${totalIssues})` : 'Kolizje' },
-                ] as const
-              ).map((t) => (
-                <button
-                  key={t.id}
-                  type="button"
-                  onClick={() => setTab(t.id)}
-                  className={`min-h-[36px] rounded-t-lg px-2 text-xs font-medium transition-colors whitespace-nowrap truncate cursor-pointer border-b-2 ${
-                    tab === t.id
-                      ? 'border-amber-500 bg-[#141518] text-white'
-                      : 'border-transparent text-zinc-400 hover:text-zinc-200'
-                  }`}
-                >
-                  {t.label}
-                </button>
-              ))}
+          {/* Right: Tabbed Architectural Inspector (collapsible bottom sheet on mobile so 2D canvas gets ~80% height!) */}
+          <div
+            className={`w-full lg:w-[348px] xl:w-[364px] shrink-0 flex flex-col min-h-0 overflow-hidden bg-[#141518] ${
+              mobileInspectorOpen ? 'max-h-[46dvh] lg:max-h-none' : 'lg:max-h-none'
+            }`}
+          >
+            {/* Inspector Tabs + Mobile Expand/Collapse Toggle */}
+            <div className="flex items-center border-b border-zinc-800 px-2 pt-1.5 gap-1 shrink-0 bg-[#121317]">
+              <div className="grid grid-cols-4 flex-1 gap-1">
+                {(
+                  [
+                    { id: 'shape', label: 'Kształt' },
+                    { id: 'elements', label: 'Elementy' },
+                    { id: 'style', label: 'Styl 3D' },
+                    { id: 'audit', label: totalIssues > 0 ? `Kolizje (${totalIssues})` : 'Kolizje' },
+                  ] as const
+                ).map((t) => (
+                  <button
+                    key={t.id}
+                    type="button"
+                    onClick={() => {
+                      if (tab === t.id && mobileInspectorOpen) {
+                        setMobileInspectorOpen(false);
+                      } else {
+                        setTab(t.id);
+                        setMobileInspectorOpen(true);
+                      }
+                    }}
+                    className={`min-h-[36px] rounded-t-lg px-1.5 text-xs font-medium transition-colors whitespace-nowrap truncate cursor-pointer border-b-2 ${
+                      tab === t.id
+                        ? 'border-amber-500 bg-[#141518] text-white'
+                        : 'border-transparent text-zinc-400 hover:text-zinc-200'
+                    }`}
+                  >
+                    {t.label}
+                  </button>
+                ))}
+              </div>
+              <button
+                type="button"
+                onClick={() => setMobileInspectorOpen((o) => !o)}
+                className="lg:hidden flex h-8 w-8 items-center justify-center rounded-lg text-zinc-400 hover:bg-zinc-800 hover:text-white shrink-0 mb-1"
+                aria-label={mobileInspectorOpen ? 'Zwiń panel opcji' : 'Rozwiń panel opcji'}
+                title={mobileInspectorOpen ? 'Zwiń opcje (więcej miejsca na rzut 2D)' : 'Rozwiń opcje'}
+              >
+                {mobileInspectorOpen ? (
+                  <ChevronDown className="h-4 w-4" />
+                ) : (
+                  <ChevronUp className="h-4 w-4 text-amber-400" />
+                )}
+              </button>
             </div>
 
-            {/* Inspector Scroll Body */}
-            <div className="cad-scroll flex-1 overflow-y-auto p-4 space-y-5">
+            {/* Inspector Scroll Body (collapsed by default on mobile for generous drawing canvas) */}
+            <div
+              className={`cad-scroll flex-1 overflow-y-auto p-4 space-y-5 ${
+                mobileInspectorOpen ? 'block' : 'hidden lg:block'
+              }`}
+            >
               {/* TAB 1: SHAPE, PRESETS & SELECTED WALL/VERTEX */}
               {tab === 'shape' && (
                 <>
@@ -1902,15 +2163,13 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
                       <div className="grid grid-cols-2 gap-2">
                         <label className="block">
                           <span className="text-[11px] text-zinc-400">Długość ściany (mm)</span>
-                          <input
-                            type="number"
+                          <NumericInput
                             min={300}
                             max={20000}
                             step={50}
+                            showSteppers
                             value={Math.round(selectedWall.lengthMm)}
-                            onChange={(e) => {
-                              const val = Number(e.target.value);
-                              if (!Number.isFinite(val) || val < 300) return;
+                            onChange={(val) => {
                               commitDraft((prev) => ({
                                 ...prev,
                                 floorPoints: resizeWallSegmentLength(
@@ -1920,7 +2179,6 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
                                 ),
                               }));
                             }}
-                            className="mt-1 w-full rounded-lg border border-zinc-700 bg-zinc-900 px-2.5 py-2 text-xs font-mono tabular-nums text-white focus:border-amber-500 focus:outline-none"
                           />
                         </label>
                         <div className="flex flex-col justify-end">
@@ -1967,6 +2225,27 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
                           className="flex min-h-[30px] items-center gap-1 rounded-md border border-zinc-700 bg-zinc-900 px-2 text-[11px] text-zinc-200 hover:border-sky-500/60 hover:text-sky-300 cursor-pointer"
                         >
                           <Plus className="h-3 w-3" /> Gniazdko
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => addWallObstacleOnWall(selectedWall.index, 'wc_geberit')}
+                          className="flex min-h-[30px] items-center gap-1 rounded-md border border-zinc-700 bg-zinc-900 px-2 text-[11px] text-zinc-200 hover:border-sky-500/60 hover:text-sky-300 cursor-pointer"
+                        >
+                          <Plus className="h-3 w-3" /> Geberit WC
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => addWallObstacleOnWall(selectedWall.index, 'wc_low_cistern')}
+                          className="flex min-h-[30px] items-center gap-1 rounded-md border border-zinc-700 bg-zinc-900 px-2 text-[11px] text-zinc-200 hover:border-sky-500/60 hover:text-sky-300 cursor-pointer"
+                        >
+                          <Plus className="h-3 w-3" /> WC dolnopł.
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => addWallObstacleOnWall(selectedWall.index, 'wc_high_cistern')}
+                          className="flex min-h-[30px] items-center gap-1 rounded-md border border-zinc-700 bg-zinc-900 px-2 text-[11px] text-zinc-200 hover:border-sky-500/60 hover:text-sky-300 cursor-pointer"
+                        >
+                          <Plus className="h-3 w-3" /> WC górnopł.
                         </button>
                       </div>
 
@@ -2080,13 +2359,41 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
                           key={p.id}
                           type="button"
                           onClick={() => handleApplyPreset(p.id)}
-                          className="rounded-lg border border-zinc-800 bg-zinc-900/70 px-2.5 py-2 text-left hover:border-amber-500/50 hover:bg-zinc-900 transition-colors cursor-pointer"
+                          className={`rounded-lg border px-2.5 py-2 text-left transition-colors cursor-pointer ${
+                            pendingPreset === p.id
+                              ? 'border-amber-500 bg-amber-500/15'
+                              : 'border-zinc-800 bg-zinc-900/70 hover:border-amber-500/50 hover:bg-zinc-900'
+                          }`}
                         >
                           <div className="text-xs font-medium text-zinc-100">{p.label}</div>
                           <div className="text-[10px] text-zinc-500">{p.desc}</div>
                         </button>
                       ))}
                     </div>
+
+                    {pendingPreset && (
+                      <div className="rounded-xl border border-amber-500/50 bg-amber-950/35 p-2.5 space-y-2 text-[11px] text-amber-100">
+                        <p className="leading-snug">
+                          Zmiana kształtu na <strong>{PRESET_CARDS.find((c) => c.id === pendingPreset)?.label}</strong> zastąpi obecne ściany oraz {(draft.openings?.length ?? 0) + (draft.wallObstacles?.length ?? 0)} wstawionych elementów.
+                        </p>
+                        <div className="flex items-center gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() => applyPresetImmediately(pendingPreset)}
+                            className="min-h-[30px] rounded-lg bg-amber-500 px-2.5 text-[11px] font-semibold text-zinc-950 hover:bg-amber-400 cursor-pointer"
+                          >
+                            Zastąp rzut
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setPendingPreset(null)}
+                            className="min-h-[30px] rounded-lg border border-zinc-700 bg-zinc-900 px-2.5 text-[11px] text-zinc-300 hover:text-white cursor-pointer"
+                          >
+                            Anuluj
+                          </button>
+                        </div>
+                      </div>
+                    )}
                   </div>
 
                   {/* Global Room Height & Wall Thickness */}
@@ -2095,35 +2402,24 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
                     <div className="grid grid-cols-2 gap-2.5">
                       <label className="block">
                         <span className="text-[11px] text-zinc-400">Wysokość (mm)</span>
-                        <input
-                          type="number"
+                        <NumericInput
                           min={1600}
                           max={4500}
                           step={50}
+                          showSteppers
                           value={draft.heightMm}
-                          onChange={(e) =>
-                            patchDraft({ heightMm: Math.max(1600, Number(e.target.value) || 2600) })
-                          }
-                          className="mt-1 w-full rounded-lg border border-zinc-800 bg-zinc-900 px-2.5 py-2 text-xs font-mono tabular-nums text-white focus:border-amber-500 focus:outline-none"
+                          onChange={(val) => patchDraft({ heightMm: val })}
                         />
                       </label>
                       <label className="block">
                         <span className="text-[11px] text-zinc-400">Grubość ścian (mm)</span>
-                        <input
-                          type="number"
+                        <NumericInput
                           min={60}
                           max={360}
                           step={20}
+                          showSteppers
                           value={wallThicknessMm}
-                          onChange={(e) =>
-                            patchDraft({
-                              wallThicknessMm: Math.max(
-                                60,
-                                Math.min(360, Number(e.target.value) || 120)
-                              ),
-                            })
-                          }
-                          className="mt-1 w-full rounded-lg border border-zinc-800 bg-zinc-900 px-2.5 py-2 text-xs font-mono tabular-nums text-white focus:border-amber-500 focus:outline-none"
+                          onChange={(val) => patchDraft({ wallThicknessMm: val })}
                         />
                       </label>
                     </div>
@@ -2412,12 +2708,12 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
                           <input
                             type="number"
                             min={10}
-                            max={500}
+                            max={1200}
                             step={10}
                             value={Math.round(selectedObstacle.depthMm)}
                             onChange={(e) =>
                               updateWallObstacle(selectedObstacle.id, {
-                                depthMm: Math.max(10, Number(e.target.value) || 30),
+                                depthMm: Math.max(10, Math.min(1200, Number(e.target.value) || 30)),
                               })
                             }
                             className="mt-1 w-full rounded-lg border border-zinc-700 bg-zinc-900 px-2 py-1.5 text-xs font-mono tabular-nums text-white"
@@ -2527,34 +2823,54 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
                     )}
                   </div>
 
-                  {/* Wall Obstacles List */}
+                  {/* Wall Obstacles & Sanitary Fixtures List */}
                   <div className="space-y-2 border-t border-zinc-800 pt-4">
-                    <div className="flex items-center justify-between">
+                    <div className="flex flex-wrap items-center justify-between gap-1.5">
                       <h3 className="text-xs font-semibold text-zinc-200">
-                        Instalacje i przeszkody ({(draft.wallObstacles ?? []).length})
+                        Instalacje i sanitariaty ({(draft.wallObstacles ?? []).length})
                       </h3>
-                      <div className="flex gap-1">
+                      <div className="flex flex-wrap gap-1.5 text-[11px]">
                         <button
                           type="button"
                           onClick={() => setTool('place_radiator')}
-                          className="text-[11px] text-amber-400 hover:text-amber-300 cursor-pointer"
+                          className="text-amber-400 hover:text-amber-300 cursor-pointer"
                         >
                           + Grzejnik
                         </button>
-                        <span className="text-zinc-600">·</span>
                         <button
                           type="button"
                           onClick={() => setTool('place_socket')}
-                          className="text-[11px] text-amber-400 hover:text-amber-300 cursor-pointer"
+                          className="text-amber-400 hover:text-amber-300 cursor-pointer"
                         >
                           + Gniazdko
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setTool('place_wc_geberit')}
+                          className="text-sky-400 hover:text-sky-300 cursor-pointer"
+                        >
+                          + Geberit
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setTool('place_wc_low_cistern')}
+                          className="text-sky-400 hover:text-sky-300 cursor-pointer"
+                        >
+                          + WC dolnopł.
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setTool('place_wc_high_cistern')}
+                          className="text-sky-400 hover:text-sky-300 cursor-pointer"
+                        >
+                          + WC górnopł.
                         </button>
                       </div>
                     </div>
 
                     {(draft.wallObstacles ?? []).length === 0 ? (
                       <p className="text-xs text-zinc-500">
-                        Dodaj grzejniki, gniazdka 230V lub piony kanalizacyjne, aby wykrywać kolizje z meblem.
+                        Dodaj grzejniki, gniazdka 230V, piony lub WC (Geberit, muszla dolnopłukowa, górnopłukowa) — kliknij ścianę na rzucie.
                       </p>
                     ) : (
                       <div className="space-y-1.5">

@@ -5,15 +5,18 @@ import { CameraPreset } from '../types/furniture';
 interface ViewCubeProps {
   onSelectView: (preset: CameraPreset) => void;
   onFocusAll: () => void;
+  inspectorOpen?: boolean;
 }
 
 /**
  * Compact CAD View Compass (Desktop/Tablet) tucked cleanly in the top-right corner
- * for 1-click orthographic & isometric camera navigation.
+ * for 1-click orthographic & isometric camera navigation. Automatically shifts beside
+ * InspectorDrawer when open so it never collides or gets covered.
  */
 export const ViewCube: React.FC<ViewCubeProps> = ({
   onSelectView,
   onFocusAll,
+  inspectorOpen = false,
 }) => {
   const btn =
     'flex h-6 items-center justify-center rounded text-[10px] font-semibold tracking-tight text-zinc-300 hover:bg-amber-500 hover:text-zinc-950 transition-colors cursor-pointer select-none';
@@ -21,7 +24,9 @@ export const ViewCube: React.FC<ViewCubeProps> = ({
   return (
     <div
       aria-label="Kompas widoków kamery 3D"
-      className="hidden sm:flex fixed top-15 right-4 z-20 flex-col gap-1 rounded-xl border border-zinc-800/90 bg-[#141518]/92 p-1.5 shadow-xl"
+      className={`hidden sm:flex fixed top-15 z-20 flex-col gap-1 rounded-xl border border-zinc-800/90 bg-[#141518]/92 p-1.5 shadow-xl transition-[right] duration-200 ${
+        inspectorOpen ? 'right-[364px]' : 'right-4'
+      }`}
     >
       <div className="grid grid-cols-3 gap-0.5 w-[108px]">
         <button

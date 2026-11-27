@@ -12,6 +12,7 @@ import {
   buildDoorHingeCupsGroup,
   inferInnerFaceDirection,
 } from './hardware3D';
+import { buildSanitaryToilet3D, isSanitaryToiletType } from './sanitary3D';
 
 export const MM_TO_M = 0.001;
 export const M_TO_MM = 1000;
@@ -1350,6 +1351,10 @@ export function buildApplianceGroup(part: FurniturePart): THREE.Group | null {
         group.add(wire);
       }
     }
+  } else if (part.applianceModel && isSanitaryToiletType(part.applianceModel)) {
+    const wcGroup = buildSanitaryToilet3D(part.applianceModel, w, h, d);
+    wcGroup.position.set(0, -h / 2, -d / 2);
+    group.add(wcGroup);
   }
 
   return group;

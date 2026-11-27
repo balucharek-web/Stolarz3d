@@ -7,15 +7,19 @@ import {
   AlignStartHorizontal,
   AlignStartVertical,
   AlignVerticalDistributeCenter,
+  ArrowDownToLine,
   Camera,
   ChevronDown,
   ChevronUp,
+  Copy,
   Crosshair,
   DoorOpen,
   Eye,
   EyeOff,
   FolderOpen,
   Group,
+  HelpCircle,
+  Home,
   Layers,
   LayoutPanelTop,
   Lightbulb,
@@ -24,6 +28,7 @@ import {
   Maximize2,
   Move,
   MousePointer2,
+  PenTool,
   Redo2,
   RotateCw,
   Ruler,
@@ -94,11 +99,19 @@ interface BottomDockProps {
   onUngroupSelected: () => void;
   onOpenInspector: () => void;
   onEditParametricCabinet?: () => void;
+  onRotateSelected90?: () => void;
+  onDuplicateSelected?: () => void;
+  onDropSelectedToFloor?: () => void;
+  onDeleteSelected?: () => void;
   onDeleteSelectedFastener: () => void;
   onOpenTemplates: () => void;
   onOpenPartsList: () => void;
   onOpenCutList: () => void;
+  onOpenSketch2D?: () => void;
+  onOpenShortcuts?: () => void;
   onSnapshot: () => void;
+  roomEnabled?: boolean;
+  onOpenRoom?: () => void;
 }
 
 const LIGHTING_LABELS: Record<StudioLighting, string> = {
@@ -156,11 +169,19 @@ export const BottomDock: React.FC<BottomDockProps> = ({
   onUngroupSelected,
   onOpenInspector,
   onEditParametricCabinet,
+  onRotateSelected90,
+  onDuplicateSelected,
+  onDropSelectedToFloor,
+  onDeleteSelected,
   onDeleteSelectedFastener,
   onOpenTemplates,
   onOpenPartsList,
   onOpenCutList,
+  onOpenSketch2D,
+  onOpenShortcuts,
   onSnapshot,
+  roomEnabled = false,
+  onOpenRoom,
 }) => {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
@@ -248,24 +269,48 @@ export const BottomDock: React.FC<BottomDockProps> = ({
                 </>
               ) : (
                 <>
-                  <span className="text-xs font-medium text-zinc-200 truncate pl-1">
+                  <span className="text-xs font-medium text-zinc-200 truncate pl-1 min-w-0">
                     {selectedPartName}
                   </span>
-                  <div className="flex items-center gap-1.5 shrink-0">
-                    <button
-                      type="button"
-                      onClick={onUndo}
-                      disabled={!canUndo}
-                      aria-label="Cofnij"
-                      className="flex min-h-[36px] min-w-[36px] items-center justify-center rounded-lg border border-zinc-800 bg-zinc-900 text-zinc-200 disabled:opacity-35"
-                    >
-                      <Undo2 className="h-4 w-4" />
-                    </button>
+                  <div className="flex items-center gap-1 shrink-0">
+                    {onRotateSelected90 && (
+                      <button
+                        type="button"
+                        onClick={onRotateSelected90}
+                        aria-label="Obróć o 90 stopni"
+                        title="Obróć o 90°"
+                        className="flex min-h-[36px] min-w-[34px] items-center justify-center rounded-lg border border-zinc-800 bg-zinc-900 text-zinc-200 active:bg-zinc-800"
+                      >
+                        <RotateCw className="h-3.5 w-3.5" />
+                      </button>
+                    )}
+                    {onDuplicateSelected && (
+                      <button
+                        type="button"
+                        onClick={onDuplicateSelected}
+                        aria-label="Duplikuj element"
+                        title="Duplikuj"
+                        className="flex min-h-[36px] min-w-[34px] items-center justify-center rounded-lg border border-zinc-800 bg-zinc-900 text-zinc-200 active:bg-zinc-800"
+                      >
+                        <Copy className="h-3.5 w-3.5" />
+                      </button>
+                    )}
+                    {onDeleteSelected && (
+                      <button
+                        type="button"
+                        onClick={onDeleteSelected}
+                        aria-label="Usuń element"
+                        title="Usuń"
+                        className="flex min-h-[36px] min-w-[34px] items-center justify-center rounded-lg border border-red-900/50 bg-red-950/40 text-red-300 active:bg-red-900/50"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </button>
+                    )}
                     {canEditParametricCabinet && onEditParametricCabinet && (
                       <button
                         type="button"
                         onClick={onEditParametricCabinet}
-                        className="flex min-h-[36px] items-center gap-1 rounded-lg border border-emerald-500/50 bg-emerald-500/15 px-2.5 text-xs font-semibold text-emerald-200 active:bg-emerald-500/30 whitespace-nowrap"
+                        className="flex min-h-[36px] items-center gap-1 rounded-lg border border-emerald-500/50 bg-emerald-500/15 px-2 text-xs font-semibold text-emerald-200 active:bg-emerald-500/30 whitespace-nowrap"
                       >
                         <LayoutPanelTop className="h-3.5 w-3.5" />
                         <span>Szafka</span>
@@ -274,10 +319,10 @@ export const BottomDock: React.FC<BottomDockProps> = ({
                     <button
                       type="button"
                       onClick={onOpenInspector}
-                      className="flex min-h-[36px] items-center gap-1.5 rounded-lg bg-amber-500 px-3 text-xs font-semibold text-zinc-950 active:bg-amber-400 whitespace-nowrap"
+                      className="flex min-h-[36px] items-center gap-1 rounded-lg bg-amber-500 px-2.5 text-xs font-semibold text-zinc-950 active:bg-amber-400 whitespace-nowrap"
                     >
                       <SlidersHorizontal className="h-3.5 w-3.5" />
-                      <span>{selectedCount >= 2 ? `Edytuj (${selectedCount})` : 'Edytuj'}</span>
+                      <span>{selectedCount >= 2 ? `(${selectedCount})` : 'Edytuj'}</span>
                     </button>
                   </div>
                 </>
@@ -285,20 +330,26 @@ export const BottomDock: React.FC<BottomDockProps> = ({
             </div>
           )}
 
-        {/* Mobile "Widok i Opcje" Slide-Up Popover Sheet */}
+        {/* Mobile "Widok i Opcje" Slide-Up Popover Sheet with Backdrop Dismiss */}
         {mobileMenuOpen && (
-          <div className="mx-2 mb-1.5 pointer-events-auto rounded-2xl border border-zinc-800 bg-[#141518] p-3.5 text-zinc-100 shadow-2xl space-y-3.5">
-            <div className="flex items-center justify-between border-b border-zinc-800 pb-2">
-              <span className="text-xs font-semibold text-white">Widok 3D i narzędzia</span>
-              <button
-                type="button"
-                onClick={() => setMobileMenuOpen(false)}
-                className="flex h-8 w-8 items-center justify-center rounded-lg text-zinc-400 active:bg-zinc-800"
-                aria-label="Zamknij menu widoku"
-              >
-                <X className="h-4 w-4" />
-              </button>
-            </div>
+          <>
+            <div
+              onClick={() => setMobileMenuOpen(false)}
+              className="fixed inset-0 z-0 bg-black/45 pointer-events-auto"
+              aria-hidden="true"
+            />
+            <div className="relative z-10 mx-2 mb-1.5 pointer-events-auto max-h-[72dvh] overflow-y-auto cad-scroll rounded-2xl border border-zinc-800 bg-[#141518] p-3.5 text-zinc-100 shadow-2xl space-y-3.5">
+              <div className="flex items-center justify-between border-b border-zinc-800 pb-2">
+                <span className="text-xs font-semibold text-white">Widok 3D i narzędzia</span>
+                <button
+                  type="button"
+                  onClick={() => setMobileMenuOpen(false)}
+                  className="flex h-8 w-8 items-center justify-center rounded-lg text-zinc-400 active:bg-zinc-800"
+                  aria-label="Zamknij menu widoku"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
 
             {/* Extra mobile CAD tools: Resize + Tape Measure + Rotate */}
             <div className="grid grid-cols-3 gap-1.5">
@@ -464,10 +515,27 @@ export const BottomDock: React.FC<BottomDockProps> = ({
                 {showFasteners ? <Eye className="h-3.5 w-3.5" /> : <EyeOff className="h-3.5 w-3.5" />}
                 <span>{showFasteners ? 'Wkręty: Pokaż' : 'Wkręty: Ukryj'}</span>
               </button>
+              {onOpenRoom && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMobileMenuOpen(false);
+                    onOpenRoom();
+                  }}
+                  className={`flex min-h-[40px] items-center justify-center gap-1.5 rounded-xl border px-3 text-xs font-semibold ${
+                    roomEnabled
+                      ? 'border-sky-500/60 bg-sky-500/20 text-sky-200'
+                      : 'border-zinc-800 bg-zinc-900 text-zinc-200'
+                  }`}
+                >
+                  <Home className="h-3.5 w-3.5" />
+                  <span>{roomEnabled ? 'Rzut 2D pokoju' : 'Rysuj pokój 2D'}</span>
+                </button>
+              )}
             </div>
 
             {/* Project Actions */}
-            <div className="grid grid-cols-4 gap-1.5 border-t border-zinc-800 pt-2.5">
+            <div className="grid grid-cols-3 gap-1.5 border-t border-zinc-800 pt-2.5">
               <button
                 type="button"
                 onClick={() => {
@@ -501,6 +569,19 @@ export const BottomDock: React.FC<BottomDockProps> = ({
                 <Scissors className="h-4 w-4 text-amber-400" />
                 <span>Rozkrój/PDF</span>
               </button>
+              {onOpenSketch2D && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMobileMenuOpen(false);
+                    onOpenSketch2D();
+                  }}
+                  className="flex min-h-[44px] flex-col items-center justify-center gap-0.5 rounded-xl bg-zinc-900 text-[10px] font-medium text-zinc-200 active:bg-zinc-800"
+                >
+                  <PenTool className="h-4 w-4 text-amber-400" />
+                  <span>Szkic płyty</span>
+                </button>
+              )}
               <button
                 type="button"
                 onClick={() => {
@@ -512,14 +593,28 @@ export const BottomDock: React.FC<BottomDockProps> = ({
                 <Camera className="h-4 w-4 text-amber-400" />
                 <span>Zdjęcie</span>
               </button>
+              {onOpenShortcuts && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMobileMenuOpen(false);
+                    onOpenShortcuts();
+                  }}
+                  className="flex min-h-[44px] flex-col items-center justify-center gap-0.5 rounded-xl bg-zinc-900 text-[10px] font-medium text-zinc-200 active:bg-zinc-800"
+                >
+                  <HelpCircle className="h-4 w-4 text-sky-400" />
+                  <span>Pomoc / Gesty</span>
+                </button>
+              )}
             </div>
-          </div>
+            </div>
+          </>
         )}
 
         {/* Mobile Fixed Bottom Thumb Bar */}
         <nav
           aria-label="Narzędzia projektowania"
-          className="pointer-events-auto border-t border-zinc-800 bg-[#141518] px-1.5 pt-1 pb-[max(0.375rem,env(safe-area-inset-bottom))]"
+          className="relative z-10 pointer-events-auto border-t border-zinc-800 bg-[#141518] px-1.5 pt-1 pb-[max(0.375rem,env(safe-area-inset-bottom))]"
         >
           <div className="grid grid-cols-5 gap-1">
             {(
@@ -571,7 +666,7 @@ export const BottomDock: React.FC<BottomDockProps> = ({
           DESKTOP COLLAPSIBLE CAD DOCK (>= md)
       ===================================================================== */}
       <div
-        className="hidden md:block fixed bottom-0 left-1/2 z-30 w-[min(1040px,calc(100vw-24px))] -translate-x-1/2 pb-3 pointer-events-none transition-transform duration-200 ease-out"
+        className="hidden md:block fixed bottom-0 left-1/2 z-30 w-[min(1060px,calc(100vw-24px))] max-w-[calc(100vw-24px)] pb-2.5 pointer-events-none transition-transform duration-200 ease-out"
         style={{
           transform: collapsed
             ? 'translate(-50%, calc(100% - 34px))'
@@ -599,14 +694,14 @@ export const BottomDock: React.FC<BottomDockProps> = ({
           </button>
         </div>
 
-        <div className="pointer-events-auto rounded-2xl border border-zinc-800 bg-[#141518]/[0.96] text-zinc-100 shadow-2xl px-3.5 py-2.5">
+        <div className="pointer-events-auto rounded-2xl border border-zinc-800 bg-[#141518]/[0.96] text-zinc-100 shadow-2xl px-2.5 lg:px-3.5 py-2 overflow-hidden max-h-[calc(100dvh-64px)] overflow-y-auto cad-scroll">
           {/* Contextual Selection / Tool Helper Banner */}
           {(selectedPartName ||
             selectedFastenerLabel ||
             tool === 'screw' ||
             tool === 'resize' ||
             tool === 'measure') && (
-            <div className="mb-2 flex items-center justify-between gap-2 border-b border-zinc-800/90 pb-2 text-xs">
+            <div className="mb-2 flex flex-wrap items-center justify-between gap-2 border-b border-zinc-800/90 pb-2 text-xs">
               {selectedFastenerLabel ? (
                 <div className="flex items-center gap-2 min-w-0">
                   <Wrench className="h-3.5 w-3.5 text-amber-400 shrink-0" />
@@ -767,6 +862,53 @@ export const BottomDock: React.FC<BottomDockProps> = ({
                         <span>Rozgrupuj</span>
                       </button>
                     )}
+                    {selectedPartName && tool !== 'screw' && (
+                      <>
+                        {onRotateSelected90 && (
+                          <button
+                            type="button"
+                            onClick={onRotateSelected90}
+                            title="Obróć zaznaczony element o 90°"
+                            className="flex h-7 items-center gap-1 rounded-lg border border-zinc-800 bg-zinc-900 px-2 text-xs font-medium text-zinc-200 hover:border-amber-500/50 hover:text-white transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                          >
+                            <RotateCw className="h-3.5 w-3.5 text-zinc-400" />
+                            <span>90°</span>
+                          </button>
+                        )}
+                        {onDuplicateSelected && (
+                          <button
+                            type="button"
+                            onClick={onDuplicateSelected}
+                            title="Duplikuj element (Ctrl+D)"
+                            className="flex h-7 items-center gap-1 rounded-lg border border-zinc-800 bg-zinc-900 px-2 text-xs font-medium text-zinc-200 hover:border-amber-500/50 hover:text-white transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                          >
+                            <Copy className="h-3.5 w-3.5 text-zinc-400" />
+                            <span>Duplikuj</span>
+                          </button>
+                        )}
+                        {onDropSelectedToFloor && (
+                          <button
+                            type="button"
+                            onClick={onDropSelectedToFloor}
+                            title="Postaw element równo na podłodze (Y = 0)"
+                            className="flex h-7 items-center gap-1 rounded-lg border border-zinc-800 bg-zinc-900 px-2 text-xs font-medium text-zinc-200 hover:border-amber-500/50 hover:text-white transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                          >
+                            <ArrowDownToLine className="h-3.5 w-3.5 text-zinc-400" />
+                            <span className="hidden lg:inline">Podłoga</span>
+                          </button>
+                        )}
+                        {onDeleteSelected && (
+                          <button
+                            type="button"
+                            onClick={onDeleteSelected}
+                            title="Usuń zaznaczony element (Delete)"
+                            className="flex h-7 w-7 items-center justify-center rounded-lg border border-red-900/50 bg-red-950/35 text-red-300 hover:bg-red-900/50 transition-colors shrink-0 cursor-pointer"
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </button>
+                        )}
+                      </>
+                    )}
                     {canEditParametricCabinet && onEditParametricCabinet && (
                       <button
                         type="button"
@@ -797,8 +939,8 @@ export const BottomDock: React.FC<BottomDockProps> = ({
           )}
 
           {/* Row 1: Core CAD Tools + Snap / Screw Selector + Undo/Redo */}
-          <div className="flex items-center justify-between gap-2">
-            <div className="flex items-center gap-0.5 rounded-xl bg-zinc-900 p-1 border border-zinc-800">
+          <div className="flex flex-wrap items-center justify-between gap-1.5 lg:gap-2">
+            <div className="flex flex-wrap items-center gap-0.5 rounded-xl bg-zinc-900 p-1 border border-zinc-800 max-w-full">
               {(
                 [
                   { id: 'select', label: 'Zaznacz', icon: MousePointer2, title: 'Zaznacz (V)' },
@@ -806,7 +948,7 @@ export const BottomDock: React.FC<BottomDockProps> = ({
                   { id: 'rotate', label: 'Obróć', icon: RotateCw, title: 'Obróć (R)' },
                   { id: 'resize', label: 'Rozciągnij', icon: Maximize2, title: 'Rozciągnij ścianki 3D (S)' },
                   { id: 'screw', label: 'Wkręty', icon: Wrench, title: 'Wkręty i Minifix (W)' },
-                  { id: 'measure', label: 'Miarka 3D', icon: Ruler, title: 'Pomiar punkt-punkt 3D (T)' },
+                  { id: 'measure', label: 'Miarka', icon: Ruler, title: 'Pomiar punkt-punkt 3D (T)' },
                 ] as const
               ).map(({ id, label, icon: Icon, title }) => {
                 const active = tool === id;
@@ -816,7 +958,7 @@ export const BottomDock: React.FC<BottomDockProps> = ({
                     type="button"
                     onClick={() => onChangeTool(id)}
                     title={title}
-                    className={`flex min-h-[36px] items-center gap-1.5 rounded-lg px-2.5 text-xs font-medium transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                    className={`flex min-h-[34px] items-center gap-1 rounded-lg px-2 lg:px-2.5 text-[11px] lg:text-xs font-medium transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
                       active
                         ? 'bg-amber-500 text-zinc-950 font-semibold'
                         : 'text-zinc-300 hover:bg-zinc-800 hover:text-white'
@@ -941,10 +1083,10 @@ export const BottomDock: React.FC<BottomDockProps> = ({
             </div>
           </div>
 
-          {/* Row 2: Exploded View, Open Doors/Drawers, Camera Presets, Assembly Guide, Lighting & LED */}
-          <div className="mt-2 flex items-center justify-between gap-2 border-t border-zinc-800/80 pt-2">
-            <div className="flex items-center gap-3 min-w-0">
-              <div className="flex items-center gap-1.5 w-[155px] shrink-0">
+          {/* Row 2: Exploded View, Open Doors/Drawers, Camera Presets, 2D Room, Assembly Guide, Lighting & LED */}
+          <div className="mt-2 flex flex-wrap items-center justify-between gap-1.5 lg:gap-2 border-t border-zinc-800/80 pt-2">
+            <div className="flex flex-wrap items-center gap-2.5 lg:gap-3 min-w-0">
+              <div className="flex items-center gap-1.5 w-[132px] lg:w-[150px] shrink-0">
                 <span className="text-[11px] font-medium text-zinc-400 whitespace-nowrap">
                   Rozstrzał
                 </span>
@@ -963,7 +1105,7 @@ export const BottomDock: React.FC<BottomDockProps> = ({
                 </span>
               </div>
 
-              <div className="flex items-center gap-1.5 w-[150px] shrink-0">
+              <div className="flex items-center gap-1.5 w-[126px] lg:w-[144px] shrink-0">
                 <button
                   type="button"
                   onClick={() => onChangeOpenAmount(openAmount > 0.1 ? 0 : 1)}
@@ -988,31 +1130,30 @@ export const BottomDock: React.FC<BottomDockProps> = ({
               </div>
             </div>
 
-            <div className="flex items-center gap-1">
-              {(
-                [
-                  { id: 'iso', label: '3D' },
-                  { id: 'front', label: 'Przód' },
-                  { id: 'side', label: 'Bok' },
-                  { id: 'top', label: 'Góra' },
-                ] as const
-              ).map((cam) => (
-                <button
-                  key={cam.id}
-                  type="button"
-                  onClick={() => onCameraPreset(cam.id)}
-                  className="min-h-[32px] rounded-md px-2 text-xs font-medium text-zinc-300 hover:bg-zinc-800 hover:text-white transition-colors whitespace-nowrap shrink-0 cursor-pointer"
-                >
-                  {cam.label}
-                </button>
-              ))}
-
-              <span className="mx-0.5 h-4 w-px bg-zinc-800" aria-hidden="true" />
+            <div className="flex flex-wrap items-center gap-1">
+              {onOpenRoom && (
+                <>
+                  <button
+                    type="button"
+                    onClick={onOpenRoom}
+                    className={`flex min-h-[30px] items-center gap-1 rounded-md px-2 text-[11px] lg:text-xs font-semibold transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                      roomEnabled
+                        ? 'bg-sky-500/20 text-sky-300 hover:bg-sky-500/30 border border-sky-500/40'
+                        : 'text-zinc-300 hover:bg-zinc-800 hover:text-white'
+                    }`}
+                    title="Wróć do edytora rzutu 2D pomieszczenia"
+                  >
+                    <Home className="h-3.5 w-3.5" />
+                    <span>Rzut 2D</span>
+                  </button>
+                  <span className="mx-0.5 h-4 w-px bg-zinc-800" aria-hidden="true" />
+                </>
+              )}
 
               <button
                 type="button"
                 onClick={onToggleAssemblyMode}
-                className={`flex min-h-[32px] items-center gap-1 rounded-md px-2 text-xs font-medium transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                className={`flex min-h-[30px] items-center gap-1 rounded-md px-1.5 lg:px-2 text-[11px] lg:text-xs font-medium transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
                   assemblyStep > 0
                     ? 'bg-emerald-500/20 text-emerald-300'
                     : 'text-zinc-300 hover:bg-zinc-800 hover:text-white'
@@ -1026,7 +1167,7 @@ export const BottomDock: React.FC<BottomDockProps> = ({
               <button
                 type="button"
                 onClick={onCycleLighting}
-                className="flex min-h-[32px] items-center gap-1 rounded-md px-2 text-xs font-medium text-zinc-300 hover:bg-zinc-800 hover:text-white transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                className="flex min-h-[30px] items-center gap-1 rounded-md px-1.5 lg:px-2 text-[11px] lg:text-xs font-medium text-zinc-300 hover:bg-zinc-800 hover:text-white transition-colors whitespace-nowrap shrink-0 cursor-pointer"
                 title="Zmień oświetlenie studia 3D (Dzień / Studio / Ciepłe / Studio HQ)"
               >
                 <Sun className="h-3.5 w-3.5 text-amber-400" />
@@ -1036,7 +1177,7 @@ export const BottomDock: React.FC<BottomDockProps> = ({
               <button
                 type="button"
                 onClick={onToggleLedUnderCabinet}
-                className={`flex min-h-[32px] items-center gap-1 rounded-md px-2 text-xs font-medium transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                className={`flex min-h-[30px] items-center gap-1 rounded-md px-1.5 lg:px-2 text-[11px] lg:text-xs font-medium transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
                   ledUnderCabinet
                     ? 'bg-amber-500/20 text-amber-300'
                     : 'text-zinc-400 hover:bg-zinc-800 hover:text-white'
@@ -1050,7 +1191,7 @@ export const BottomDock: React.FC<BottomDockProps> = ({
               <button
                 type="button"
                 onClick={onToggleShowFasteners}
-                className={`flex min-h-[32px] items-center gap-1 rounded-md px-2 text-xs font-medium transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                className={`flex min-h-[30px] items-center gap-1 rounded-md px-1.5 lg:px-2 text-[11px] lg:text-xs font-medium transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
                   showFasteners
                     ? 'text-zinc-200 hover:bg-zinc-800'
                     : 'text-zinc-500 hover:bg-zinc-800'
@@ -1064,6 +1205,21 @@ export const BottomDock: React.FC<BottomDockProps> = ({
                 )}
                 <span>Wkręty</span>
               </button>
+
+              {onOpenShortcuts && (
+                <>
+                  <span className="mx-0.5 h-4 w-px bg-zinc-800" aria-hidden="true" />
+                  <button
+                    type="button"
+                    onClick={onOpenShortcuts}
+                    className="flex min-h-[30px] items-center gap-1 rounded-md px-1.5 lg:px-2 text-[11px] lg:text-xs font-medium text-zinc-400 hover:bg-zinc-800 hover:text-white transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                    title="Skróty klawiszowe i sterowanie myszą (?)"
+                  >
+                    <HelpCircle className="h-3.5 w-3.5" />
+                    <span>Skróty</span>
+                  </button>
+                </>
+              )}
             </div>
           </div>
         </div>
