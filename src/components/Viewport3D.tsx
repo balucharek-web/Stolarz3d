@@ -2839,7 +2839,7 @@ export const Viewport3D = forwardRef<Viewport3DHandle, Viewport3DProps>(
         props.explodedAmount < 0.01
       ) {
         const part = props.parts.find((p) => p.id === props.selectedPartId);
-        if (part) {
+        if (part && !part.locked && !part.hidden) {
           const quat = getPartQuaternion(part);
           const centerM = new THREE.Vector3(
             part.position[0] * MM_TO_M,

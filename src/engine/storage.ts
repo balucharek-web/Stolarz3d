@@ -528,6 +528,8 @@ export function sanitizeImportedProject(
         p.appliancePricePln !== undefined
           ? toFiniteNumber(p.appliancePricePln, 0, 0, 100000)
           : undefined,
+      hidden: p.hidden ? true : undefined,
+      locked: p.locked ? true : undefined,
     };
 
     sanitizedParts.push(part);

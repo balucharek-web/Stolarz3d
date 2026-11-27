@@ -1,17 +1,21 @@
 import React, { useMemo, useState } from 'react';
 import {
   AlertTriangle,
+  BookmarkPlus,
   Check,
   ChevronDown,
   ChevronRight,
+  Cloud,
   Copy,
   Eye,
   EyeOff,
   Folder,
   FolderOpen,
   FolderPlus,
+  Loader2,
   Lock,
   Pencil,
+  RotateCcw,
   Search,
   Trash2,
   Unlock,
@@ -24,10 +28,7 @@ import {
   PART_KIND_LABELS,
   type ParametricCabinetConfig,
 } from '../types/furniture';
-import {
-  FURNITURE_TEMPLATES,
-  type FurnitureTemplateMeta,
-} from '../data/templates';
+import type { FurnitureTemplateMeta } from '../data/templates';
 
 export type LeftDrawerMode = 'projects' | 'templates' | 'parts' | null;
 
@@ -49,6 +50,14 @@ interface PartsTemplatesDrawerProps {
   onRenameProject: (id: string, name: string) => void;
   onDeleteProject: (id: string) => void;
   onLoadTemplate: (project: FurnitureProject) => void;
+  templates: FurnitureTemplateMeta[];
+  templatesLoading: boolean;
+  isCloudSignedIn: boolean;
+  canSaveCurrentAsTemplate: boolean;
+  onOpenCloud: () => void;
+  onSaveCurrentAsTemplate: () => void;
+  onDeleteTemplate: (id: string) => void;
+  onRestoreStarterTemplates: () => void;
   onSelectPart: (id: string) => void;
   onSelectGroup: (groupId: string) => void;
   onTogglePartsHidden: (ids: string[], hidden: boolean) => void;
@@ -86,6 +95,14 @@ export const PartsTemplatesDrawer: React.FC<PartsTemplatesDrawerProps> = ({
   onRenameProject,
   onDeleteProject,
   onLoadTemplate,
+  templates,
+  templatesLoading,
+  isCloudSignedIn,
+  canSaveCurrentAsTemplate,
+  onOpenCloud,
+  onSaveCurrentAsTemplate,
+  onDeleteTemplate,
+  onRestoreStarterTemplates,
   onSelectPart,
   onSelectGroup,
   onTogglePartsHidden,
@@ -107,9 +124,9 @@ export const PartsTemplatesDrawer: React.FC<PartsTemplatesDrawerProps> = ({
   );
 
   const filteredTemplates = useMemo(() => {
-    if (templateCat === 'all') return FURNITURE_TEMPLATES;
-    return FURNITURE_TEMPLATES.filter((t) => t.category === templateCat);
-  }, [templateCat]);
+    if (templateCat === 'all') return templates;
+    return templates.filter((t) => t.category === templateCat);
+  }, [templateCat, templates]);
 
   // Build hierarchical scene tree: named groups + ungrouped root items
   const outlinerTree = useMemo(() => {
@@ -330,7 +347,9 @@ export const PartsTemplatesDrawer: React.FC<PartsTemplatesDrawerProps> = ({
               </button>
 
               <p className="text-[11px] text-zinc-500 px-0.5">
-                Wszystkie projekty zapisują się automatycznie w pamięci Twojej przeglądarki.
+                {isCloudSignedIn
+                  ? 'Projekty synchronizują się automatycznie z bazą Firestore.'
+                  : 'Zaloguj się w Chmurze, aby synchronizować projekty między PC i telefonem.'}
               </p>
 
               <div className="space-y-2">
@@ -432,57 +451,131 @@ export const PartsTemplatesDrawer: React.FC<PartsTemplatesDrawerProps> = ({
               </div>
             </>
           ) : mode === 'templates' ? (
-            <>
-              {/* Category Filter Strip */}
-              <div className="flex items-center gap-1 overflow-x-auto cad-scroll pb-1">
-                {TEMPLATE_CATEGORIES.map((cat) => (
-                  <button
-                    key={cat.id}
-                    type="button"
-                    onClick={() => setTemplateCat(cat.id)}
-                    className={`rounded-lg px-2.5 py-1.5 text-[11px] font-medium whitespace-nowrap shrink-0 cursor-pointer transition-colors ${
-                      templateCat === cat.id
-                        ? 'bg-amber-500 text-zinc-950 font-semibold'
-                        : 'border border-zinc-800 bg-zinc-900 text-zinc-400 hover:text-zinc-100'
-                    }`}
-                  >
-                    {cat.label}
-                  </button>
-                ))}
+            !isCloudSignedIn ? (
+              <div className="rounded-xl border border-zinc-800 bg-zinc-900/75 p-5 text-center space-y-3">
+                <div className="mx-auto flex h-11 w-11 items-center justify-center rounded-xl border border-sky-500/35 bg-sky-500/12 text-sky-300">
+                  <Cloud className="h-5 w-5" />
+                </div>
+                <div className="space-y-1">
+                  <div className="text-sm font-semibold text-white">
+                    Szablony w bazie Firestore
+                  </div>
+                  <p className="text-xs text-zinc-400 leading-relaxed">
+                    Przykładowe projekty 3D i Twoje własne szablony są pobierane bezpośrednio z chmury Firebase. Zaloguj się przez Google, aby je wczytać.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    onClose();
+                    onOpenCloud();
+                  }}
+                  className="inline-flex min-h-[40px] items-center justify-center gap-2 rounded-xl bg-amber-500 px-4 text-xs font-semibold text-zinc-950 hover:bg-amber-400 transition-colors cursor-pointer"
+                >
+                  <Cloud className="h-4 w-4" />
+                  <span>Zaloguj się przez Google</span>
+                </button>
               </div>
-
-              <div className="space-y-2">
-                {filteredTemplates.map((tpl) => (
+            ) : templatesLoading ? (
+              <div className="flex flex-col items-center justify-center gap-2.5 py-12 text-xs text-zinc-400">
+                <Loader2 className="h-5 w-5 animate-spin text-amber-400" />
+                <span>Pobieranie szablonów z Firestore...</span>
+              </div>
+            ) : (
+              <>
+                {canSaveCurrentAsTemplate && (
                   <button
-                    key={tpl.id}
                     type="button"
-                    onClick={() => {
-                      onLoadTemplate(tpl.project);
-                      onClose();
-                    }}
-                    className="group w-full rounded-xl border border-zinc-800 bg-zinc-900/75 p-3.5 text-left hover:border-amber-500/70 hover:bg-zinc-900 transition-colors cursor-pointer"
+                    onClick={onSaveCurrentAsTemplate}
+                    className="flex w-full min-h-[42px] items-center justify-center gap-2 rounded-xl border border-amber-500/50 bg-amber-500/12 px-3 text-xs font-semibold text-amber-300 hover:bg-amber-500/20 transition-colors cursor-pointer"
                   >
-                    <div className="flex items-start justify-between gap-2">
-                      <div className="min-w-0">
-                        <div className="text-[11px] font-medium text-amber-400">
-                          {tpl.category}
-                        </div>
-                        <div className="mt-0.5 text-sm font-semibold text-zinc-100 group-hover:text-white">
-                          {tpl.name}
-                        </div>
-                        <div className="mt-1 text-xs text-zinc-400 leading-relaxed">
-                          {tpl.subtitle}
-                        </div>
-                        <div className="mt-2 text-[11px] text-zinc-500 font-mono-num">
-                          {tpl.project.parts.length} elem. · {tpl.project.fasteners.length} wkrętów
+                    <BookmarkPlus className="h-4 w-4" />
+                    <span>Zapisz obecny projekt jako szablon</span>
+                  </button>
+                )}
+
+                {/* Category Filter Strip */}
+                <div className="flex items-center gap-1 overflow-x-auto cad-scroll pb-1">
+                  {TEMPLATE_CATEGORIES.map((cat) => (
+                    <button
+                      key={cat.id}
+                      type="button"
+                      onClick={() => setTemplateCat(cat.id)}
+                      className={`rounded-lg px-2.5 py-1.5 text-[11px] font-medium whitespace-nowrap shrink-0 cursor-pointer transition-colors ${
+                        templateCat === cat.id
+                          ? 'bg-amber-500 text-zinc-950 font-semibold'
+                          : 'border border-zinc-800 bg-zinc-900 text-zinc-400 hover:text-zinc-100'
+                      }`}
+                    >
+                      {cat.label}
+                    </button>
+                  ))}
+                </div>
+
+                {templates.length === 0 ? (
+                  <div className="rounded-xl border border-zinc-800 bg-zinc-900/60 p-5 text-center space-y-3">
+                    <p className="text-xs text-zinc-400">
+                      Brak zapisanych szablonów w Twojej bazie Firestore.
+                    </p>
+                    <button
+                      type="button"
+                      onClick={onRestoreStarterTemplates}
+                      className="inline-flex min-h-[38px] items-center justify-center gap-1.5 rounded-xl border border-zinc-700 bg-zinc-900 px-3.5 text-xs font-medium text-zinc-100 hover:border-amber-500/60 hover:text-amber-300 transition-colors cursor-pointer"
+                    >
+                      <RotateCcw className="h-3.5 w-3.5" />
+                      <span>Załaduj szablony startowe do Firestore</span>
+                    </button>
+                  </div>
+                ) : filteredTemplates.length === 0 ? (
+                  <div className="py-8 text-center text-xs text-zinc-500">
+                    Brak szablonów w wybranej kategorii.
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    {filteredTemplates.map((tpl) => (
+                      <div
+                        key={tpl.id}
+                        className="group flex items-start gap-1.5 rounded-xl border border-zinc-800 bg-zinc-900/75 p-3 hover:border-amber-500/70 hover:bg-zinc-900 transition-colors"
+                      >
+                        <button
+                          type="button"
+                          onClick={() => {
+                            onLoadTemplate(tpl.project);
+                            onClose();
+                          }}
+                          className="flex-1 min-w-0 text-left cursor-pointer"
+                        >
+                          <div className="text-[11px] font-medium text-amber-400">
+                            {tpl.category}
+                          </div>
+                          <div className="mt-0.5 text-sm font-semibold text-zinc-100 group-hover:text-white truncate">
+                            {tpl.name}
+                          </div>
+                          <div className="mt-1 text-xs text-zinc-400 leading-relaxed">
+                            {tpl.subtitle}
+                          </div>
+                          <div className="mt-2 text-[11px] text-zinc-500 font-mono-num">
+                            {tpl.project.parts.length} elem. · {tpl.project.fasteners.length} wkrętów
+                          </div>
+                        </button>
+                        <div className="flex flex-col items-center gap-1 shrink-0">
+                          <button
+                            type="button"
+                            onClick={() => onDeleteTemplate(tpl.id)}
+                            title="Usuń szablon z Firestore"
+                            aria-label={`Usuń szablon ${tpl.name}`}
+                            className="flex h-8 w-8 items-center justify-center rounded-lg text-zinc-500 hover:bg-red-500/15 hover:text-red-400 transition-colors cursor-pointer"
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </button>
+                          <ChevronRight className="h-4 w-4 text-zinc-600 group-hover:text-amber-400" />
                         </div>
                       </div>
-                      <ChevronRight className="h-4 w-4 text-zinc-600 group-hover:text-amber-400 mt-1 shrink-0" />
-                    </div>
-                  </button>
-                ))}
-              </div>
-            </>
+                    ))}
+                  </div>
+                )}
+              </>
+            )
           ) : parts.length === 0 ? (
             <div className="py-10 text-center text-xs text-zinc-500">
               Brak elementów na scenie. Kliknij „Dodaj” lub „Szafka”, aby rozpocząć projekt.

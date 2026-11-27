@@ -1,0 +1,234 @@
+{
+  "entities": {
+    "UserWorkspaceProfile": {
+      "title": "UserWorkspaceProfile",
+      "description": "Private workspace owner anchor document for Master Gate relational verification. Stores display name without exposing PII to other users.",
+      "type": "object",
+      "properties": {
+        "ownerId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Firebase Auth UID of the workspace owner."
+        },
+        "displayName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80,
+          "description": "User display name shown in the cloud account menu."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when workspace profile was created (immutable)."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when workspace profile was last updated."
+        }
+      },
+      "required": ["ownerId", "displayName", "createdAt", "updatedAt"]
+    },
+    "FurnitureProjectDoc": {
+      "title": "FurnitureProjectDoc",
+      "description": "Cloud-persisted 3D carpentry project including parts, fasteners, room layout, and parametric cabinet configs stored as native Firestore maps and lists.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Unique project identifier matching the document ID."
+        },
+        "ownerId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Firebase Auth UID of the project owner (immutable)."
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80,
+          "description": "Human-readable project name."
+        },
+        "parts": {
+          "type": "array",
+          "description": "List of 3D furniture part maps (max 400 parts)."
+        },
+        "fasteners": {
+          "type": "array",
+          "description": "List of carpentry fastener maps (max 2000 fasteners)."
+        },
+        "room": {
+          "type": "object",
+          "description": "Optional room geometry, openings, obstacles, and finishes map (or null)."
+        },
+        "cabinetConfigs": {
+          "type": "object",
+          "description": "Optional map of parametric cabinet group IDs to ParametricCabinetConfig maps (or null)."
+        },
+        "clientUpdatedAt": {
+          "type": "number",
+          "description": "Client-side epoch millisecond timestamp for local/cloud sync ordering."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when project was created (immutable)."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when project was last updated."
+        }
+      },
+      "required": [
+        "id",
+        "ownerId",
+        "name",
+        "parts",
+        "fasteners",
+        "clientUpdatedAt",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "FurnitureTemplateDoc": {
+      "title": "FurnitureTemplateDoc",
+      "description": "Cloud-stored starter or user-saved reusable 3D furniture/DIY project template fetched directly from Firestore.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Unique template identifier matching the document ID."
+        },
+        "ownerId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Firebase Auth UID of the template owner (immutable)."
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80,
+          "description": "Template display title."
+        },
+        "subtitle": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160,
+          "description": "Dimensions and material summary subtitle."
+        },
+        "category": {
+          "type": "string",
+          "enum": ["Ogród i DIY", "Magazynowe i OSB", "Kuchenne", "Domowe", "Warsztat"],
+          "description": "Template category tab."
+        },
+        "project": {
+          "type": "object",
+          "description": "Native Firestore map containing template project name, parts list, fasteners list, optional room and cabinetConfigs."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when template was created (immutable)."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when template was last updated."
+        }
+      },
+      "required": [
+        "id",
+        "ownerId",
+        "name",
+        "subtitle",
+        "category",
+        "project",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "WorkspaceSettingsDoc": {
+      "title": "WorkspaceSettingsDoc",
+      "description": "User-owned warehouse materials catalog, price overrides, and commercial quote settings.",
+      "type": "object",
+      "properties": {
+        "ownerId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Firebase Auth UID of the settings owner (immutable)."
+        },
+        "materialsConfig": {
+          "type": "object",
+          "description": "Custom materials list (max 100) and built-in material price/dimension overrides."
+        },
+        "quoteSettings": {
+          "type": "object",
+          "description": "Commercial carpentry quote rates (cutting, banding, hardware, margin, VAT)."
+        },
+        "clientUpdatedAt": {
+          "type": "number",
+          "description": "Client-side epoch millisecond timestamp for local/cloud sync ordering."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when settings document was created (immutable)."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when settings document was last updated."
+        }
+      },
+      "required": [
+        "ownerId",
+        "materialsConfig",
+        "quoteSettings",
+        "clientUpdatedAt",
+        "createdAt",
+        "updatedAt"
+      ]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": {
+        "$ref": "#/entities/UserWorkspaceProfile"
+      },
+      "description": "Private workspace anchor document per authenticated Google user."
+    },
+    "/users/{userId}/projects/{projectId}": {
+      "schema": {
+        "$ref": "#/entities/FurnitureProjectDoc"
+      },
+      "description": "Private 3D furniture projects belonging to the authenticated user."
+    },
+    "/users/{userId}/templates/{templateId}": {
+      "schema": {
+        "$ref": "#/entities/FurnitureTemplateDoc"
+      },
+      "description": "Starter and custom 3D furniture/DIY project templates stored and fetched from Firestore."
+    },
+    "/users/{userId}/settings/{settingId}": {
+      "schema": {
+        "$ref": "#/entities/WorkspaceSettingsDoc"
+      },
+      "description": "Private workspace settings document (settingId = 'workspace') storing custom materials, prices, and quote configuration."
+    }
+  }
+}

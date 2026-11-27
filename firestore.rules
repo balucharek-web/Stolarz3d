@@ -1,0 +1,375 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Global Safety Net — default deny everything unless explicitly matched below
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // ==================== Primitives ====================
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerifiedUser() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    // Master Gate: verify parent workspace anchor exists and belongs to the signed-in user
+    function hasWorkspaceProfile(userId) {
+      return exists(/databases/$(database)/documents/users/$(userId)) &&
+        get(/databases/$(database)/documents/users/$(userId)).data.ownerId == request.auth.uid;
+    }
+
+    // ==================== Validation Blueprints ====================
+    function isValidUserProfile(data, userId) {
+      return data.keys().hasAll(['ownerId', 'displayName', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly(['ownerId', 'displayName', 'createdAt', 'updatedAt']) &&
+        isValidId(data.ownerId) &&
+        data.ownerId == request.auth.uid &&
+        data.ownerId == userId &&
+        data.displayName is string &&
+        data.displayName.size() >= 1 &&
+        data.displayName.size() <= 80 &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidProject(data, projectId) {
+      return data.keys().hasAll([
+          'id',
+          'ownerId',
+          'name',
+          'parts',
+          'fasteners',
+          'clientUpdatedAt',
+          'createdAt',
+          'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'id',
+          'ownerId',
+          'name',
+          'parts',
+          'fasteners',
+          'room',
+          'cabinetConfigs',
+          'clientUpdatedAt',
+          'createdAt',
+          'updatedAt'
+        ]) &&
+        isValidId(data.id) &&
+        data.id.size() <= 80 &&
+        data.id == projectId &&
+        isValidId(data.ownerId) &&
+        data.ownerId == request.auth.uid &&
+        data.name is string &&
+        data.name.size() >= 1 &&
+        data.name.size() <= 80 &&
+        data.parts is list &&
+        data.parts.size() <= 400 &&
+        (data.parts.size() == 0 || data.parts[0] is map) &&
+        data.fasteners is list &&
+        data.fasteners.size() <= 2000 &&
+        (data.fasteners.size() == 0 || data.fasteners[0] is map) &&
+        (!('room' in data) || data.room == null || data.room is map) &&
+        (!('cabinetConfigs' in data) || data.cabinetConfigs == null || data.cabinetConfigs is map) &&
+        data.clientUpdatedAt is number &&
+        data.clientUpdatedAt >= 0 &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidTemplatePayload(proj) {
+      return proj is map &&
+        proj.keys().hasAll(['id', 'name', 'parts', 'fasteners']) &&
+        proj.keys().hasOnly(['id', 'name', 'parts', 'fasteners', 'room', 'cabinetConfigs']) &&
+        isValidId(proj.id) &&
+        proj.id.size() <= 80 &&
+        proj.name is string &&
+        proj.name.size() >= 1 &&
+        proj.name.size() <= 80 &&
+        proj.parts is list &&
+        proj.parts.size() <= 400 &&
+        (proj.parts.size() == 0 || proj.parts[0] is map) &&
+        proj.fasteners is list &&
+        proj.fasteners.size() <= 2000 &&
+        (proj.fasteners.size() == 0 || proj.fasteners[0] is map) &&
+        (!('room' in proj) || proj.room == null || proj.room is map) &&
+        (!('cabinetConfigs' in proj) || proj.cabinetConfigs == null || proj.cabinetConfigs is map);
+    }
+
+    function isValidTemplate(data, templateId) {
+      return data.keys().hasAll([
+          'id',
+          'ownerId',
+          'name',
+          'subtitle',
+          'category',
+          'project',
+          'createdAt',
+          'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'id',
+          'ownerId',
+          'name',
+          'subtitle',
+          'category',
+          'project',
+          'createdAt',
+          'updatedAt'
+        ]) &&
+        isValidId(data.id) &&
+        data.id.size() <= 80 &&
+        data.id == templateId &&
+        isValidId(data.ownerId) &&
+        data.ownerId == request.auth.uid &&
+        data.name is string &&
+        data.name.size() >= 1 &&
+        data.name.size() <= 80 &&
+        data.subtitle is string &&
+        data.subtitle.size() >= 1 &&
+        data.subtitle.size() <= 160 &&
+        data.category is string &&
+        data.category in ['Ogród i DIY', 'Magazynowe i OSB', 'Kuchenne', 'Domowe', 'Warsztat'] &&
+        isValidTemplatePayload(data.project) &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidMaterialsConfig(cfg) {
+      return cfg is map &&
+        cfg.keys().hasAll(['customMaterials', 'builtInOverrides']) &&
+        cfg.keys().hasOnly(['customMaterials', 'builtInOverrides']) &&
+        cfg.customMaterials is list &&
+        cfg.customMaterials.size() <= 100 &&
+        (cfg.customMaterials.size() == 0 || cfg.customMaterials[0] is map) &&
+        cfg.builtInOverrides is map &&
+        cfg.builtInOverrides.size() <= 60;
+    }
+
+    function isValidWorkspaceSettings(data) {
+      return data.keys().hasAll([
+          'ownerId',
+          'materialsConfig',
+          'quoteSettings',
+          'clientUpdatedAt',
+          'createdAt',
+          'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'ownerId',
+          'materialsConfig',
+          'quoteSettings',
+          'clientUpdatedAt',
+          'createdAt',
+          'updatedAt'
+        ]) &&
+        isValidId(data.ownerId) &&
+        data.ownerId == request.auth.uid &&
+        isValidMaterialsConfig(data.materialsConfig) &&
+        data.quoteSettings is map &&
+        data.quoteSettings.size() <= 30 &&
+        data.clientUpdatedAt is number &&
+        data.clientUpdatedAt >= 0 &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    // ==================== Collection Rules ====================
+
+    // 1. Workspace Owner Anchor (/users/{userId})
+    match /users/{userId} {
+      allow get: if isValidId(userId) &&
+        isOwner(userId) &&
+        (resource == null || existing().ownerId == request.auth.uid);
+      allow list: if false;
+
+      allow create: if isVerifiedUser() &&
+        isValidId(userId) &&
+        isOwner(userId) &&
+        isValidUserProfile(incoming(), userId) &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time;
+
+      allow update: if isVerifiedUser() &&
+        isValidId(userId) &&
+        isOwner(userId) &&
+        isValidUserProfile(incoming(), userId) &&
+        incoming().ownerId == existing().ownerId &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time &&
+        (
+          // Action: RefreshProfile
+          incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'updatedAt'])
+        );
+
+      allow delete: if false;
+
+      // 2. User Furniture Projects (/users/{userId}/projects/{projectId})
+      match /projects/{projectId} {
+        allow get: if isValidId(userId) &&
+          isValidId(projectId) &&
+          isOwner(userId) &&
+          (resource == null || existing().ownerId == request.auth.uid) &&
+          hasWorkspaceProfile(userId);
+
+        // Cost-optimized list query: enforces ownerId directly on resource.data without get()
+        allow list: if isOwner(userId) && existing().ownerId == request.auth.uid;
+
+        allow create: if isVerifiedUser() &&
+          isValidId(userId) &&
+          isValidId(projectId) &&
+          isOwner(userId) &&
+          isValidProject(incoming(), projectId) &&
+          incoming().createdAt == request.time &&
+          incoming().updatedAt == request.time &&
+          hasWorkspaceProfile(userId);
+
+        allow update: if isVerifiedUser() &&
+          isValidId(userId) &&
+          isValidId(projectId) &&
+          isOwner(userId) &&
+          isValidProject(incoming(), projectId) &&
+          incoming().ownerId == existing().ownerId &&
+          incoming().id == existing().id &&
+          incoming().createdAt == existing().createdAt &&
+          incoming().updatedAt == request.time &&
+          hasWorkspaceProfile(userId) &&
+          (
+            // Action: SaveProject
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'name',
+              'parts',
+              'fasteners',
+              'room',
+              'cabinetConfigs',
+              'clientUpdatedAt',
+              'updatedAt'
+            ]) ||
+            // Action: RenameProject
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'name',
+              'clientUpdatedAt',
+              'updatedAt'
+            ])
+          );
+
+        allow delete: if isVerifiedUser() &&
+          isValidId(userId) &&
+          isValidId(projectId) &&
+          isOwner(userId) &&
+          existing().ownerId == request.auth.uid &&
+          hasWorkspaceProfile(userId);
+      }
+
+      // 3. Starter & Custom 3D Templates (/users/{userId}/templates/{templateId})
+      match /templates/{templateId} {
+        allow get: if isValidId(userId) &&
+          isValidId(templateId) &&
+          isOwner(userId) &&
+          (resource == null || existing().ownerId == request.auth.uid) &&
+          hasWorkspaceProfile(userId);
+
+        allow list: if isOwner(userId) && existing().ownerId == request.auth.uid;
+
+        allow create: if isVerifiedUser() &&
+          isValidId(userId) &&
+          isValidId(templateId) &&
+          isOwner(userId) &&
+          isValidTemplate(incoming(), templateId) &&
+          incoming().createdAt == request.time &&
+          incoming().updatedAt == request.time &&
+          hasWorkspaceProfile(userId);
+
+        allow update: if isVerifiedUser() &&
+          isValidId(userId) &&
+          isValidId(templateId) &&
+          isOwner(userId) &&
+          isValidTemplate(incoming(), templateId) &&
+          incoming().ownerId == existing().ownerId &&
+          incoming().id == existing().id &&
+          incoming().createdAt == existing().createdAt &&
+          incoming().updatedAt == request.time &&
+          hasWorkspaceProfile(userId) &&
+          (
+            // Action: UpdateTemplate
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'name',
+              'subtitle',
+              'category',
+              'project',
+              'updatedAt'
+            ])
+          );
+
+        allow delete: if isVerifiedUser() &&
+          isValidId(userId) &&
+          isValidId(templateId) &&
+          isOwner(userId) &&
+          existing().ownerId == request.auth.uid &&
+          hasWorkspaceProfile(userId);
+      }
+
+      // 4. Workspace Settings (/users/{userId}/settings/{settingId})
+      match /settings/{settingId} {
+        allow get: if isValidId(userId) &&
+          settingId == 'workspace' &&
+          isOwner(userId) &&
+          (resource == null || existing().ownerId == request.auth.uid) &&
+          hasWorkspaceProfile(userId);
+
+        allow list: if false;
+
+        allow create: if isVerifiedUser() &&
+          isValidId(userId) &&
+          settingId == 'workspace' &&
+          isOwner(userId) &&
+          isValidWorkspaceSettings(incoming()) &&
+          incoming().createdAt == request.time &&
+          incoming().updatedAt == request.time &&
+          hasWorkspaceProfile(userId);
+
+        allow update: if isVerifiedUser() &&
+          isValidId(userId) &&
+          settingId == 'workspace' &&
+          isOwner(userId) &&
+          isValidWorkspaceSettings(incoming()) &&
+          incoming().ownerId == existing().ownerId &&
+          incoming().createdAt == existing().createdAt &&
+          incoming().updatedAt == request.time &&
+          hasWorkspaceProfile(userId) &&
+          (
+            // Action: SaveWorkspaceSettings
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'materialsConfig',
+              'quoteSettings',
+              'clientUpdatedAt',
+              'updatedAt'
+            ])
+          );
+
+        allow delete: if false;
+      }
+    }
+  }
+}

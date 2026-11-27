@@ -4,15 +4,36 @@ import {
   CheckSquare,
   ChevronLeft,
   ChevronRight,
+  Cloud,
+  CloudOff,
   Focus,
-  HelpCircle,
   Home,
   LayoutPanelTop,
-  PenTool,
   Plus,
+  RefreshCw,
   Undo2,
   X,
 } from 'lucide-react';
+import {
+  onAuthStateChanged,
+  signInWithPopup,
+  signOut,
+  type User,
+} from 'firebase/auth';
+import { auth, googleProvider } from './firebase';
+import {
+  deleteCloudProject,
+  deleteCloudTemplate,
+  ensureWorkspaceProfile,
+  sanitizeFirestoreId,
+  saveCloudProject,
+  saveCloudTemplate,
+  saveCloudWorkspaceSettings,
+  seedStarterTemplatesToCloud,
+  subscribeCloudProjects,
+  subscribeCloudSettings,
+  subscribeCloudTemplates,
+} from './engine/cloudSync';
 import {
   AlignMode,
   CameraPreset,
@@ -34,7 +55,10 @@ import {
   buildAssemblyPlan,
   type AssemblyGranularity,
 } from './engine/assembly';
-import { FURNITURE_TEMPLATES } from './data/templates';
+import {
+  FURNITURE_TEMPLATES,
+  type FurnitureTemplateMeta,
+} from './data/templates';
 import {
   autoDetectJointFasteners,
   getProjectDimensionsMm,
@@ -101,6 +125,10 @@ import { ViewCube } from './components/ViewCube';
 import { PWAInstallButton, PWAStatusOverlays } from './components/PWAControls';
 import { StartWorkspaceModal } from './components/StartWorkspaceModal';
 import { ShortcutsHelpModal } from './components/ShortcutsHelpModal';
+import {
+  CloudAccountModal,
+  type CloudSyncStatus,
+} from './components/CloudAccountModal';
 import { usePWAUpdate } from './hooks/usePWAUpdate';
 
 const SNAP_STEPS = [10, 5, 25, 0];
@@ -224,6 +252,30 @@ export default function App() {
   const [nudgePadOpen, setNudgePadOpen] = useState<boolean>(false);
   const [toastMsg, setToastMsg] = useState<string | null>(null);
 
+  // Firebase Cloud Auth & Real-Time Sync State
+  const [cloudModalOpen, setCloudModalOpen] = useState<boolean>(false);
+  const [cloudUser, setCloudUser] = useState<User | null>(null);
+  const [cloudAuthReady, setCloudAuthReady] = useState<boolean>(false);
+  const [cloudSyncStatus, setCloudSyncStatus] = useState<CloudSyncStatus>('signed_out');
+  const [cloudSyncError, setCloudSyncError] = useState<string | null>(null);
+  const [cloudProjectsCount, setCloudProjectsCount] = useState<number>(0);
+  const [cloudTemplates, setCloudTemplates] = useState<FurnitureTemplateMeta[]>([]);
+  const [cloudTemplatesLoading, setCloudTemplatesLoading] = useState<boolean>(false);
+  const [lastCloudSyncedAt, setLastCloudSyncedAt] = useState<number | null>(null);
+
+  const cloudKnownIdsRef = useRef<Set<string>>(new Set());
+  const cloudSyncedProjectStampRef = useRef<Map<string, number>>(new Map());
+  const cloudSettingsStampRef = useRef<number>(0);
+  const cloudInitialMergeDoneRef = useRef<boolean>(false);
+  const cloudProfileReadyRef = useRef<boolean>(false);
+  const cloudTemplatesSeededRef = useRef<boolean>(false);
+  const projectStoreRef = useRef<ProjectStoreState>(projectStore);
+  projectStoreRef.current = projectStore;
+  const materialsConfigRef = useRef<MaterialsCatalogConfig>(materialsConfig);
+  materialsConfigRef.current = materialsConfig;
+  const quoteSettingsRef = useRef<QuoteSettings>(quoteSettings);
+  quoteSettingsRef.current = quoteSettings;
+
   const handleChangeUiMode = useCallback((next: UiMode) => {
     setUiMode(next);
     try {
@@ -270,6 +322,404 @@ export default function App() {
   useEffect(() => {
     saveQuoteSettings(quoteSettings);
   }, [quoteSettings]);
+
+  const formatCloudError = useCallback((err: unknown): string => {
+    const raw = err instanceof Error ? err.message : String(err);
+    if (raw.includes('Quota exceeded')) {
+      return 'Przekroczono dzienny darmowy limit odczytów/zapisów Firebase (Spark). Limit odnowi się jutro.';
+    }
+    return raw;
+  }, []);
+
+  // Listen to Firebase Authentication state
+  useEffect(() => {
+    const unsub = onAuthStateChanged(auth, (user) => {
+      setCloudUser(user);
+      setCloudAuthReady(true);
+      if (!user) {
+        cloudKnownIdsRef.current = new Set();
+        cloudSyncedProjectStampRef.current = new Map();
+        cloudSettingsStampRef.current = 0;
+        cloudInitialMergeDoneRef.current = false;
+        cloudProfileReadyRef.current = false;
+        cloudTemplatesSeededRef.current = false;
+        setCloudProjectsCount(0);
+        setCloudTemplates([]);
+        setCloudTemplatesLoading(false);
+        setCloudSyncStatus('signed_out');
+        setCloudSyncError(null);
+      }
+    });
+    return () => unsub();
+  }, []);
+
+  // Subscribe to Firestore projects, settings & templates when signed in
+  useEffect(() => {
+    if (!cloudAuthReady || !cloudUser) return;
+
+    let cancelled = false;
+    let unsubProjects: (() => void) | null = null;
+    let unsubSettings: (() => void) | null = null;
+    let unsubTemplates: (() => void) | null = null;
+
+    const uid = cloudUser.uid;
+    setCloudSyncStatus('connecting');
+    setCloudSyncError(null);
+    setCloudTemplatesLoading(true);
+    cloudInitialMergeDoneRef.current = false;
+    cloudProfileReadyRef.current = false;
+    cloudTemplatesSeededRef.current = false;
+
+    void (async () => {
+      try {
+        await ensureWorkspaceProfile(cloudUser);
+        if (cancelled) return;
+        cloudProfileReadyRef.current = true;
+
+        unsubProjects = subscribeCloudProjects(
+          uid,
+          (cloudProjects, cloudIds) => {
+            if (cancelled) return;
+            cloudKnownIdsRef.current = cloudIds;
+            setCloudProjectsCount(cloudProjects.length);
+            setLastCloudSyncedAt(Date.now());
+            setCloudSyncStatus('synced');
+            setCloudSyncError(null);
+
+            for (const cp of cloudProjects) {
+              cloudSyncedProjectStampRef.current.set(cp.id, cp.updatedAt ?? 0);
+            }
+
+            const localNow = projectStoreRef.current.projects;
+            const toUploadOnFirstSync: FurnitureProject[] = [];
+
+            if (!cloudInitialMergeDoneRef.current) {
+              cloudInitialMergeDoneRef.current = true;
+              const cloudById = new Map(cloudProjects.map((p) => [p.id, p]));
+              for (const lp of localNow) {
+                const safeId = sanitizeFirestoreId(lp.id);
+                const hasContent =
+                  lp.parts.length > 0 ||
+                  Boolean(lp.room?.enabled) ||
+                  lp.name !== 'Nowy projekt';
+                const cloudMatch = cloudById.get(safeId);
+                const localTs = lp.updatedAt ?? 0;
+                const cloudTs = cloudMatch?.updatedAt ?? 0;
+                if (hasContent && (!cloudMatch || localTs > cloudTs + 1500)) {
+                  toUploadOnFirstSync.push({ ...lp, id: safeId, updatedAt: localTs || Date.now() });
+                }
+              }
+            }
+
+            setProjectStore((prev) => {
+              const mergedMap = new Map<string, FurnitureProject>();
+              for (const lp of prev.projects) {
+                const safeId = sanitizeFirestoreId(lp.id);
+                mergedMap.set(safeId, safeId === lp.id ? lp : { ...lp, id: safeId });
+              }
+              let changed = false;
+              for (const cp of cloudProjects) {
+                const existingLocal = mergedMap.get(cp.id);
+                if (!existingLocal || (cp.updatedAt ?? 0) > (existingLocal.updatedAt ?? 0)) {
+                  mergedMap.set(cp.id, cp);
+                  changed = true;
+                }
+              }
+              if (!changed && prev.projects.length === mergedMap.size) {
+                return prev;
+              }
+              const mergedList = Array.from(mergedMap.values()).sort(
+                (a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0)
+              );
+              const safeActiveId = sanitizeFirestoreId(prev.activeProjectId);
+              const activeId = mergedList.some((p) => p.id === safeActiveId)
+                ? safeActiveId
+                : mergedList[0]?.id ?? prev.activeProjectId;
+              return { activeProjectId: activeId, projects: mergedList };
+            });
+
+            if (toUploadOnFirstSync.length > 0) {
+              setCloudSyncStatus('syncing');
+              void Promise.all(
+                toUploadOnFirstSync.map(async (proj) => {
+                  const savedId = await saveCloudProject(uid, proj, cloudKnownIdsRef.current);
+                  cloudSyncedProjectStampRef.current.set(savedId, proj.updatedAt ?? Date.now());
+                })
+              )
+                .then(() => {
+                  if (!cancelled) {
+                    setCloudSyncStatus('synced');
+                    setLastCloudSyncedAt(Date.now());
+                  }
+                })
+                .catch((err) => {
+                  if (!cancelled) {
+                    setCloudSyncStatus('error');
+                    setCloudSyncError(formatCloudError(err));
+                  }
+                });
+            }
+          },
+          (err) => {
+            if (cancelled) return;
+            setCloudSyncStatus('error');
+            setCloudSyncError(formatCloudError(err));
+          }
+        );
+
+        unsubSettings = subscribeCloudSettings(
+          uid,
+          (remote) => {
+            if (cancelled) return;
+            if (!remote) {
+              const localMat = materialsConfigRef.current;
+              const hasCustom =
+                localMat.customMaterials.length > 0 ||
+                Object.keys(localMat.builtInOverrides || {}).length > 0;
+              if (hasCustom) {
+                const ts = Date.now();
+                cloudSettingsStampRef.current = ts;
+                void saveCloudWorkspaceSettings(uid, localMat, quoteSettingsRef.current, ts).catch(
+                  (err) => {
+                    if (!cancelled) {
+                      setCloudSyncStatus('error');
+                      setCloudSyncError(formatCloudError(err));
+                    }
+                  }
+                );
+              }
+              return;
+            }
+
+            if (remote.clientUpdatedAt > cloudSettingsStampRef.current) {
+              cloudSettingsStampRef.current = remote.clientUpdatedAt;
+              syncCatalogMaterials(remote.materialsConfig);
+              saveMaterialsConfig(remote.materialsConfig);
+              setMaterialsConfig(remote.materialsConfig);
+              setMaterialsVersion((v) => v + 1);
+              setQuoteSettings(remote.quoteSettings);
+            }
+          },
+          (err) => {
+            if (cancelled) return;
+            setCloudSyncStatus('error');
+            setCloudSyncError(formatCloudError(err));
+          }
+        );
+
+        unsubTemplates = subscribeCloudTemplates(
+          uid,
+          (tpls) => {
+            if (cancelled) return;
+            if (tpls.length === 0 && !cloudTemplatesSeededRef.current) {
+              cloudTemplatesSeededRef.current = true;
+              setCloudTemplatesLoading(true);
+              void seedStarterTemplatesToCloud(uid, FURNITURE_TEMPLATES).catch((err) => {
+                if (!cancelled) {
+                  setCloudTemplatesLoading(false);
+                  setCloudSyncStatus('error');
+                  setCloudSyncError(formatCloudError(err));
+                }
+              });
+              return;
+            }
+            setCloudTemplates(tpls);
+            setCloudTemplatesLoading(false);
+          },
+          (err) => {
+            if (cancelled) return;
+            setCloudTemplatesLoading(false);
+            setCloudSyncStatus('error');
+            setCloudSyncError(formatCloudError(err));
+          }
+        );
+      } catch (err) {
+        if (!cancelled) {
+          setCloudTemplatesLoading(false);
+          setCloudSyncStatus('error');
+          setCloudSyncError(formatCloudError(err));
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+      unsubProjects?.();
+      unsubSettings?.();
+      unsubTemplates?.();
+    };
+  }, [cloudAuthReady, cloudUser, formatCloudError]);
+
+  // Debounced background auto-save of the active project to Firestore
+  useEffect(() => {
+    if (!cloudUser || !cloudProfileReadyRef.current) return;
+    const safeId = sanitizeFirestoreId(project.id);
+    const projUpdatedAt = project.updatedAt ?? 0;
+    const lastSynced = cloudSyncedProjectStampRef.current.get(safeId) ?? 0;
+    if (projUpdatedAt <= lastSynced) return;
+    const isEmptyTransient =
+      project.parts.length === 0 &&
+      !project.room?.enabled &&
+      project.name === 'Nowy projekt' &&
+      !cloudKnownIdsRef.current.has(safeId);
+    if (isEmptyTransient) return;
+
+    const uid = cloudUser.uid;
+    const snapshot = project;
+    const timer = window.setTimeout(() => {
+      setCloudSyncStatus('syncing');
+      void saveCloudProject(uid, snapshot, cloudKnownIdsRef.current)
+        .then((savedId) => {
+          cloudSyncedProjectStampRef.current.set(savedId, snapshot.updatedAt ?? Date.now());
+          setCloudSyncStatus('synced');
+          setLastCloudSyncedAt(Date.now());
+          setCloudSyncError(null);
+        })
+        .catch((err) => {
+          setCloudSyncStatus('error');
+          setCloudSyncError(formatCloudError(err));
+        });
+    }, 1200);
+
+    return () => window.clearTimeout(timer);
+  }, [cloudUser, project, formatCloudError]);
+
+  // Debounced auto-save of quoteSettings to Firestore when signed in
+  const quoteHydratedRef = useRef(false);
+  useEffect(() => {
+    if (!quoteHydratedRef.current) {
+      quoteHydratedRef.current = true;
+      return;
+    }
+    if (!cloudUser || !cloudProfileReadyRef.current) return;
+    const uid = cloudUser.uid;
+    const ts = Date.now();
+    const timer = window.setTimeout(() => {
+      cloudSettingsStampRef.current = ts;
+      void saveCloudWorkspaceSettings(uid, materialsConfigRef.current, quoteSettings, ts)
+        .then(() => setLastCloudSyncedAt(Date.now()))
+        .catch((err) => {
+          setCloudSyncStatus('error');
+          setCloudSyncError(formatCloudError(err));
+        });
+    }, 800);
+    return () => window.clearTimeout(timer);
+  }, [cloudUser, quoteSettings, formatCloudError]);
+
+  const handleCloudSignInGoogle = useCallback(async () => {
+    setCloudSyncError(null);
+    try {
+      await signInWithPopup(auth, googleProvider);
+      showToast('Zalogowano przez Google — uruchamiam synchronizację');
+    } catch (err) {
+      const msg = formatCloudError(err);
+      setCloudSyncStatus('error');
+      setCloudSyncError(msg);
+      showToast('Nie udało się zalogować — sprawdź ustawienia konsoli Firebase');
+    }
+  }, [formatCloudError, showToast]);
+
+  const handleCloudSignOut = useCallback(async () => {
+    try {
+      await signOut(auth);
+      showToast('Wylogowano z chmury (projekty pozostają lokalnie)');
+    } catch (err) {
+      setCloudSyncError(formatCloudError(err));
+    }
+  }, [formatCloudError, showToast]);
+
+  const handleCloudForceUploadAll = useCallback(async () => {
+    if (!cloudUser) return;
+    const uid = cloudUser.uid;
+    setCloudSyncStatus('syncing');
+    setCloudSyncError(null);
+    try {
+      await ensureWorkspaceProfile(cloudUser);
+      cloudProfileReadyRef.current = true;
+      const toUpload = projectStoreRef.current.projects.filter(
+        (p) =>
+          p.parts.length > 0 ||
+          Boolean(p.room?.enabled) ||
+          p.name !== 'Nowy projekt' ||
+          projectStoreRef.current.projects.length === 1
+      );
+      for (const proj of toUpload) {
+        const savedId = await saveCloudProject(uid, proj, cloudKnownIdsRef.current);
+        cloudSyncedProjectStampRef.current.set(savedId, proj.updatedAt ?? Date.now());
+      }
+      const ts = Date.now();
+      cloudSettingsStampRef.current = ts;
+      await saveCloudWorkspaceSettings(
+        uid,
+        materialsConfigRef.current,
+        quoteSettingsRef.current,
+        ts
+      );
+      setCloudSyncStatus('synced');
+      setLastCloudSyncedAt(Date.now());
+      showToast(`Zapisano ${toUpload.length} proj. i katalog materiałów w chmurze`);
+    } catch (err) {
+      setCloudSyncStatus('error');
+      setCloudSyncError(formatCloudError(err));
+      showToast('Błąd zapisu do Firebase — sprawdź szczegóły w panelu Chmury');
+    }
+  }, [cloudUser, formatCloudError, showToast]);
+
+  const handleSaveCurrentAsTemplate = useCallback(async () => {
+    if (!cloudUser || project.parts.length === 0) return;
+    try {
+      await ensureWorkspaceProfile(cloudUser);
+      cloudProfileReadyRef.current = true;
+      const dims = getProjectDimensionsMm(project.parts);
+      const tpl: FurnitureTemplateMeta = {
+        id: `tpl_${Date.now()}_${Math.random().toString(36).slice(2, 5)}`,
+        name: project.name.trim() || 'Własny szablon 3D',
+        subtitle: `${dims.width} × ${dims.height} × ${dims.depth} mm · ${project.parts.length} elem.`,
+        category: 'Domowe',
+        project: structuredClone(project),
+      };
+      await saveCloudTemplate(cloudUser.uid, tpl);
+      setLastCloudSyncedAt(Date.now());
+      showToast(`Zapisano szablon „${tpl.name}” w Firestore`);
+    } catch (err) {
+      setCloudSyncStatus('error');
+      setCloudSyncError(formatCloudError(err));
+      showToast('Nie udało się zapisać szablonu w Firestore — sprawdź reguły w panelu Chmury');
+    }
+  }, [cloudUser, project, formatCloudError, showToast]);
+
+  const handleDeleteCloudTemplate = useCallback(
+    async (templateId: string) => {
+      if (!cloudUser) return;
+      try {
+        await deleteCloudTemplate(cloudUser.uid, templateId);
+        setLastCloudSyncedAt(Date.now());
+        showToast('Usunięto szablon z Firestore');
+      } catch (err) {
+        setCloudSyncStatus('error');
+        setCloudSyncError(formatCloudError(err));
+        showToast('Błąd usuwania szablonu z Firestore');
+      }
+    },
+    [cloudUser, formatCloudError, showToast]
+  );
+
+  const handleRestoreStarterTemplates = useCallback(async () => {
+    if (!cloudUser) return;
+    setCloudTemplatesLoading(true);
+    try {
+      await ensureWorkspaceProfile(cloudUser);
+      cloudProfileReadyRef.current = true;
+      await seedStarterTemplatesToCloud(cloudUser.uid, FURNITURE_TEMPLATES);
+      setLastCloudSyncedAt(Date.now());
+      showToast('Załadowano szablony startowe do Firestore');
+    } catch (err) {
+      setCloudTemplatesLoading(false);
+      setCloudSyncStatus('error');
+      setCloudSyncError(formatCloudError(err));
+      showToast('Nie udało się wgrać szablonów do Firestore — sprawdź reguły w panelu Chmury');
+    }
+  }, [cloudUser, formatCloudError, showToast]);
 
   const setActiveProjectDirect = useCallback((nextProject: FurnitureProject) => {
     setProjectStore((store) => ({
@@ -330,6 +780,8 @@ export default function App() {
       setSelectedPartId(null);
       setSelectedPartIds([]);
       setSelectedFastenerId(null);
+      setActiveGroupEditId(null);
+      setNudgePadOpen(false);
       setContextMenu(null);
       setInspectorOpen(false);
       setExplodedAmount(0);
@@ -357,6 +809,8 @@ export default function App() {
     setSelectedPartId(null);
     setSelectedPartIds([]);
     setSelectedFastenerId(null);
+    setActiveGroupEditId(null);
+    setNudgePadOpen(false);
     setContextMenu(null);
     setInspectorOpen(false);
     setExplodedAmount(0);
@@ -386,6 +840,8 @@ export default function App() {
       setSelectedPartId(null);
       setSelectedPartIds([]);
       setSelectedFastenerId(null);
+      setActiveGroupEditId(null);
+      setNudgePadOpen(false);
       setContextMenu(null);
       setInspectorOpen(false);
       setExplodedAmount(0);
@@ -422,23 +878,50 @@ export default function App() {
       setSelectedPartId(null);
       setSelectedPartIds([]);
       setSelectedFastenerId(null);
+      setActiveGroupEditId(null);
+      setNudgePadOpen(false);
       setContextMenu(null);
       showToast(`Zduplikowano: ${copy.name}`);
     },
     [projectStore.projects, showToast]
   );
 
-  const handleRenameProject = useCallback((id: string, name: string) => {
-    setProjectStore((store) => ({
-      ...store,
-      projects: store.projects.map((p) =>
-        p.id === id ? { ...p, name, updatedAt: Date.now() } : p
-      ),
-    }));
-  }, []);
+  const handleRenameProject = useCallback(
+    (id: string, name: string) => {
+      const trimmed = name.trim().slice(0, 80);
+      if (!trimmed) return;
+      const now = Date.now();
+      const target = projectStoreRef.current.projects.find((p) => p.id === id);
+      setProjectStore((store) => ({
+        ...store,
+        projects: store.projects.map((p) =>
+          p.id === id ? { ...p, name: trimmed, updatedAt: now } : p
+        ),
+      }));
+      if (
+        cloudUser &&
+        cloudProfileReadyRef.current &&
+        target &&
+        id !== projectStoreRef.current.activeProjectId
+      ) {
+        const updated = { ...target, name: trimmed, updatedAt: now };
+        void saveCloudProject(cloudUser.uid, updated, cloudKnownIdsRef.current)
+          .then((savedId) => {
+            cloudSyncedProjectStampRef.current.set(savedId, now);
+            setLastCloudSyncedAt(Date.now());
+          })
+          .catch((err) => {
+            setCloudSyncStatus('error');
+            setCloudSyncError(formatCloudError(err));
+          });
+      }
+    },
+    [cloudUser, formatCloudError]
+  );
 
   const handleDeleteProject = useCallback(
     (id: string) => {
+      if (projectStoreRef.current.projects.length <= 1) return;
       setProjectStore((store) => {
         if (store.projects.length <= 1) return store;
         const remaining = store.projects.filter((p) => p.id !== id);
@@ -446,16 +929,27 @@ export default function App() {
           store.activeProjectId === id ? remaining[0].id : store.activeProjectId;
         return { activeProjectId: nextActive, projects: remaining };
       });
+      if (cloudUser && cloudProfileReadyRef.current) {
+        const safeId = sanitizeFirestoreId(id);
+        cloudKnownIdsRef.current.delete(safeId);
+        cloudSyncedProjectStampRef.current.delete(safeId);
+        void deleteCloudProject(cloudUser.uid, safeId).catch((err) => {
+          setCloudSyncStatus('error');
+          setCloudSyncError(formatCloudError(err));
+        });
+      }
       setHistoryPast([]);
       setHistoryFuture([]);
       setSelectedPartId(null);
       setSelectedPartIds([]);
       setSelectedFastenerId(null);
+      setActiveGroupEditId(null);
+      setNudgePadOpen(false);
       setContextMenu(null);
       setInspectorOpen(false);
       showToast('Usunięto projekt');
     },
-    [showToast]
+    [cloudUser, formatCloudError, showToast]
   );
 
   const handleSelectPart = useCallback(
@@ -720,6 +1214,8 @@ export default function App() {
       position: [number, number, number]
     ) => {
       commitProject((prev) => {
+        const target = prev.parts.find((p) => p.id === id);
+        if (!target || target.locked) return prev;
         const nextParts = prev.parts.map((p) =>
           p.id === id
             ? {
@@ -1130,6 +1626,10 @@ export default function App() {
       if (!selectedPartId) return;
       const target = project.parts.find((p) => p.id === selectedPartId);
       if (!target) return;
+      if (target.locked) {
+        showToast('Element jest zablokowany — odblokuj, aby przesunąć');
+        return;
+      }
       handleTransformPart(
         target.id,
         [
@@ -1140,7 +1640,7 @@ export default function App() {
         target.rotation
       );
     },
-    [selectedPartId, project.parts, handleTransformPart]
+    [selectedPartId, project.parts, handleTransformPart, showToast]
   );
 
   // Group-aware 90-degree Y rotation around shared XZ center
@@ -1285,9 +1785,23 @@ export default function App() {
       saveMaterialsConfig(next);
       setMaterialsConfig(next);
       setMaterialsVersion((v) => v + 1);
+      if (cloudUser && cloudProfileReadyRef.current) {
+        const ts = Date.now();
+        cloudSettingsStampRef.current = ts;
+        setCloudSyncStatus('syncing');
+        void saveCloudWorkspaceSettings(cloudUser.uid, next, quoteSettingsRef.current, ts)
+          .then(() => {
+            setCloudSyncStatus('synced');
+            setLastCloudSyncedAt(Date.now());
+          })
+          .catch((err) => {
+            setCloudSyncStatus('error');
+            setCloudSyncError(formatCloudError(err));
+          });
+      }
       showToast('Zapisano katalog płyt i cennik z hurtowni');
     },
-    [showToast]
+    [cloudUser, formatCloudError, showToast]
   );
 
   const handleAlignSelected = useCallback(
@@ -1339,7 +1853,8 @@ export default function App() {
     cabinetBuilderOpen ||
     materialsModalOpen ||
     roomModalOpen ||
-    shortcutsOpen;
+    shortcutsOpen ||
+    cloudModalOpen;
 
   // Isolated Keyboard shortcuts for fast desktop CAD workflow
   useEffect(() => {
@@ -1355,6 +1870,10 @@ export default function App() {
       }
 
       if (e.key === 'Escape') {
+        if (cloudModalOpen) {
+          setCloudModalOpen(false);
+          return;
+        }
         if (shortcutsOpen) {
           setShortcutsOpen(false);
           return;
@@ -1396,6 +1915,8 @@ export default function App() {
         setSelectedPartId(null);
         setSelectedPartIds([]);
         setSelectedFastenerId(null);
+        setActiveGroupEditId(null);
+        setNudgePadOpen(false);
         setInspectorOpen(false);
         setLeftDrawerMode(null);
         return;
@@ -1504,6 +2025,7 @@ export default function App() {
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [
     anyModalOpen,
+    cloudModalOpen,
     shortcutsOpen,
     roomModalOpen,
     materialsModalOpen,
@@ -1775,6 +2297,33 @@ export default function App() {
 
         {/* Zone 3: Clean Primary Actions (spacious on mobile, complete on desktop) */}
         <div className="flex items-center gap-1 sm:gap-1.5 shrink-0">
+          <button
+            type="button"
+            onClick={() => setCloudModalOpen(true)}
+            className={`flex min-h-[34px] items-center gap-1.5 rounded-lg border px-2 sm:px-2.5 text-xs font-medium transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+              cloudSyncStatus === 'error'
+                ? 'border-red-500/60 bg-red-500/15 text-red-300 hover:bg-red-500/25'
+                : cloudUser
+                  ? 'border-emerald-500/50 bg-emerald-500/12 text-emerald-300 hover:bg-emerald-500/20'
+                  : 'border-zinc-700 bg-zinc-900 text-zinc-200 hover:border-sky-500/60 hover:text-sky-300'
+            }`}
+            title={
+              cloudUser
+                ? `Chmura Firebase: ${cloudUser.email || 'zalogowano'}`
+                : 'Zaloguj się przez Google, aby zapisywać projekty i materiały w chmurze Firebase'
+            }
+          >
+            {cloudSyncStatus === 'syncing' || cloudSyncStatus === 'connecting' ? (
+              <RefreshCw className="h-3.5 w-3.5 animate-spin shrink-0" />
+            ) : cloudUser ? (
+              <Cloud className="h-3.5 w-3.5 shrink-0" />
+            ) : (
+              <CloudOff className="h-3.5 w-3.5 shrink-0 text-zinc-400" />
+            )}
+            <span className="hidden sm:inline">
+              {cloudUser ? 'Chmura' : 'Zaloguj'}
+            </span>
+          </button>
           <PWAInstallButton
             needRefresh={pwa.needRefresh}
             checkStatus={pwa.checkStatus}
@@ -1806,18 +2355,6 @@ export default function App() {
           >
             <LayoutPanelTop className="h-3.5 w-3.5 shrink-0" />
             <span>Szafka</span>
-          </button>
-          <button
-            type="button"
-            onClick={() => {
-              setSketchEditingPart(null);
-              setSketchOpen(true);
-            }}
-            className="hidden lg:flex min-h-[34px] items-center gap-1 rounded-lg border border-zinc-700 bg-zinc-900 px-2.5 text-xs font-medium text-zinc-100 hover:border-amber-500/70 hover:text-amber-300 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
-            title="Narysuj własny kształt płyty 2D"
-          >
-            <PenTool className="h-3.5 w-3.5 text-amber-400 shrink-0" />
-            <span>Szkic 2D</span>
           </button>
           <button
             type="button"
@@ -2436,8 +2973,6 @@ export default function App() {
         }}
         onOpenShortcuts={() => setShortcutsOpen(true)}
         onSnapshot={handleSnapshot}
-        roomEnabled={Boolean(project.room?.enabled)}
-        onOpenRoom={() => setRoomModalOpen(true)}
       />
 
       {/* Contextual On-Demand Scene Outliner, Templates & Projects Drawer */}
@@ -2459,6 +2994,14 @@ export default function App() {
         onRenameProject={handleRenameProject}
         onDeleteProject={handleDeleteProject}
         onLoadTemplate={handleLoadTemplate}
+        templates={cloudTemplates}
+        templatesLoading={cloudTemplatesLoading}
+        isCloudSignedIn={Boolean(cloudUser)}
+        canSaveCurrentAsTemplate={project.parts.length > 0}
+        onOpenCloud={() => setCloudModalOpen(true)}
+        onSaveCurrentAsTemplate={() => void handleSaveCurrentAsTemplate()}
+        onDeleteTemplate={(id) => void handleDeleteCloudTemplate(id)}
+        onRestoreStarterTemplates={() => void handleRestoreStarterTemplates()}
         onSelectPart={(id) => {
           const p = project.parts.find((x) => x.id === id);
           if (p?.groupId) {
@@ -2665,9 +3208,13 @@ export default function App() {
         open={startModalOpen}
         projects={projectStore.projects}
         activeProjectId={projectStore.activeProjectId}
+        templates={cloudTemplates}
+        templatesLoading={cloudTemplatesLoading}
+        isCloudSignedIn={Boolean(cloudUser)}
         skipOnStartup={skipStartModal}
         onToggleSkipOnStartup={handleToggleSkipStartModal}
         onClose={() => setStartModalOpen(false)}
+        onOpenCloud={() => setCloudModalOpen(true)}
         onStartRoom={() => {
           ensureCleanProjectForStart('Projekt pomieszczenia');
           setStartModalOpen(false);
@@ -2729,6 +3276,23 @@ export default function App() {
       <ShortcutsHelpModal
         open={shortcutsOpen}
         onClose={() => setShortcutsOpen(false)}
+      />
+
+      <CloudAccountModal
+        open={cloudModalOpen}
+        user={cloudUser}
+        authReady={cloudAuthReady}
+        syncStatus={cloudSyncStatus}
+        syncError={cloudSyncError}
+        cloudProjectsCount={cloudProjectsCount}
+        cloudTemplatesCount={cloudTemplates.length}
+        localProjectsCount={projectStore.projects.length}
+        customMaterialsCount={materialsConfig.customMaterials.length}
+        lastSyncedAt={lastCloudSyncedAt}
+        onClose={() => setCloudModalOpen(false)}
+        onSignInGoogle={handleCloudSignInGoogle}
+        onSignOut={handleCloudSignOut}
+        onForceUploadAll={handleCloudForceUploadAll}
       />
 
       <PWAStatusOverlays

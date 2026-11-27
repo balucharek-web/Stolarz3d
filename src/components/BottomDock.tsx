@@ -21,7 +21,6 @@ import {
   Gamepad2,
   Group,
   HelpCircle,
-  Home,
   Layers,
   LayoutPanelTop,
   Lightbulb,
@@ -132,8 +131,6 @@ interface BottomDockProps {
   onOpenSketch2D?: () => void;
   onOpenShortcuts?: () => void;
   onSnapshot: () => void;
-  roomEnabled?: boolean;
-  onOpenRoom?: () => void;
 }
 
 const LIGHTING_LABELS: Record<StudioLighting, string> = {
@@ -216,8 +213,6 @@ export const BottomDock: React.FC<BottomDockProps> = ({
   onOpenSketch2D,
   onOpenShortcuts,
   onSnapshot,
-  roomEnabled = false,
-  onOpenRoom,
 }) => {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [mobileTab, setMobileTab] = useState<MobileSheetTab>('tools');
@@ -583,35 +578,40 @@ export const BottomDock: React.FC<BottomDockProps> = ({
               <div className="cad-scroll overflow-y-auto p-3.5 space-y-3">
                 {mobileTab === 'tools' && (
                   <>
-                    <div className="grid grid-cols-2 gap-2">
-                      {(
-                        [
-                          { id: 'rotate', label: 'Obróć 3D', icon: RotateCw },
-                          { id: 'resize', label: 'Rozciągnij', icon: Maximize2 },
-                          { id: 'screw', label: 'Wkręty / Minifix', icon: Wrench },
-                          { id: 'measure', label: 'Miarka 3D', icon: Ruler },
-                        ] as const
-                      ).map(({ id, label, icon: Icon }) => (
-                        <button
-                          key={id}
-                          type="button"
-                          onClick={() => {
-                            onChangeTool(id);
-                            setMobileMenuOpen(false);
-                          }}
-                          className={`flex min-h-[44px] items-center justify-center gap-2 rounded-xl border text-xs font-medium ${
-                            tool === id
-                              ? 'border-amber-500 bg-amber-500/20 text-amber-300 font-semibold'
-                              : 'border-zinc-800 bg-zinc-900 text-zinc-200'
-                          }`}
-                        >
-                          <Icon className="h-4 w-4 shrink-0" />
-                          <span>{label}</span>
-                        </button>
-                      ))}
-                    </div>
+                    {/* Show only CAD tools not already pinned on the 5-button bottom thumb bar */}
+                    {isExpert && (
+                      <div className="grid grid-cols-2 gap-2">
+                        {(
+                          [
+                            { id: 'rotate', label: 'Obróć 3D', icon: RotateCw },
+                            { id: 'measure', label: 'Miarka 3D', icon: Ruler },
+                          ] as const
+                        ).map(({ id, label, icon: Icon }) => (
+                          <button
+                            key={id}
+                            type="button"
+                            onClick={() => {
+                              onChangeTool(id);
+                              setMobileMenuOpen(false);
+                            }}
+                            className={`flex min-h-[44px] items-center justify-center gap-2 rounded-xl border text-xs font-medium ${
+                              tool === id
+                                ? 'border-amber-500 bg-amber-500/20 text-amber-300 font-semibold'
+                                : 'border-zinc-800 bg-zinc-900 text-zinc-200'
+                            }`}
+                          >
+                            <Icon className="h-4 w-4 shrink-0" />
+                            <span>{label}</span>
+                          </button>
+                        ))}
+                      </div>
+                    )}
 
-                    <div className="grid grid-cols-2 gap-2 pt-1 border-t border-zinc-800">
+                    <div
+                      className={`grid grid-cols-2 gap-2 ${
+                        isExpert ? 'pt-1 border-t border-zinc-800' : ''
+                      }`}
+                    >
                       <button
                         type="button"
                         onClick={() => {
@@ -702,24 +702,26 @@ export const BottomDock: React.FC<BottomDockProps> = ({
                           {Math.round(openAmount * 100)}%
                         </span>
                       </div>
-                      <div className="flex items-center gap-3">
-                        <span className="text-xs text-zinc-300 whitespace-nowrap w-20">
-                          Rozstrzał 3D
-                        </span>
-                        <input
-                          type="range"
-                          aria-label="Widok rozstrzelony"
-                          min={0}
-                          max={1}
-                          step={0.02}
-                          value={explodedAmount}
-                          onChange={(e) => onChangeExploded(parseFloat(e.target.value))}
-                          className="cad-slider flex-1"
-                        />
-                        <span className="w-9 text-right text-xs text-zinc-400 font-mono-num">
-                          {Math.round(explodedAmount * 100)}%
-                        </span>
-                      </div>
+                      {isExpert && (
+                        <div className="flex items-center gap-3">
+                          <span className="text-xs text-zinc-300 whitespace-nowrap w-20">
+                            Rozstrzał 3D
+                          </span>
+                          <input
+                            type="range"
+                            aria-label="Widok rozstrzelony"
+                            min={0}
+                            max={1}
+                            step={0.02}
+                            value={explodedAmount}
+                            onChange={(e) => onChangeExploded(parseFloat(e.target.value))}
+                            className="cad-slider flex-1"
+                          />
+                          <span className="w-9 text-right text-xs text-zinc-400 font-mono-num">
+                            {Math.round(explodedAmount * 100)}%
+                          </span>
+                        </div>
+                      )}
                     </div>
 
                     {/* Camera Presets */}
@@ -746,67 +748,95 @@ export const BottomDock: React.FC<BottomDockProps> = ({
                       ))}
                     </div>
 
-                    {/* Visual Toggles */}
+                    {/* Visual Toggles (aligned 1:1 with Desktop Simple vs Expert) */}
                     <div className="grid grid-cols-2 gap-2 pt-1">
                       <button
                         type="button"
                         onClick={onCycleLighting}
-                        className="flex min-h-[42px] items-center justify-center gap-1.5 rounded-xl border border-zinc-800 bg-zinc-900 px-3 text-xs font-medium text-zinc-200"
+                        className={`${
+                          isExpert ? '' : 'col-span-2'
+                        } flex min-h-[42px] items-center justify-center gap-1.5 rounded-xl border border-zinc-800 bg-zinc-900 px-3 text-xs font-medium text-zinc-200`}
                       >
                         <Sun className="h-4 w-4 text-amber-400" />
                         <span>Światło: {LIGHTING_LABELS[lighting]}</span>
                       </button>
-                      <button
-                        type="button"
-                        onClick={onToggleLedUnderCabinet}
-                        className={`flex min-h-[42px] items-center justify-center gap-1.5 rounded-xl border px-3 text-xs font-medium ${
-                          ledUnderCabinet
-                            ? 'border-amber-400/70 bg-amber-500/20 text-amber-200'
-                            : 'border-zinc-800 bg-zinc-900 text-zinc-200'
-                        }`}
-                      >
-                        <Lightbulb className="h-4 w-4" />
-                        <span>LED: {ledUnderCabinet ? 'Wł.' : 'Wył.'}</span>
-                      </button>
-                      <button
-                        type="button"
-                        onClick={onToggleXray}
-                        className={`flex min-h-[42px] items-center justify-center gap-1.5 rounded-xl border px-3 text-xs font-medium ${
-                          xrayMode
-                            ? 'border-amber-500/60 bg-amber-500/15 text-amber-300'
-                            : 'border-zinc-800 bg-zinc-900 text-zinc-200'
-                        }`}
-                      >
-                        <Layers className="h-4 w-4" />
-                        <span>Tryb RTG</span>
-                      </button>
-                      <button
-                        type="button"
-                        onClick={onToggleShowFasteners}
-                        className="flex min-h-[42px] items-center justify-center gap-1.5 rounded-xl border border-zinc-800 bg-zinc-900 px-3 text-xs font-medium text-zinc-200"
-                      >
-                        {showFasteners ? (
-                          <Eye className="h-4 w-4" />
-                        ) : (
-                          <EyeOff className="h-4 w-4" />
-                        )}
-                        <span>{showFasteners ? 'Wkręty: Pokaż' : 'Wkręty: Ukryj'}</span>
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          onToggleAssemblyMode();
-                          setMobileMenuOpen(false);
-                        }}
-                        className={`col-span-2 flex min-h-[42px] items-center justify-center gap-1.5 rounded-xl border px-3 text-xs font-medium ${
-                          assemblyStep > 0
-                            ? 'border-emerald-500/60 bg-emerald-500/15 text-emerald-300'
-                            : 'border-zinc-800 bg-zinc-900 text-zinc-200'
-                        }`}
-                      >
-                        <ListOrdered className="h-4 w-4" />
-                        <span>Instrukcja montażu krok po kroku</span>
-                      </button>
+
+                      {isExpert ? (
+                        <>
+                          <button
+                            type="button"
+                            onClick={onToggleLedUnderCabinet}
+                            className={`flex min-h-[42px] items-center justify-center gap-1.5 rounded-xl border px-3 text-xs font-medium ${
+                              ledUnderCabinet
+                                ? 'border-amber-400/70 bg-amber-500/20 text-amber-200'
+                                : 'border-zinc-800 bg-zinc-900 text-zinc-200'
+                            }`}
+                          >
+                            <Lightbulb className="h-4 w-4" />
+                            <span>LED: {ledUnderCabinet ? 'Wł.' : 'Wył.'}</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={onToggleShowDimensions}
+                            className={`flex min-h-[42px] items-center justify-center gap-1.5 rounded-xl border px-3 text-xs font-medium ${
+                              showDimensions
+                                ? 'border-sky-500/60 bg-sky-500/15 text-sky-300'
+                                : 'border-zinc-800 bg-zinc-900 text-zinc-200'
+                            }`}
+                          >
+                            <Ruler className="h-4 w-4" />
+                            <span>Prześwity</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={onToggleXray}
+                            className={`flex min-h-[42px] items-center justify-center gap-1.5 rounded-xl border px-3 text-xs font-medium ${
+                              xrayMode
+                                ? 'border-amber-500/60 bg-amber-500/15 text-amber-300'
+                                : 'border-zinc-800 bg-zinc-900 text-zinc-200'
+                            }`}
+                          >
+                            <Layers className="h-4 w-4" />
+                            <span>Tryb RTG</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={onToggleShowFasteners}
+                            className="col-span-2 flex min-h-[42px] items-center justify-center gap-1.5 rounded-xl border border-zinc-800 bg-zinc-900 px-3 text-xs font-medium text-zinc-200"
+                          >
+                            {showFasteners ? (
+                              <Eye className="h-4 w-4" />
+                            ) : (
+                              <EyeOff className="h-4 w-4" />
+                            )}
+                            <span>{showFasteners ? 'Wkręty: Pokaż' : 'Wkręty: Ukryj'}</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              onToggleAssemblyMode();
+                              setMobileMenuOpen(false);
+                            }}
+                            className={`col-span-2 flex min-h-[42px] items-center justify-center gap-1.5 rounded-xl border px-3 text-xs font-medium ${
+                              assemblyStep > 0
+                                ? 'border-emerald-500/60 bg-emerald-500/15 text-emerald-300'
+                                : 'border-zinc-800 bg-zinc-900 text-zinc-200'
+                            }`}
+                          >
+                            <ListOrdered className="h-4 w-4" />
+                            <span>Instrukcja montażu krok po kroku</span>
+                          </button>
+                        </>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => onChangeUiMode('expert')}
+                          className="col-span-2 flex min-h-[42px] items-center justify-center gap-1.5 rounded-xl border border-zinc-800 bg-zinc-900/70 px-3 text-xs font-medium text-amber-300 active:bg-zinc-800"
+                        >
+                          <Sparkles className="h-3.5 w-3.5 shrink-0" />
+                          <span>Włącz tryb Ekspert (RTG, LED, rozstrzał, montaż)</span>
+                        </button>
+                      )}
                     </div>
                   </>
                 )}
@@ -868,23 +898,6 @@ export const BottomDock: React.FC<BottomDockProps> = ({
                       <FolderOpen className="h-4 w-4 text-zinc-400 shrink-0" />
                       <span className="truncate">Moje projekty</span>
                     </button>
-                    {onOpenRoom && (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setMobileMenuOpen(false);
-                          onOpenRoom();
-                        }}
-                        className={`flex min-h-[48px] items-center gap-2.5 rounded-xl border px-3 text-xs font-medium ${
-                          roomEnabled
-                            ? 'border-sky-500/50 bg-sky-500/15 text-sky-200'
-                            : 'border-zinc-800 bg-zinc-900 text-zinc-100'
-                        }`}
-                      >
-                        <Home className="h-4 w-4 text-sky-400 shrink-0" />
-                        <span className="truncate">Pokój 2D / 3D</span>
-                      </button>
-                    )}
                     <button
                       type="button"
                       onClick={() => {
@@ -903,10 +916,10 @@ export const BottomDock: React.FC<BottomDockProps> = ({
                           setMobileMenuOpen(false);
                           onOpenShortcuts();
                         }}
-                        className="flex min-h-[48px] items-center gap-2.5 rounded-xl border border-zinc-800 bg-zinc-900 px-3 text-xs font-medium text-zinc-100 active:bg-zinc-800"
+                        className="col-span-2 flex min-h-[44px] items-center justify-center gap-2 rounded-xl border border-zinc-800 bg-zinc-900/80 px-3 text-xs font-medium text-zinc-200 active:bg-zinc-800"
                       >
                         <HelpCircle className="h-4 w-4 text-sky-400 shrink-0" />
-                        <span className="truncate">Pomoc i gesty</span>
+                        <span>Pomoc, skróty i gesty</span>
                       </button>
                     )}
                   </div>

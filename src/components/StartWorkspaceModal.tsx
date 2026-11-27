@@ -2,32 +2,36 @@ import React, { useMemo, useState } from 'react';
 import {
   ArrowRight,
   Box,
+  Cloud,
   FolderOpen,
   Home,
   Layers,
   LayoutPanelTop,
+  Loader2,
   PenTool,
   Plus,
   X,
 } from 'lucide-react';
 import type { FurnitureProject } from '../types/furniture';
-import { FURNITURE_TEMPLATES } from '../data/templates';
-
-type TemplateItem = (typeof FURNITURE_TEMPLATES)[number];
+import type { FurnitureTemplateMeta } from '../data/templates';
 
 interface StartWorkspaceModalProps {
   open: boolean;
   projects: FurnitureProject[];
   activeProjectId: string;
+  templates: FurnitureTemplateMeta[];
+  templatesLoading: boolean;
+  isCloudSignedIn: boolean;
   skipOnStartup: boolean;
   onToggleSkipOnStartup: (skip: boolean) => void;
   onClose: () => void;
+  onOpenCloud: () => void;
   onStartRoom: () => void;
   onStartCabinet: () => void;
   onStartSketch: () => void;
   onStartAddPart: () => void;
   onStartBlank: () => void;
-  onSelectTemplate: (template: TemplateItem) => void;
+  onSelectTemplate: (template: FurnitureTemplateMeta) => void;
   onResumeProject: (projectId: string) => void;
 }
 
@@ -35,9 +39,13 @@ export const StartWorkspaceModal: React.FC<StartWorkspaceModalProps> = ({
   open,
   projects,
   activeProjectId,
+  templates,
+  templatesLoading,
+  isCloudSignedIn,
   skipOnStartup,
   onToggleSkipOnStartup,
   onClose,
+  onOpenCloud,
   onStartRoom,
   onStartCabinet,
   onStartSketch,
@@ -193,34 +201,64 @@ export const StartWorkspaceModal: React.FC<StartWorkspaceModalProps> = ({
             >
               <Layers className="h-3.5 w-3.5" />
               <span>
-                Gotowe szablony ({FURNITURE_TEMPLATES.length})
+                {isCloudSignedIn
+                  ? `Szablony z Firestore (${templates.length})`
+                  : 'Szablony z Firestore'}
               </span>
             </button>
           </div>
 
-          {/* Expandable Built-In Templates Grid */}
+          {/* Expandable Firestore Cloud Templates Grid */}
           {showTemplates && (
             <div className="space-y-2.5 border-t border-zinc-800 pt-4">
               <h2 className="text-xs font-semibold text-zinc-300">
-                Wybierz gotowy projekt startowy
+                Gotowe projekty startowe z bazy Firestore
               </h2>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                {FURNITURE_TEMPLATES.map((tpl) => (
+              {!isCloudSignedIn ? (
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 rounded-xl border border-zinc-800 bg-zinc-900/70 p-3.5">
+                  <p className="text-xs text-zinc-400">
+                    Przykładowe szablony 3D są pobierane z Twojej bazy Firestore. Zaloguj się przez Google, aby je wczytać.
+                  </p>
                   <button
-                    key={tpl.id}
                     type="button"
-                    onClick={() => onSelectTemplate(tpl)}
-                    className="flex flex-col justify-between rounded-xl border border-zinc-800 bg-zinc-900/60 px-3.5 py-2.5 text-left hover:border-amber-500/50 hover:bg-zinc-900 transition-colors cursor-pointer"
+                    onClick={() => {
+                      onClose();
+                      onOpenCloud();
+                    }}
+                    className="inline-flex min-h-[36px] items-center justify-center gap-1.5 rounded-lg bg-amber-500 px-3 text-xs font-semibold text-zinc-950 hover:bg-amber-400 whitespace-nowrap shrink-0 cursor-pointer"
                   >
-                    <div className="text-xs font-semibold text-zinc-100">
-                      {tpl.name}
-                    </div>
-                    <div className="mt-0.5 text-[11px] text-zinc-400 truncate">
-                      {tpl.subtitle}
-                    </div>
+                    <Cloud className="h-3.5 w-3.5" />
+                    <span>Zaloguj przez Google</span>
                   </button>
-                ))}
-              </div>
+                </div>
+              ) : templatesLoading ? (
+                <div className="flex items-center gap-2 py-4 text-xs text-zinc-400">
+                  <Loader2 className="h-4 w-4 animate-spin text-amber-400" />
+                  <span>Ładowanie szablonów z Firestore...</span>
+                </div>
+              ) : templates.length === 0 ? (
+                <div className="py-3 text-xs text-zinc-500">
+                  Brak zapisanych szablonów w Firestore. Możesz je dodać w panelu „Szablony”.
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  {templates.map((tpl) => (
+                    <button
+                      key={tpl.id}
+                      type="button"
+                      onClick={() => onSelectTemplate(tpl)}
+                      className="flex flex-col justify-between rounded-xl border border-zinc-800 bg-zinc-900/60 px-3.5 py-2.5 text-left hover:border-amber-500/50 hover:bg-zinc-900 transition-colors cursor-pointer"
+                    >
+                      <div className="text-xs font-semibold text-zinc-100">
+                        {tpl.name}
+                      </div>
+                      <div className="mt-0.5 text-[11px] text-zinc-400 truncate">
+                        {tpl.subtitle}
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
           )}
 
