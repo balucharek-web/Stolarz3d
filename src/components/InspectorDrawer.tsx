@@ -27,6 +27,7 @@ import {
   X,
 } from 'lucide-react';
 import { NumericInput } from './NumericInput';
+import { CabinetInspectorContent } from './CabinetInspectorContent';
 import {
   DrawerSlideType,
   EdgeBandingThickness,
@@ -38,6 +39,7 @@ import {
   type MaterialCategory,
   MaterialId,
   PART_KIND_LABELS,
+  ParametricCabinetConfig,
   PartCutout,
   PartKind,
   SCREW_MAP,
@@ -67,6 +69,8 @@ interface InspectorDrawerProps {
   partFasteners: Fastener[];
   groupBounds: { width: number; height: number; depth: number; count: number } | null;
   hasParametricConfig?: boolean;
+  parametricCabinetConfig?: ParametricCabinetConfig | null;
+  parametricCabinetGroupId?: string | null;
   materialsVersion: number;
   customTextures: Partial<Record<MaterialId, string>>;
   isColliding: boolean;
@@ -89,6 +93,8 @@ interface InspectorDrawerProps {
     targetDistanceMm: number
   ) => void;
   onOpenParametricEditor?: () => void;
+  onUpdateParametricCabinet?: (groupId: string, nextCfg: ParametricCabinetConfig) => void;
+  onSaveCabinetAsTemplate?: (config: ParametricCabinetConfig) => void;
   onGroupSelected?: () => void;
   onUngroupSelected?: () => void;
   onSmartResizeGroup: (groupId: string, width: number, height: number, depth: number) => void;
@@ -186,6 +192,8 @@ export const InspectorDrawer: React.FC<InspectorDrawerProps> = ({
   partFasteners,
   groupBounds,
   hasParametricConfig = false,
+  parametricCabinetConfig = null,
+  parametricCabinetGroupId = null,
   materialsVersion,
   customTextures,
   isColliding,
@@ -201,6 +209,8 @@ export const InspectorDrawer: React.FC<InspectorDrawerProps> = ({
   onSelectPartIds,
   onSetClearanceDistance,
   onOpenParametricEditor,
+  onUpdateParametricCabinet,
+  onSaveCabinetAsTemplate,
   onGroupSelected,
   onUngroupSelected,
   onSmartResizeGroup,
@@ -240,6 +250,7 @@ export const InspectorDrawer: React.FC<InspectorDrawerProps> = ({
   const [edgeExpanded, setEdgeExpanded] = useState<boolean>(false);
   const [matCategoryFilter, setMatCategoryFilter] = useState<'all' | MaterialCategory>('all');
   const [applyMatToGroup, setApplyMatToGroup] = useState<boolean>(false);
+  const [rawSingleBoardMode, setRawSingleBoardMode] = useState<boolean>(false);
 
   const filteredMaterialCatalog = useMemo(() => {
     void materialsVersion;
@@ -252,6 +263,7 @@ export const InspectorDrawer: React.FC<InspectorDrawerProps> = ({
     setGrpW(null);
     setGrpH(null);
     setGrpD(null);
+    setRawSingleBoardMode(false);
   }
   if (part?.id !== lastPartId) {
     setLastPartId(part?.id);
@@ -287,7 +299,13 @@ export const InspectorDrawer: React.FC<InspectorDrawerProps> = ({
 
   if (!open || !part) return null;
 
-  const isMultiSelected = selectedParts.length >= 2;
+  const showUnifiedCabinetInspector = Boolean(
+    parametricCabinetConfig &&
+      parametricCabinetGroupId &&
+      onUpdateParametricCabinet &&
+      !rawSingleBoardMode
+  );
+  const isMultiSelected = !showUnifiedCabinetInspector && selectedParts.length >= 2;
   const showBatchView = isMultiSelected && batchMode;
   const selectedIds = selectedParts.map((p) => p.id);
   const selectedDoors = selectedParts.filter((p) => p.kind === 'door');
@@ -441,21 +459,25 @@ export const InspectorDrawer: React.FC<InspectorDrawerProps> = ({
         <div className="flex items-center justify-between gap-2 border-b border-white/[0.08] px-4 py-3">
           <div className="min-w-0">
             <h2 className="text-sm font-semibold text-white truncate">
-              {showBatchView
-                ? `Edycja grupowa (${selectedParts.length} elem.)`
-                : 'Właściwości elementu'}
+              {showUnifiedCabinetInspector && parametricCabinetConfig
+                ? parametricCabinetConfig.name
+                : showBatchView
+                  ? `Edycja grupowa (${selectedParts.length} elem.)`
+                  : 'Właściwości elementu'}
             </h2>
             <p className="text-[11px] text-zinc-400 font-mono-num truncate">
-              {showBatchView
-                ? `Łącznie ~${selectedTotalWeightKg.toFixed(1)} kg · zmiana dla wszystkich`
-                : `${part.width} × ${part.height} × ${part.depth} mm · ${partWeightKg.toFixed(1)} kg`}
+              {showUnifiedCabinetInspector && parametricCabinetConfig
+                ? `${parametricCabinetConfig.widthMm} × ${parametricCabinetConfig.heightMm} × ${parametricCabinetConfig.depthMm} mm · ~${selectedTotalWeightKg.toFixed(1)} kg`
+                : showBatchView
+                  ? `Łącznie ~${selectedTotalWeightKg.toFixed(1)} kg · zmiana dla wszystkich`
+                  : `${part.width} × ${part.height} × ${part.depth} mm · ${partWeightKg.toFixed(1)} kg`}
             </p>
           </div>
           <div className="flex items-center gap-0.5 shrink-0">
             <button
               type="button"
               onClick={() =>
-                showBatchView
+                showUnifiedCabinetInspector || showBatchView
                   ? onBatchUpdateParts(selectedIds, { hidden: !selectedParts.every((p) => p.hidden) })
                   : onUpdatePart(part.id, { hidden: !part.hidden })
               }
@@ -472,7 +494,7 @@ export const InspectorDrawer: React.FC<InspectorDrawerProps> = ({
             <button
               type="button"
               onClick={() =>
-                showBatchView
+                showUnifiedCabinetInspector || showBatchView
                   ? onBatchUpdateParts(selectedIds, { locked: !selectedParts.every((p) => p.locked) })
                   : onUpdatePart(part.id, { locked: !part.locked })
               }
@@ -496,6 +518,41 @@ export const InspectorDrawer: React.FC<InspectorDrawerProps> = ({
             </button>
           </div>
         </div>
+
+        {/* Dedicated Unified Parametric Cabinet Inspector (Single Commercial Object View) */}
+        {showUnifiedCabinetInspector && parametricCabinetConfig && parametricCabinetGroupId && onUpdateParametricCabinet ? (
+          <CabinetInspectorContent
+            config={parametricCabinetConfig}
+            groupId={parametricCabinetGroupId}
+            materialsVersion={materialsVersion}
+            swatches={swatches}
+            uiMode={uiMode}
+            onUpdateCabinet={onUpdateParametricCabinet}
+            onSaveAsTemplate={onSaveCabinetAsTemplate}
+            onOpenFullBuilder={onOpenParametricEditor}
+            onDuplicateCabinet={() => onDuplicatePart(part.id)}
+            onDeleteCabinet={() => onDeletePart(part.id)}
+            onSwitchToSinglePartMode={() => {
+              setRawSingleBoardMode(true);
+              setBatchMode(false);
+            }}
+          />
+        ) : (
+        <>
+        {rawSingleBoardMode && parametricCabinetConfig && (
+          <div className="flex items-center justify-between gap-2 border-b border-sky-500/30 bg-sky-500/10 px-3.5 py-2">
+            <span className="text-[11px] font-medium text-sky-200 truncate">
+              Tryb pojedynczej płyty (CNC)
+            </span>
+            <button
+              type="button"
+              onClick={() => setRawSingleBoardMode(false)}
+              className="rounded-lg bg-sky-500/20 border border-sky-400/40 px-2 py-0.5 text-[11px] font-semibold text-sky-100 hover:bg-sky-500/30 whitespace-nowrap cursor-pointer"
+            >
+              ← Wróć do szafki
+            </button>
+          </div>
+        )}
 
         {/* Multi-Select Mode Switcher (when 2+ parts are selected) */}
         {isMultiSelected && (
@@ -2337,6 +2394,8 @@ export const InspectorDrawer: React.FC<InspectorDrawerProps> = ({
             <span>{isMultiSelected ? `Usuń (${selectedParts.length})` : 'Usuń'}</span>
           </button>
         </div>
+        </>
+        )}
       </aside>
     </>
   );

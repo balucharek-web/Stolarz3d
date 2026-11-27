@@ -214,44 +214,8 @@ function createClearanceSprite(label: string, editable = false): THREE.Sprite {
   return sprite;
 }
 
-function createMeasureSprite(mainLabel: string, subLabel?: string): THREE.Sprite {
-  const canvas = document.createElement('canvas');
-  canvas.width = 340;
-  canvas.height = subLabel ? 96 : 72;
-  const ctx = canvas.getContext('2d')!;
-  ctx.fillStyle = 'rgba(9, 13, 24, 0.94)';
-  ctx.beginPath();
-  ctx.roundRect(6, 6, canvas.width - 12, canvas.height - 12, 14);
-  ctx.fill();
-  ctx.strokeStyle = '#38BDF8';
-  ctx.lineWidth = 3;
-  ctx.stroke();
-
-  ctx.fillStyle = '#F0F9FF';
-  ctx.font = 'bold 28px "JetBrains Mono", monospace';
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'middle';
-  ctx.fillText(mainLabel, canvas.width / 2, subLabel ? 36 : 37);
-
-  if (subLabel) {
-    ctx.fillStyle = '#7DD3FC';
-    ctx.font = '600 18px "JetBrains Mono", monospace';
-    ctx.fillText(subLabel, canvas.width / 2, 68);
-  }
-
-  const tex = new THREE.CanvasTexture(canvas);
-  tex.colorSpace = THREE.SRGBColorSpace;
-  const mat = new THREE.SpriteMaterial({
-    map: tex,
-    depthTest: false,
-    transparent: true,
-  });
-  const sprite = new THREE.Sprite(mat);
-  sprite.scale.set(0.3, subLabel ? 0.085 : 0.064, 1);
-  sprite.renderOrder = 999;
-  sprite.userData.disposeMaterial = true;
-  sprite.userData.disposeTexture = tex;
-  return sprite;
+function formatMeasureDistanceMm(mm: number): string {
+  return `${Math.round(mm).toLocaleString('pl-PL')} mm`;
 }
 
 function buildMeasureVisual(
@@ -262,10 +226,6 @@ function buildMeasureVisual(
   const g = new THREE.Group();
   const s = new THREE.Vector3(startMm[0] * MM_TO_M, startMm[1] * MM_TO_M, startMm[2] * MM_TO_M);
   const e = new THREE.Vector3(endMm[0] * MM_TO_M, endMm[1] * MM_TO_M, endMm[2] * MM_TO_M);
-  const dx = Math.abs(Math.round(endMm[0] - startMm[0]));
-  const dy = Math.abs(Math.round(endMm[1] - startMm[1]));
-  const dz = Math.abs(Math.round(endMm[2] - startMm[2]));
-  const total = Math.round(Math.hypot(endMm[0] - startMm[0], endMm[1] - startMm[1], endMm[2] - startMm[2]));
 
   const lineGeo = new THREE.BufferGeometry().setFromPoints([s, e]);
   const lineMat = new THREE.LineBasicMaterial({ color: colorHex, depthTest: false });
@@ -274,28 +234,37 @@ function buildMeasureVisual(
   line.userData.disposeMaterial = true;
   g.add(line);
 
-  const dotGeo = new THREE.SphereGeometry(0.0085, 12, 10);
+  // Subtle vertical drop-ticks at endpoints for spatial clarity
+  const tickLen = 0.045;
+  const tickGeo = new THREE.BufferGeometry().setFromPoints([
+    new THREE.Vector3(s.x, s.y - tickLen, s.z),
+    new THREE.Vector3(s.x, s.y + tickLen, s.z),
+    new THREE.Vector3(e.x, e.y - tickLen, e.z),
+    new THREE.Vector3(e.x, e.y + tickLen, e.z),
+  ]);
+  const tickMat = new THREE.LineBasicMaterial({
+    color: colorHex,
+    depthTest: false,
+    transparent: true,
+    opacity: 0.7,
+  });
+  const ticks = new THREE.LineSegments(tickGeo, tickMat);
+  ticks.renderOrder = 998;
+  ticks.userData.disposeMaterial = true;
+  g.add(ticks);
+
+  const dotGeo = new THREE.SphereGeometry(0.016, 14, 12);
   const dotMat = new THREE.MeshBasicMaterial({ color: colorHex, depthTest: false });
   const dot1 = new THREE.Mesh(dotGeo, dotMat);
   dot1.position.copy(s);
-  dot1.renderOrder = 998;
+  dot1.renderOrder = 999;
   dot1.userData.disposeMaterial = true;
   const dot2 = new THREE.Mesh(dotGeo.clone(), dotMat.clone());
   dot2.position.copy(e);
-  dot2.renderOrder = 998;
+  dot2.renderOrder = 999;
   dot2.userData.disposeMaterial = true;
   g.add(dot1, dot2);
 
-  if (total > 0) {
-    const mid = s.clone().add(e).multiplyScalar(0.5);
-    const sub =
-      (dx > 0 ? 1 : 0) + (dy > 0 ? 1 : 0) + (dz > 0 ? 1 : 0) > 1
-        ? `X:${dx} Y:${dy} Z:${dz}`
-        : undefined;
-    const sprite = createMeasureSprite(`${total} mm`, sub);
-    sprite.position.copy(mid);
-    g.add(sprite);
-  }
   return g;
 }
 
@@ -448,6 +417,7 @@ const LIGHTING_CONFIGS: Record<
 export const Viewport3D = forwardRef<Viewport3DHandle, Viewport3DProps>(
   function Viewport3D(props, ref) {
     const mountRef = useRef<HTMLDivElement | null>(null);
+    const measureOverlayRef = useRef<HTMLDivElement | null>(null);
     const [contextLost, setContextLost] = useState(false);
     const [screwHoverHud, setScrewHoverHud] = useState<{
       x: number;
@@ -1038,6 +1008,7 @@ export const Viewport3D = forwardRef<Viewport3DHandle, Viewport3DProps>(
           }
 
           renderer.render(scene, camera);
+          syncMeasureOverlay();
 
           const done = () => {
             renderBusy = false;
@@ -1085,8 +1056,210 @@ export const Viewport3D = forwardRef<Viewport3DHandle, Viewport3DProps>(
       };
 
       let pendingMeasureStartMm: [number, number, number] | null = null;
+      let pendingMeasureHoverMm: [number, number, number] | null = null;
+      const _projVec = new THREE.Vector3();
+
+      const projectMmToScreen = (ptMm: [number, number, number]) => {
+        const w = container.clientWidth || 1;
+        const h = container.clientHeight || 1;
+        _projVec.set(ptMm[0] * MM_TO_M, ptMm[1] * MM_TO_M, ptMm[2] * MM_TO_M);
+        _projVec.project(camera);
+        if (_projVec.z > 1 || _projVec.z < -1) return null;
+        return {
+          x: (_projVec.x * 0.5 + 0.5) * w,
+          y: (-_projVec.y * 0.5 + 0.5) * h,
+        };
+      };
+
+      const appendMeasureBadge = (
+        layer: HTMLDivElement,
+        x: number,
+        y: number,
+        mainText: string,
+        subText: string | null,
+        isLive: boolean
+      ) => {
+        const w = container.clientWidth || 1;
+        const h = container.clientHeight || 1;
+        const clampedX = Math.min(Math.max(82, x), Math.max(82, w - 82));
+        const clampedY = Math.min(Math.max(28, y), Math.max(28, h - 108));
+
+        const el = document.createElement('div');
+        el.style.position = 'absolute';
+        el.style.left = `${clampedX}px`;
+        el.style.top = `${clampedY}px`;
+        el.style.transform = 'translate(-50%, -100%) translateY(-10px)';
+        el.style.pointerEvents = 'none';
+        el.className = isLive
+          ? 'rounded-xl border-2 border-amber-400 bg-[#0B0D14]/95 px-2.5 py-1.5 text-center shadow-[0_8px_28px_rgba(0,0,0,0.65)] backdrop-blur-md'
+          : 'rounded-xl border border-sky-400/90 bg-[#090D18]/92 px-2.5 py-1 text-center shadow-[0_6px_22px_rgba(0,0,0,0.58)] backdrop-blur-md';
+
+        const main = document.createElement('div');
+        main.className = isLive
+          ? 'text-[14px] font-bold leading-tight text-amber-200 font-mono-num whitespace-nowrap'
+          : 'text-[13px] font-bold leading-tight text-white font-mono-num whitespace-nowrap';
+        main.textContent = mainText;
+        el.appendChild(main);
+
+        if (subText) {
+          const sub = document.createElement('div');
+          sub.className = isLive
+            ? 'mt-0.5 text-[10px] font-semibold leading-tight text-amber-300/90 font-mono-num whitespace-nowrap'
+            : 'mt-0.5 text-[10px] font-medium leading-tight text-sky-300 font-mono-num whitespace-nowrap';
+          sub.textContent = subText;
+          el.appendChild(sub);
+        }
+
+        layer.appendChild(el);
+      };
+
+      const syncMeasureOverlay = () => {
+        const layer = measureOverlayRef.current;
+        if (!layer) return;
+        layer.replaceChildren();
+
+        const segs = propsRef.current.measurements;
+        for (const seg of segs) {
+          const dx = Math.abs(Math.round(seg.endMm[0] - seg.startMm[0]));
+          const dy = Math.abs(Math.round(seg.endMm[1] - seg.startMm[1]));
+          const dz = Math.abs(Math.round(seg.endMm[2] - seg.startMm[2]));
+          const total = Math.round(
+            Math.hypot(
+              seg.endMm[0] - seg.startMm[0],
+              seg.endMm[1] - seg.startMm[1],
+              seg.endMm[2] - seg.startMm[2]
+            )
+          );
+          if (total <= 0) continue;
+          const midMm: [number, number, number] = [
+            (seg.startMm[0] + seg.endMm[0]) / 2,
+            (seg.startMm[1] + seg.endMm[1]) / 2,
+            (seg.startMm[2] + seg.endMm[2]) / 2,
+          ];
+          const scr = projectMmToScreen(midMm);
+          if (!scr) continue;
+          const cmStr = `${(total / 10).toFixed(1).replace('.', ',')} cm`;
+          const axisParts: string[] = [];
+          if (dx > 0) axisParts.push(`X:${dx}`);
+          if (dy > 0) axisParts.push(`Y:${dy}`);
+          if (dz > 0) axisParts.push(`Z:${dz}`);
+          const sub =
+            axisParts.length > 1 ? `${cmStr} · ${axisParts.join(' ')}` : cmStr;
+          appendMeasureBadge(layer, scr.x, scr.y, formatMeasureDistanceMm(total), sub, false);
+        }
+
+        if (propsRef.current.tool === 'measure') {
+          if (pendingMeasureStartMm) {
+            const p1Scr = projectMmToScreen(pendingMeasureStartMm);
+            if (p1Scr) {
+              const tag = document.createElement('div');
+              tag.style.position = 'absolute';
+              tag.style.left = `${p1Scr.x}px`;
+              tag.style.top = `${p1Scr.y}px`;
+              tag.style.transform = 'translate(-50%, -140%)';
+              tag.className =
+                'rounded-md border border-amber-400 bg-amber-500 px-1.5 py-0.5 text-[10px] font-bold text-zinc-950 font-mono-num shadow-lg';
+              tag.textContent = 'P1';
+              layer.appendChild(tag);
+            }
+          }
+
+          if (pendingMeasureStartMm && pendingMeasureHoverMm) {
+            const dx = Math.abs(Math.round(pendingMeasureHoverMm[0] - pendingMeasureStartMm[0]));
+            const dy = Math.abs(Math.round(pendingMeasureHoverMm[1] - pendingMeasureStartMm[1]));
+            const dz = Math.abs(Math.round(pendingMeasureHoverMm[2] - pendingMeasureStartMm[2]));
+            const total = Math.round(
+              Math.hypot(
+                pendingMeasureHoverMm[0] - pendingMeasureStartMm[0],
+                pendingMeasureHoverMm[1] - pendingMeasureStartMm[1],
+                pendingMeasureHoverMm[2] - pendingMeasureStartMm[2]
+              )
+            );
+            const midMm: [number, number, number] = [
+              (pendingMeasureStartMm[0] + pendingMeasureHoverMm[0]) / 2,
+              (pendingMeasureStartMm[1] + pendingMeasureHoverMm[1]) / 2,
+              (pendingMeasureStartMm[2] + pendingMeasureHoverMm[2]) / 2,
+            ];
+            const scr = projectMmToScreen(midMm);
+            if (scr && total > 0) {
+              const cmStr = `${(total / 10).toFixed(1).replace('.', ',')} cm`;
+              const sub = `${cmStr} · ΔX ${dx} · ΔY ${dy} · ΔZ ${dz}`;
+              appendMeasureBadge(layer, scr.x, scr.y, formatMeasureDistanceMm(total), sub, true);
+            }
+          } else if (!pendingMeasureStartMm && pendingMeasureHoverMm) {
+            const scr = projectMmToScreen(pendingMeasureHoverMm);
+            if (scr) {
+              const [hx, hy, hz] = pendingMeasureHoverMm;
+              appendMeasureBadge(
+                layer,
+                scr.x,
+                scr.y,
+                'Kliknij punkt 1',
+                `X:${Math.round(hx)} · Y:${Math.round(hy)} · Z:${Math.round(hz)} mm`,
+                true
+              );
+            }
+          }
+        }
+      };
+
+      const pickMeasurePointMm = (clientX: number, clientY: number): [number, number, number] | null => {
+        updateNdc(clientX, clientY);
+        raycaster.setFromCamera(_pointerNdc, camera);
+        const partMeshes: THREE.Object3D[] = [];
+        partNodes.forEach((g) => {
+          const m = g.getObjectByName('main_mesh');
+          if (m) partMeshes.push(m);
+        });
+        const partHits = raycaster.intersectObjects(partMeshes, false);
+        if (partHits.length > 0) {
+          const { partId } = resolveHitIds(partHits[0].object);
+          const hitPart = propsRef.current.parts.find((p) => p.id === partId);
+          return snapWorldPointToPartMm(partHits[0].point, hitPart, propsRef.current.snapMm);
+        }
+
+        // Raycast room walls/floor/obstacles when present so users can measure room niches & walls accurately
+        const roomMeshes: THREE.Object3D[] = [];
+        roomRoot.traverse((obj) => {
+          if ((obj as THREE.Mesh).isMesh && obj.visible) {
+            roomMeshes.push(obj);
+          }
+        });
+        if (roomMeshes.length > 0) {
+          const roomHits = raycaster.intersectObjects(roomMeshes, false);
+          if (roomHits.length > 0) {
+            const hitPt = roomHits[0].point;
+            const room = propsRef.current.room;
+            const rawX = hitPt.x * M_TO_MM;
+            const rawY = hitPt.y * M_TO_MM;
+            const rawZ = hitPt.z * M_TO_MM;
+            const step = propsRef.current.snapMm > 0 ? propsRef.current.snapMm : 1;
+            const snapRoomVal = (val: number, targets: number[]) => {
+              for (const t of targets) {
+                if (Math.abs(val - t) <= 28) return Math.round(t);
+              }
+              return Math.round(val / step) * step;
+            };
+            const halfW = room ? room.widthMm / 2 : 0;
+            const halfD = room ? room.depthMm / 2 : 0;
+            const roomH = room ? room.heightMm : 0;
+            return [
+              room ? snapRoomVal(rawX, [-halfW, 0, halfW]) : Math.round(rawX / step) * step,
+              room ? Math.max(0, snapRoomVal(rawY, [0, roomH])) : Math.max(0, Math.round(rawY / step) * step),
+              room ? snapRoomVal(rawZ, [-halfD, 0, halfD]) : Math.round(rawZ / step) * step,
+            ];
+          }
+        }
+
+        if (raycaster.ray.intersectPlane(_floorPlane, _dragHit)) {
+          return snapWorldPointToPartMm(_dragHit, undefined, propsRef.current.snapMm);
+        }
+        return null;
+      };
+
       const clearPendingMeasure = () => {
         pendingMeasureStartMm = null;
+        pendingMeasureHoverMm = null;
         disposeObjectTree(measureLiveRoot);
         measureLiveRoot.clear();
         requestRender();
@@ -1632,34 +1805,20 @@ export const Viewport3D = forwardRef<Viewport3DHandle, Viewport3DProps>(
         // Live 3D Tape Measure preview cursor & rubber-band segment
         if (propsRef.current.tool === 'measure') {
           const now = performance.now();
-          if (now - lastMoveRaycast < 30) return;
+          if (now - lastMoveRaycast < 24) return;
           lastMoveRaycast = now;
 
-          updateNdc(e.clientX, e.clientY);
-          raycaster.setFromCamera(_pointerNdc, camera);
-          const meshes: THREE.Object3D[] = [];
-          partNodes.forEach((g) => {
-            const m = g.getObjectByName('main_mesh');
-            if (m) meshes.push(m);
-          });
-          const hits = raycaster.intersectObjects(meshes, false);
-          let ptMm: [number, number, number] | null = null;
-          if (hits.length > 0) {
-            const { partId } = resolveHitIds(hits[0].object);
-            const hitPart = propsRef.current.parts.find((p) => p.id === partId);
-            ptMm = snapWorldPointToPartMm(hits[0].point, hitPart, propsRef.current.snapMm);
-          } else if (raycaster.ray.intersectPlane(_floorPlane, _dragHit)) {
-            ptMm = snapWorldPointToPartMm(_dragHit, undefined, propsRef.current.snapMm);
-          }
+          const ptMm = pickMeasurePointMm(e.clientX, e.clientY);
+          pendingMeasureHoverMm = ptMm;
 
           disposeObjectTree(measureLiveRoot);
           measureLiveRoot.clear();
           if (ptMm) {
             if (pendingMeasureStartMm) {
-              measureLiveRoot.add(buildMeasureVisual(pendingMeasureStartMm, ptMm, '#22D3EE'));
+              measureLiveRoot.add(buildMeasureVisual(pendingMeasureStartMm, ptMm, '#F59E0B'));
             } else {
-              const dotGeo = new THREE.SphereGeometry(0.009, 12, 10);
-              const dotMat = new THREE.MeshBasicMaterial({ color: '#22D3EE', depthTest: false });
+              const dotGeo = new THREE.SphereGeometry(0.016, 14, 12);
+              const dotMat = new THREE.MeshBasicMaterial({ color: '#F59E0B', depthTest: false });
               const dot = new THREE.Mesh(dotGeo, dotMat);
               dot.position.set(ptMm[0] * MM_TO_M, ptMm[1] * MM_TO_M, ptMm[2] * MM_TO_M);
               dot.renderOrder = 999;
@@ -1884,30 +2043,16 @@ export const Viewport3D = forwardRef<Viewport3DHandle, Viewport3DProps>(
 
         // 3D Point-to-Point Tape Measure click handling
         if (propsRef.current.tool === 'measure') {
-          updateNdc(e.clientX, e.clientY);
-          raycaster.setFromCamera(_pointerNdc, camera);
-          const meshes: THREE.Object3D[] = [];
-          partNodes.forEach((g) => {
-            const m = g.getObjectByName('main_mesh');
-            if (m) meshes.push(m);
-          });
-          const hits = raycaster.intersectObjects(meshes, false);
-          let ptMm: [number, number, number] | null = null;
-          if (hits.length > 0) {
-            const { partId } = resolveHitIds(hits[0].object);
-            const hitPart = propsRef.current.parts.find((p) => p.id === partId);
-            ptMm = snapWorldPointToPartMm(hits[0].point, hitPart, propsRef.current.snapMm);
-          } else if (raycaster.ray.intersectPlane(_floorPlane, _dragHit)) {
-            ptMm = snapWorldPointToPartMm(_dragHit, undefined, propsRef.current.snapMm);
-          }
+          const ptMm = pickMeasurePointMm(e.clientX, e.clientY);
 
           if (ptMm) {
             if (!pendingMeasureStartMm) {
               pendingMeasureStartMm = ptMm;
+              pendingMeasureHoverMm = ptMm;
               disposeObjectTree(measureLiveRoot);
               measureLiveRoot.clear();
-              const dotGeo = new THREE.SphereGeometry(0.01, 12, 10);
-              const dotMat = new THREE.MeshBasicMaterial({ color: '#22D3EE', depthTest: false });
+              const dotGeo = new THREE.SphereGeometry(0.017, 14, 12);
+              const dotMat = new THREE.MeshBasicMaterial({ color: '#F59E0B', depthTest: false });
               const dot = new THREE.Mesh(dotGeo, dotMat);
               dot.position.set(ptMm[0] * MM_TO_M, ptMm[1] * MM_TO_M, ptMm[2] * MM_TO_M);
               dot.renderOrder = 999;
@@ -1921,6 +2066,7 @@ export const Viewport3D = forwardRef<Viewport3DHandle, Viewport3DProps>(
                 endMm: ptMm,
               };
               pendingMeasureStartMm = null;
+              pendingMeasureHoverMm = null;
               disposeObjectTree(measureLiveRoot);
               measureLiveRoot.clear();
               propsRef.current.onAddMeasurement(seg);
@@ -2975,6 +3121,12 @@ export const Viewport3D = forwardRef<Viewport3DHandle, Viewport3DProps>(
             </span>
           </div>
         )}
+        {/* Fixed-Pixel Screen-Space Projected 3D Tape Measure Labels (Always Razor Sharp at Any Zoom) */}
+        <div
+          ref={measureOverlayRef}
+          aria-hidden="true"
+          className="pointer-events-none absolute inset-0 z-10 overflow-hidden"
+        />
         {/* Inline Clickable 3D Clearance Distance Editor Popover */}
         {activeClearanceEdit && props.onSetClearanceDistance && (
           <form

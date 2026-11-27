@@ -15,6 +15,7 @@ import {
   Loader2,
   Lock,
   Pencil,
+  Plus,
   RotateCcw,
   Search,
   Trash2,
@@ -50,6 +51,8 @@ interface PartsTemplatesDrawerProps {
   onRenameProject: (id: string, name: string) => void;
   onDeleteProject: (id: string) => void;
   onLoadTemplate: (project: FurnitureProject) => void;
+  onInsertCabinetTemplate?: (config: ParametricCabinetConfig) => void;
+  onEditCabinetTemplate?: (templateId: string, config: ParametricCabinetConfig) => void;
   templates: FurnitureTemplateMeta[];
   templatesLoading: boolean;
   templatesError?: string | null;
@@ -97,6 +100,8 @@ export const PartsTemplatesDrawer: React.FC<PartsTemplatesDrawerProps> = ({
   onRenameProject,
   onDeleteProject,
   onLoadTemplate,
+  onInsertCabinetTemplate,
+  onEditCabinetTemplate,
   templates,
   templatesLoading,
   templatesError = null,
@@ -455,7 +460,7 @@ export const PartsTemplatesDrawer: React.FC<PartsTemplatesDrawerProps> = ({
               </div>
             </>
           ) : mode === 'templates' ? (
-            !isCloudSignedIn ? (
+            !isCloudSignedIn && templates.length === 0 ? (
               <div className="rounded-xl border border-zinc-800 bg-zinc-900/75 p-5 text-center space-y-3">
                 <div className="mx-auto flex h-11 w-11 items-center justify-center rounded-xl border border-sky-500/35 bg-sky-500/12 text-sky-300">
                   <Cloud className="h-5 w-5" />
@@ -465,7 +470,7 @@ export const PartsTemplatesDrawer: React.FC<PartsTemplatesDrawerProps> = ({
                     Szablony w bazie Firestore
                   </div>
                   <p className="text-xs text-zinc-400 leading-relaxed">
-                    Przykładowe projekty 3D i Twoje własne szablony są pobierane bezpośrednio z chmury Firebase. Zaloguj się przez Google, aby je wczytać.
+                    Przykładowe projekty 3D i Twoje własne szablony są pobierane z chmury Firebase. Zaloguj się przez Google lub zapisz własną szafkę jako szablon w kreatorze.
                   </p>
                 </div>
                 <button
@@ -480,7 +485,7 @@ export const PartsTemplatesDrawer: React.FC<PartsTemplatesDrawerProps> = ({
                   <span>Zaloguj się przez Google</span>
                 </button>
               </div>
-            ) : templatesLoading ? (
+            ) : templatesLoading && templates.length === 0 ? (
               <div className="flex flex-col items-center justify-center gap-2.5 py-12 text-xs text-zinc-400">
                 <Loader2 className="h-5 w-5 animate-spin text-amber-400" />
                 <span>Pobieranie szablonów z Firestore...</span>
@@ -573,46 +578,119 @@ export const PartsTemplatesDrawer: React.FC<PartsTemplatesDrawerProps> = ({
                   </div>
                 ) : (
                   <div className="space-y-2">
-                    {filteredTemplates.map((tpl) => (
-                      <div
-                        key={tpl.id}
-                        className="group flex items-start gap-1.5 rounded-xl border border-zinc-800 bg-zinc-900/75 p-3 hover:border-amber-500/70 hover:bg-zinc-900 transition-colors"
-                      >
+                    {!isCloudSignedIn && (
+                      <div className="flex items-center justify-between gap-2 rounded-xl border border-sky-500/30 bg-sky-500/10 px-3 py-2 text-[11px] text-sky-200">
+                        <span>Zaloguj się, aby pobrać szablony startowe i synchronizować w chmurze.</span>
                         <button
                           type="button"
                           onClick={() => {
-                            onLoadTemplate(tpl.project);
                             onClose();
+                            onOpenCloud();
                           }}
-                          className="flex-1 min-w-0 text-left cursor-pointer"
+                          className="rounded-lg bg-amber-500 px-2.5 py-1 text-[11px] font-semibold text-zinc-950 whitespace-nowrap cursor-pointer shrink-0"
                         >
-                          <div className="text-[11px] font-medium text-amber-400">
-                            {tpl.category}
-                          </div>
-                          <div className="mt-0.5 text-sm font-semibold text-zinc-100 group-hover:text-white truncate">
-                            {tpl.name}
-                          </div>
-                          <div className="mt-1 text-xs text-zinc-400 leading-relaxed">
-                            {tpl.subtitle}
-                          </div>
-                          <div className="mt-2 text-[11px] text-zinc-500 font-mono-num">
-                            {tpl.project.parts.length} elem. · {tpl.project.fasteners.length} wkrętów
-                          </div>
+                          Zaloguj
                         </button>
-                        <div className="flex flex-col items-center gap-1 shrink-0">
-                          <button
-                            type="button"
-                            onClick={() => onDeleteTemplate(tpl.id)}
-                            title="Usuń szablon z Firestore"
-                            aria-label={`Usuń szablon ${tpl.name}`}
-                            className="flex h-8 w-8 items-center justify-center rounded-lg text-zinc-500 hover:bg-red-500/15 hover:text-red-400 transition-colors cursor-pointer"
-                          >
-                            <Trash2 className="h-3.5 w-3.5" />
-                          </button>
-                          <ChevronRight className="h-4 w-4 text-zinc-600 group-hover:text-amber-400" />
-                        </div>
                       </div>
-                    ))}
+                    )}
+                    {filteredTemplates.map((tpl) => {
+                      const cabConfigs = Object.values(tpl.project.cabinetConfigs ?? {});
+                      const singleCabinetCfg = cabConfigs.length === 1 ? cabConfigs[0] : null;
+
+                      return (
+                        <div
+                          key={tpl.id}
+                          className="group rounded-xl border border-zinc-800 bg-zinc-900/75 p-3 hover:border-amber-500/70 hover:bg-zinc-900 transition-colors space-y-2.5"
+                        >
+                          <div className="flex items-start gap-1.5">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                if (singleCabinetCfg && onInsertCabinetTemplate) {
+                                  onInsertCabinetTemplate(singleCabinetCfg);
+                                } else {
+                                  onLoadTemplate(tpl.project);
+                                }
+                                onClose();
+                              }}
+                              className="flex-1 min-w-0 text-left cursor-pointer"
+                            >
+                              <div className="flex items-center gap-1.5 text-[11px] font-medium text-amber-400">
+                                <span>{tpl.category}</span>
+                                {singleCabinetCfg && (
+                                  <span className="text-emerald-400">· Szafka parametryczna</span>
+                                )}
+                              </div>
+                              <div className="mt-0.5 text-sm font-semibold text-zinc-100 group-hover:text-white truncate">
+                                {tpl.name}
+                              </div>
+                              <div className="mt-1 text-xs text-zinc-400 leading-relaxed">
+                                {tpl.subtitle}
+                              </div>
+                              <div className="mt-1.5 text-[11px] text-zinc-500 font-mono-num">
+                                {singleCabinetCfg
+                                  ? `${singleCabinetCfg.widthMm} × ${singleCabinetCfg.heightMm} × ${singleCabinetCfg.depthMm} mm · gotowa do edycji`
+                                  : `${tpl.project.parts.length} elem. · ${tpl.project.fasteners.length} wkrętów`}
+                              </div>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => onDeleteTemplate(tpl.id)}
+                              title="Usuń szablon"
+                              aria-label={`Usuń szablon ${tpl.name}`}
+                              className="flex h-8 w-8 items-center justify-center rounded-lg text-zinc-500 hover:bg-red-500/15 hover:text-red-400 transition-colors cursor-pointer shrink-0"
+                            >
+                              <Trash2 className="h-3.5 w-3.5" />
+                            </button>
+                          </div>
+
+                          {singleCabinetCfg && (onInsertCabinetTemplate || onEditCabinetTemplate) ? (
+                            <div className="flex items-center gap-1.5 pt-0.5">
+                              {onInsertCabinetTemplate && (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    onInsertCabinetTemplate(singleCabinetCfg);
+                                    onClose();
+                                  }}
+                                  className="flex flex-1 min-h-[34px] items-center justify-center gap-1.5 rounded-lg bg-amber-500 px-2.5 text-[11px] font-semibold text-zinc-950 hover:bg-amber-400 transition-colors cursor-pointer"
+                                >
+                                  <Plus className="h-3.5 w-3.5" />
+                                  <span>Wstaw do sceny</span>
+                                </button>
+                              )}
+                              {onEditCabinetTemplate && (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    onEditCabinetTemplate(tpl.id, singleCabinetCfg);
+                                    onClose();
+                                  }}
+                                  className="flex min-h-[34px] items-center justify-center gap-1.5 rounded-lg border border-zinc-700 bg-zinc-950 px-3 text-[11px] font-medium text-zinc-200 hover:border-amber-500/60 hover:text-amber-200 transition-colors cursor-pointer"
+                                >
+                                  <Pencil className="h-3.5 w-3.5" />
+                                  <span>Edytuj</span>
+                                </button>
+                              )}
+                            </div>
+                          ) : (
+                            <div className="flex items-center justify-end">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  onLoadTemplate(tpl.project);
+                                  onClose();
+                                }}
+                                className="flex items-center gap-1 text-[11px] font-medium text-amber-300 hover:text-amber-200 cursor-pointer"
+                              >
+                                <span>Otwórz projekt</span>
+                                <ChevronRight className="h-3.5 w-3.5" />
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
                   </div>
                 )}
               </>

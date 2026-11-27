@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Check, X } from 'lucide-react';
+import { BookmarkPlus, Check, X } from 'lucide-react';
 import {
   DrawerSlideType,
   Fastener,
@@ -24,12 +24,20 @@ import { computeProjectWeightSummary } from '../engine/carpentry';
 import { CabinetSideSectionSvg } from './CabinetPreviewSvg';
 import { NumericInput } from './NumericInput';
 
+interface SavedCabinetTemplateItem {
+  id: string;
+  name: string;
+  config: ParametricCabinetConfig;
+}
+
 interface CabinetBuilderModalProps {
   open: boolean;
   existingParts: FurniturePart[];
   selectedPartId: string | null;
   room?: RoomConfig;
   editingCabinet?: { groupId: string; config: ParametricCabinetConfig } | null;
+  editingTemplate?: { id: string; config: ParametricCabinetConfig } | null;
+  savedCabinetTemplates?: SavedCabinetTemplateItem[];
   onClose: () => void;
   onInsertCabinet: (
     parts: FurniturePart[],
@@ -38,6 +46,7 @@ interface CabinetBuilderModalProps {
     config: ParametricCabinetConfig
   ) => void;
   onUpdateCabinet?: (groupId: string, config: ParametricCabinetConfig) => void;
+  onSaveAsTemplate?: (config: ParametricCabinetConfig, existingTemplateId?: string) => void;
 }
 
 const PRESET_ORDER: CabinetPresetId[] = [
@@ -68,24 +77,32 @@ export const CabinetBuilderModal: React.FC<CabinetBuilderModalProps> = ({
   selectedPartId,
   room,
   editingCabinet,
+  editingTemplate = null,
+  savedCabinetTemplates = [],
   onClose,
   onInsertCabinet,
   onUpdateCabinet,
+  onSaveAsTemplate,
 }) => {
   const [cfg, setCfg] = useState<ParametricCabinetConfig>(() =>
     structuredClone(CABINET_PRESETS.base_kitchen.config)
   );
   const [placementMode, setPlacementMode] = useState<CabinetPlacementMode>('auto');
   const [previewView, setPreviewView] = useState<'front' | 'side'>('front');
+  const [alsoSaveAsTemplate, setAlsoSaveAsTemplate] = useState(false);
 
   useEffect(() => {
     if (!open) return;
+    setAlsoSaveAsTemplate(false);
     if (editingCabinet) {
       setCfg(structuredClone(editingCabinet.config));
+    } else if (editingTemplate) {
+      setCfg(structuredClone(editingTemplate.config));
+      setPlacementMode('auto');
     } else {
       setPlacementMode('auto');
     }
-  }, [open, editingCabinet]);
+  }, [open, editingCabinet, editingTemplate]);
 
   const placementPreview = useMemo(
     () =>
@@ -135,6 +152,7 @@ export const CabinetBuilderModal: React.FC<CabinetBuilderModalProps> = ({
   if (!open) return null;
 
   const isEditing = Boolean(editingCabinet && onUpdateCabinet);
+  const isEditingTemplate = Boolean(editingTemplate && !isEditing);
 
   const selectPreset = (presetId: CabinetPresetId) => {
     setCfg(structuredClone(CABINET_PRESETS[presetId].config));
@@ -143,8 +161,20 @@ export const CabinetBuilderModal: React.FC<CabinetBuilderModalProps> = ({
   const patch = (next: Partial<ParametricCabinetConfig>) =>
     setCfg((prev) => ({ ...prev, ...next }));
 
+  const handleSaveTemplateOnly = () => {
+    if (!onSaveAsTemplate) return;
+    const snapshot = structuredClone(cfg);
+    onSaveAsTemplate(snapshot, editingTemplate?.id);
+    if (isEditingTemplate) {
+      onClose();
+    }
+  };
+
   const handleSubmit = () => {
     const snapshot = structuredClone(cfg);
+    if (alsoSaveAsTemplate && onSaveAsTemplate) {
+      onSaveAsTemplate(snapshot, editingTemplate?.id);
+    }
     if (isEditing && editingCabinet && onUpdateCabinet) {
       onUpdateCabinet(editingCabinet.groupId, snapshot);
       onClose();
@@ -190,13 +220,17 @@ export const CabinetBuilderModal: React.FC<CabinetBuilderModalProps> = ({
           <div className="min-w-0">
             <h2 className="text-base font-semibold text-white truncate">
               {isEditing
-                ? `Edycja parametryczna: ${editingCabinet?.config.name ?? cfg.name}`
-                : 'Kreator parametrycznych szafek, szaf przesuwnych i regałów'}
+                ? `Edycja szafki: ${editingCabinet?.config.name ?? cfg.name}`
+                : isEditingTemplate
+                  ? `Edycja szablonu szafki: ${cfg.name}`
+                  : 'Kreator parametrycznych szafek, szaf przesuwnych i regałów'}
             </h2>
             <p className="mt-0.5 text-xs text-zinc-400">
               {isEditing
-                ? 'Zmień liczbę szuflad, półek, frontów, cokołu lub materiały — szafka przebuduje się w miejscu z zachowaniem pozycji.'
-                : 'Auto-dostawianie w ciągu zabudowy, trawersy, strefy hybrydowe, dno Blum −13 mm, regały stal+OSB i System 32'}
+                ? 'Zmień wymiary, zawiasy, prowadnice, plecy lub kolory frontów — szafka pozostaje jednym elementem.'
+                : isEditingTemplate
+                  ? 'Dostosuj zapisany szablon i zaktualizuj go lub od razu wstaw do obecnego projektu.'
+                  : 'Każda szafka wstawia się jako jeden gotowy moduł z pełną edycją okuć, pleców i frontów.'}
             </p>
           </div>
           <button
@@ -211,7 +245,34 @@ export const CabinetBuilderModal: React.FC<CabinetBuilderModalProps> = ({
 
         {/* Body */}
         <div className="cad-scroll flex-1 overflow-y-auto px-5 py-4 space-y-4">
-          {/* 8 Presets Grid */}
+          {/* User's Saved Custom Cabinet Templates */}
+          {savedCabinetTemplates.length > 0 && (
+            <div className="space-y-1.5 rounded-xl border border-amber-500/25 bg-amber-500/[0.05] p-2.5">
+              <div className="flex items-center justify-between gap-2 text-[11px]">
+                <span className="font-semibold text-amber-300">
+                  Moje zapisane szablony szafek ({savedCabinetTemplates.length})
+                </span>
+                <span className="text-zinc-400">Kliknij, aby wczytać i edytować</span>
+              </div>
+              <div className="flex items-center gap-1.5 overflow-x-auto cad-scroll pb-0.5">
+                {savedCabinetTemplates.map((item) => (
+                  <button
+                    key={item.id}
+                    type="button"
+                    onClick={() => setCfg(structuredClone(item.config))}
+                    className="rounded-lg border border-amber-500/35 bg-zinc-900/90 px-2.5 py-1.5 text-left hover:border-amber-400 hover:bg-zinc-900 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                  >
+                    <div className="text-[11px] font-semibold text-zinc-100">{item.name}</div>
+                    <div className="text-[10px] text-amber-300/80 font-mono-num">
+                      {item.config.widthMm}×{item.config.heightMm}×{item.config.depthMm} mm
+                    </div>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Presets Grid */}
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5">
             {PRESET_ORDER.map((pid) => {
               const p = CABINET_PRESETS[pid];
@@ -1117,27 +1178,49 @@ export const CabinetBuilderModal: React.FC<CabinetBuilderModalProps> = ({
         </div>
 
         {/* Footer */}
-        <div className="flex items-center justify-between gap-3 border-t border-zinc-800 px-5 pt-3 pb-[max(0.85rem,env(safe-area-inset-bottom))]">
-          <span className="text-xs text-zinc-400">
-            {isEditing
-              ? 'Przebudowa zachowa środek X i wyrównanie tyłu Z modułu w istniejącej zabudowie.'
-              : 'Cała szafka zostanie zgrupowana — w każdej chwili wrócisz do tego kreatora lub użyjesz Smart Resize.'}
-          </span>
-          <div className="flex items-center gap-2 shrink-0">
+        <div className="flex flex-wrap items-center justify-between gap-2.5 border-t border-zinc-800 px-5 pt-3 pb-[max(0.85rem,env(safe-area-inset-bottom))]">
+          {onSaveAsTemplate && !isEditingTemplate ? (
+            <label className="flex items-center gap-2 text-xs text-zinc-300 cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={alsoSaveAsTemplate}
+                onChange={(e) => setAlsoSaveAsTemplate(e.target.checked)}
+                className="h-4 w-4 accent-amber-500"
+              />
+              <span>Zapisz też jako mój szablon (do ponownego użycia i edycji)</span>
+            </label>
+          ) : (
+            <span className="text-xs text-zinc-400">
+              {isEditingTemplate
+                ? 'Zapisz zmiany w szablonie lub wstaw edytowaną szafkę do obecnej sceny 3D.'
+                : 'Szafka zostanie dodana jako jeden edytowalny element w 3D.'}
+            </span>
+          )}
+          <div className="flex flex-wrap items-center gap-2 shrink-0 ml-auto">
             <button
               type="button"
               onClick={onClose}
-              className="min-h-[40px] rounded-xl border border-zinc-700 bg-zinc-900 px-4 text-xs font-medium text-zinc-200 hover:bg-zinc-800 whitespace-nowrap shrink-0 cursor-pointer"
+              className="min-h-[40px] rounded-xl border border-zinc-700 bg-zinc-900 px-3.5 text-xs font-medium text-zinc-200 hover:bg-zinc-800 whitespace-nowrap shrink-0 cursor-pointer"
             >
               Anuluj
             </button>
+            {onSaveAsTemplate && (
+              <button
+                type="button"
+                onClick={handleSaveTemplateOnly}
+                className="flex min-h-[40px] items-center gap-1.5 rounded-xl border border-amber-500/50 bg-amber-500/12 px-3.5 text-xs font-semibold text-amber-300 hover:bg-amber-500/20 whitespace-nowrap shrink-0 cursor-pointer"
+              >
+                <BookmarkPlus className="h-4 w-4" />
+                <span>{isEditingTemplate ? 'Zapisz zmiany szablonu' : 'Zapisz szablon'}</span>
+              </button>
+            )}
             <button
               type="button"
               onClick={handleSubmit}
               className="flex min-h-[40px] items-center gap-1.5 rounded-xl bg-amber-500 px-4 text-xs font-semibold text-zinc-950 hover:bg-amber-400 whitespace-nowrap shrink-0 cursor-pointer"
             >
               <Check className="h-4 w-4" />
-              <span>{isEditing ? 'Zaktualizuj szafkę w 3D' : 'Wstaw szafkę do 3D'}</span>
+              <span>{isEditing ? 'Zaktualizuj szafkę' : 'Wstaw do sceny 3D'}</span>
             </button>
           </div>
         </div>

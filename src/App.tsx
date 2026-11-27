@@ -88,6 +88,8 @@ import {
   type ClearanceGuide,
 } from './engine/carpentry';
 import {
+  buildParametricCabinet,
+  computeSmartCabinetPlacement,
   getGroupBoundingSizeMm,
   rebuildParametricCabinetInPlace,
   smartResizeGroup,
@@ -264,6 +266,20 @@ export default function App() {
   const [cloudSyncError, setCloudSyncError] = useState<string | null>(null);
   const [cloudProjectsCount, setCloudProjectsCount] = useState<number>(0);
   const [cloudTemplates, setCloudTemplates] = useState<FurnitureTemplateMeta[]>([]);
+  const [localCustomTemplates, setLocalCustomTemplates] = useState<FurnitureTemplateMeta[]>(() => {
+    try {
+      const raw = window.localStorage.getItem('stolarz3d_custom_templates_v1');
+      if (!raw) return [];
+      const parsed = JSON.parse(raw);
+      return Array.isArray(parsed) ? (parsed as FurnitureTemplateMeta[]) : [];
+    } catch {
+      return [];
+    }
+  });
+  const [editingTemplate, setEditingTemplate] = useState<{
+    id: string;
+    config: ParametricCabinetConfig;
+  } | null>(null);
   const [cloudTemplatesLoading, setCloudTemplatesLoading] = useState<boolean>(false);
   const [cloudTemplatesError, setCloudTemplatesError] = useState<string | null>(null);
   const [cloudReconnectNonce, setCloudReconnectNonce] = useState<number>(0);
@@ -328,6 +344,17 @@ export default function App() {
   useEffect(() => {
     saveQuoteSettings(quoteSettings);
   }, [quoteSettings]);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(
+        'stolarz3d_custom_templates_v1',
+        JSON.stringify(localCustomTemplates)
+      );
+    } catch {
+      // ignore localStorage quota errors
+    }
+  }, [localCustomTemplates]);
 
   const formatCloudError = useCallback((err: unknown): string => {
     const raw = err instanceof Error ? err.message : String(err);
@@ -713,31 +740,104 @@ export default function App() {
   }, [cloudUser, showToast]);
 
   const handleSaveCurrentAsTemplate = useCallback(async () => {
-    if (!cloudUser || project.parts.length === 0) return;
+    if (project.parts.length === 0) return;
+    const dims = getProjectDimensionsMm(project.parts);
+    const tpl: FurnitureTemplateMeta = {
+      id: `tpl_${Date.now()}_${Math.random().toString(36).slice(2, 5)}`,
+      name: project.name.trim() || 'Własny szablon 3D',
+      subtitle: `${dims.width} × ${dims.height} × ${dims.depth} mm · ${project.parts.length} elem.`,
+      category: 'Domowe',
+      project: structuredClone(project),
+    };
+    setLocalCustomTemplates((prev) => [tpl, ...prev.filter((t) => t.id !== tpl.id)]);
+    if (!cloudUser) {
+      showToast(`Zapisano szablon „${tpl.name}” (lokalnie — zaloguj się, aby zsynchronizować)`);
+      return;
+    }
     try {
       await ensureWorkspaceProfile(cloudUser);
       cloudProfileReadyRef.current = true;
-      const dims = getProjectDimensionsMm(project.parts);
-      const tpl: FurnitureTemplateMeta = {
-        id: `tpl_${Date.now()}_${Math.random().toString(36).slice(2, 5)}`,
-        name: project.name.trim() || 'Własny szablon 3D',
-        subtitle: `${dims.width} × ${dims.height} × ${dims.depth} mm · ${project.parts.length} elem.`,
-        category: 'Domowe',
-        project: structuredClone(project),
-      };
       await saveCloudTemplate(cloudUser.uid, tpl);
       setLastCloudSyncedAt(Date.now());
       showToast(`Zapisano szablon „${tpl.name}” w Firestore`);
     } catch (err) {
       setCloudSyncStatus('error');
       setCloudSyncError(formatCloudError(err));
-      showToast('Nie udało się zapisać szablonu w Firestore — sprawdź reguły w panelu Chmury');
+      showToast(`Zapisano szablon „${tpl.name}” lokalnie (błąd synchronizacji Firestore)`);
     }
   }, [cloudUser, project, formatCloudError, showToast]);
 
+  const handleSaveCabinetAsTemplate = useCallback(
+    async (cfg: ParametricCabinetConfig, existingTemplateId?: string) => {
+      const cleanCfg = structuredClone(cfg);
+      const { parts, fasteners, groupId } = buildParametricCabinet(cleanCfg, 0, 0);
+      const category: FurnitureTemplateMeta['category'] =
+        cleanCfg.preset === 'steel_rack'
+          ? 'Warsztat'
+          : cleanCfg.preset === 'base_kitchen' ||
+              cleanCfg.preset === 'wall_cabinet' ||
+              cleanCfg.preset === 'corner_l' ||
+              cleanCfg.preset === 'oven_tower' ||
+              cleanCfg.preset === 'sink_cabinet' ||
+              cleanCfg.preset === 'dishwasher_bay'
+            ? 'Kuchenne'
+            : 'Domowe';
+
+      const tplId =
+        existingTemplateId ?? `tpl_cab_${Date.now()}_${Math.random().toString(36).slice(2, 5)}`;
+      const tplName = cleanCfg.name.trim() || 'Własna szafka';
+      const tpl: FurnitureTemplateMeta = {
+        id: tplId,
+        name: tplName,
+        subtitle: `${cleanCfg.widthMm} × ${cleanCfg.heightMm} × ${cleanCfg.depthMm} mm · edytowalna szafka`,
+        category,
+        project: {
+          id: `proj_${tplId}`,
+          name: tplName,
+          parts,
+          fasteners,
+          cabinetConfigs: {
+            [groupId]: cleanCfg,
+          },
+          updatedAt: Date.now(),
+        },
+      };
+
+      setLocalCustomTemplates((prev) => [tpl, ...prev.filter((t) => t.id !== tpl.id)]);
+
+      if (cloudUser) {
+        try {
+          await ensureWorkspaceProfile(cloudUser);
+          cloudProfileReadyRef.current = true;
+          await saveCloudTemplate(cloudUser.uid, tpl);
+          setLastCloudSyncedAt(Date.now());
+          showToast(
+            existingTemplateId
+              ? `Zaktualizowano szablon szafki „${tplName}”`
+              : `Zapisano szafkę „${tplName}” jako edytowalny szablon`
+          );
+          return;
+        } catch (err) {
+          setCloudSyncStatus('error');
+          setCloudSyncError(formatCloudError(err));
+        }
+      }
+      showToast(
+        existingTemplateId
+          ? `Zaktualizowano szablon „${tplName}”`
+          : `Zapisano szafkę „${tplName}” w Twoich szablonach`
+      );
+    },
+    [cloudUser, formatCloudError, showToast]
+  );
+
   const handleDeleteCloudTemplate = useCallback(
     async (templateId: string) => {
-      if (!cloudUser) return;
+      setLocalCustomTemplates((prev) => prev.filter((t) => t.id !== templateId));
+      if (!cloudUser) {
+        showToast('Usunięto szablon');
+        return;
+      }
       try {
         await deleteCloudTemplate(cloudUser.uid, templateId);
         setLastCloudSyncedAt(Date.now());
@@ -1021,12 +1121,14 @@ export default function App() {
         return;
       }
 
-      // SketchUp / PRO100 group selection: 1 click selects entire group unless drilled into it
-      if (
-        selectionScope === 'group' &&
-        clicked?.groupId &&
-        clicked.groupId !== activeGroupEditId
-      ) {
+      // Commercial CAD selection: parametric cabinets are always 1 unified entity unless user enters Expert single-board mode
+      const isParametricCab = Boolean(clicked?.groupId && project.cabinetConfigs?.[clicked.groupId]);
+      const shouldSelectWholeGroup =
+        Boolean(clicked?.groupId) &&
+        clicked?.groupId !== activeGroupEditId &&
+        (selectionScope === 'group' || (isParametricCab && uiMode === 'simple'));
+
+      if (shouldSelectWholeGroup && clicked?.groupId) {
         const groupMembers = project.parts
           .filter((p) => p.groupId === clicked.groupId && !p.hidden)
           .map((p) => p.id);
@@ -1042,13 +1144,24 @@ export default function App() {
       setSelectedPartId(id);
       setSelectedPartIds([id]);
     },
-    [multiSelectMode, project.parts, selectionScope, activeGroupEditId]
+    [multiSelectMode, project.parts, project.cabinetConfigs, selectionScope, uiMode, activeGroupEditId]
   );
 
   const handleDoubleClickPart = useCallback(
     (id: string) => {
       const clicked = project.parts.find((p) => p.id === id);
       if (!clicked) return;
+      // Double-clicking a parametric cabinet opens its properties directly (like commercial CAD)
+      if (clicked.groupId && project.cabinetConfigs?.[clicked.groupId]) {
+        const members = project.parts
+          .filter((p) => p.groupId === clicked.groupId && !p.hidden)
+          .map((p) => p.id);
+        setActiveGroupEditId(null);
+        setSelectedPartId(members[0] ?? id);
+        setSelectedPartIds(members.length > 0 ? members : [id]);
+        setInspectorOpen(true);
+        return;
+      }
       if (clicked.groupId && selectionScope === 'group' && activeGroupEditId !== clicked.groupId) {
         setActiveGroupEditId(clicked.groupId);
         setSelectedPartId(id);
@@ -1056,7 +1169,7 @@ export default function App() {
         showToast('Edycja pojedynczej płyty w grupie (kliknij tło, aby wyjść)');
       }
     },
-    [project.parts, selectionScope, activeGroupEditId, showToast]
+    [project.parts, project.cabinetConfigs, selectionScope, activeGroupEditId, showToast]
   );
 
   const handleSelectGroup = useCallback(
@@ -1322,33 +1435,57 @@ export default function App() {
 
   const handleUpdateParametricCabinet = useCallback(
     (groupId: string, nextCfg: ParametricCabinetConfig) => {
-      let nextSelectedIds: string[] = [];
-      commitProject((prev) => {
-        const rebuilt = rebuildParametricCabinetInPlace(
-          prev.parts,
-          prev.fasteners,
-          groupId,
-          nextCfg
-        );
-        nextSelectedIds = rebuilt.newPartIds;
-        return {
-          ...prev,
-          parts: rebuilt.parts,
-          fasteners: rebuilt.fasteners,
-          cabinetConfigs: {
-            ...(prev.cabinetConfigs ?? {}),
-            [groupId]: structuredClone(nextCfg),
-          },
-        };
-      });
-      if (nextSelectedIds.length > 0) {
-        setSelectedPartIds(nextSelectedIds);
-        setSelectedPartId(nextSelectedIds[0]);
+      const rebuilt = rebuildParametricCabinetInPlace(
+        project.parts,
+        project.fasteners,
+        groupId,
+        nextCfg
+      );
+      commitProject((prev) => ({
+        ...prev,
+        parts: rebuilt.parts,
+        fasteners: rebuilt.fasteners,
+        cabinetConfigs: {
+          ...(prev.cabinetConfigs ?? {}),
+          [groupId]: structuredClone(nextCfg),
+        },
+      }));
+      if (rebuilt.newPartIds.length > 0) {
+        setSelectedPartIds(rebuilt.newPartIds);
+        setSelectedPartId(rebuilt.newPartIds[0]);
       }
       setEditingCabinetGroupId(null);
-      showToast(`Zaktualizowano parametrycznie: ${nextCfg.name}`);
     },
-    [commitProject, showToast]
+    [project.parts, project.fasteners, commitProject]
+  );
+
+  const handleInsertCabinetTemplate = useCallback(
+    (cfg: ParametricCabinetConfig) => {
+      const cleanCfg = structuredClone(cfg);
+      const placement = computeSmartCabinetPlacement(
+        cleanCfg,
+        project.parts,
+        selectedPartId,
+        project.room,
+        'auto'
+      );
+      const { parts, fasteners, groupId } = buildParametricCabinet(
+        cleanCfg,
+        placement.offsetXmm,
+        placement.offsetZmm
+      );
+      handleInsertCabinet(parts, fasteners, groupId, cleanCfg);
+    },
+    [project.parts, project.room, selectedPartId, handleInsertCabinet]
+  );
+
+  const handleEditCabinetTemplate = useCallback(
+    (templateId: string, cfg: ParametricCabinetConfig) => {
+      setEditingCabinetGroupId(null);
+      setEditingTemplate({ id: templateId, config: structuredClone(cfg) });
+      setCabinetBuilderOpen(true);
+    },
+    []
   );
 
   const handleOpenParametricEditorForPart = useCallback(
@@ -1357,6 +1494,7 @@ export default function App() {
       if (!targetId) return;
       const target = project.parts.find((p) => p.id === targetId);
       if (!target?.groupId || !project.cabinetConfigs?.[target.groupId]) return;
+      setEditingTemplate(null);
       setEditingCabinetGroupId(target.groupId);
       setCabinetBuilderOpen(true);
     },
@@ -2118,6 +2256,58 @@ export default function App() {
     selectedPart?.groupId && project.cabinetConfigs?.[selectedPart.groupId]
   );
 
+  const selectedSingleCabinet = useMemo(() => {
+    if (selectedParts.length === 0) return null;
+    const firstGroupId = selectedParts[0]?.groupId;
+    if (!firstGroupId || activeGroupEditId === firstGroupId) return null;
+    const cfg = project.cabinetConfigs?.[firstGroupId];
+    if (!cfg) return null;
+    const allSameCabinet = selectedParts.every((p) => p.groupId === firstGroupId);
+    return allSameCabinet ? { groupId: firstGroupId, config: cfg } : null;
+  }, [selectedParts, project.cabinetConfigs, activeGroupEditId]);
+
+  const mergedTemplates = useMemo(() => {
+    const map = new Map<string, FurnitureTemplateMeta>();
+    for (const tpl of localCustomTemplates) {
+      map.set(tpl.id, tpl);
+    }
+    for (const tpl of cloudTemplates) {
+      map.set(tpl.id, tpl);
+    }
+    return Array.from(map.values());
+  }, [cloudTemplates, localCustomTemplates]);
+
+  const savedCabinetTemplates = useMemo(() => {
+    const out: Array<{ id: string; name: string; config: ParametricCabinetConfig }> = [];
+    for (const tpl of mergedTemplates) {
+      const configs = Object.values(tpl.project.cabinetConfigs ?? {});
+      if (configs.length === 1) {
+        out.push({ id: tpl.id, name: tpl.name, config: configs[0] });
+      }
+    }
+    return out;
+  }, [mergedTemplates]);
+
+  const latestMeasurementLabel = useMemo(() => {
+    if (measurements.length === 0) return null;
+    const seg = measurements[measurements.length - 1];
+    const dx = Math.abs(Math.round(seg.endMm[0] - seg.startMm[0]));
+    const dy = Math.abs(Math.round(seg.endMm[1] - seg.startMm[1]));
+    const dz = Math.abs(Math.round(seg.endMm[2] - seg.startMm[2]));
+    const total = Math.round(
+      Math.hypot(
+        seg.endMm[0] - seg.startMm[0],
+        seg.endMm[1] - seg.startMm[1],
+        seg.endMm[2] - seg.startMm[2]
+      )
+    );
+    const cm = `${(total / 10).toFixed(1).replace('.', ',')} cm`;
+    const activeAxes = (dx > 0 ? 1 : 0) + (dy > 0 ? 1 : 0) + (dz > 0 ? 1 : 0);
+    return activeAxes > 1
+      ? `${total.toLocaleString('pl-PL')} mm (${cm} · ΔX ${dx} · ΔY ${dy} · ΔZ ${dz})`
+      : `${total.toLocaleString('pl-PL')} mm (${cm})`;
+  }, [measurements]);
+
   const contextMenuCanEditParametric = useMemo(() => {
     if (!contextMenu || contextMenu.kind !== 'part') return false;
     const p = project.parts.find((x) => x.id === contextMenu.partId);
@@ -2804,13 +2994,19 @@ export default function App() {
         </div>
       )}
 
-      {/* Calm Empty-Scene Action Dock (single brass CTA + clean neutral secondary triggers) */}
-      {project.parts.length === 0 && !anyModalOpen && !startModalOpen && !leftDrawerMode && (
-        <div className="studio-glass animate-studio-pop fixed bottom-[72px] md:bottom-[104px] left-1/2 z-20 -translate-x-1/2 flex flex-wrap items-center justify-center gap-1.5 rounded-2xl p-1.5 max-w-[calc(100vw-20px)]">
+      {/* Calm Empty-Scene Action Dock (gated on select tool so it NEVER collides with BottomDock context bars) */}
+      {project.parts.length === 0 &&
+        !anyModalOpen &&
+        !startModalOpen &&
+        !leftDrawerMode &&
+        tool === 'select' &&
+        !selectedFastenerId && (
+        <div className="studio-glass animate-studio-pop fixed bottom-[76px] md:bottom-[104px] left-1/2 z-20 -translate-x-1/2 flex flex-wrap items-center justify-center gap-1.5 rounded-2xl p-1.5 max-w-[calc(100vw-20px)]">
           <button
             type="button"
             onClick={() => {
               setEditingCabinetGroupId(null);
+              setEditingTemplate(null);
               setCabinetBuilderOpen(true);
             }}
             className="flex min-h-[38px] items-center gap-1.5 rounded-xl bg-amber-500 px-3.5 text-xs font-semibold text-zinc-950 hover:bg-amber-400 transition-colors whitespace-nowrap cursor-pointer"
@@ -2923,8 +3119,13 @@ export default function App() {
         canEditParametricCabinet={contextMenuCanEditParametric}
         onClose={() => setContextMenu(null)}
         onOpenInspector={(id) => {
-          setSelectedPartId(id);
-          setSelectedPartIds([id]);
+          const p = project.parts.find((x) => x.id === id);
+          if (p?.groupId && project.cabinetConfigs?.[p.groupId]) {
+            handleSelectGroup(p.groupId);
+          } else {
+            setSelectedPartId(id);
+            setSelectedPartIds([id]);
+          }
           setInspectorOpen(true);
         }}
         onEditParametricCabinet={(id) => handleOpenParametricEditorForPart(id)}
@@ -3056,9 +3257,11 @@ export default function App() {
         onUndo={handleUndo}
         onRedo={handleRedo}
         selectedPartName={selectedPart?.name ?? null}
+        selectedCabinetName={selectedSingleCabinet?.config.name ?? null}
         selectedCount={selectedPartIds.length}
         selectedCanUngroup={selectedCanUngroup}
         canEditParametricCabinet={selectedHasParametricConfig}
+        latestMeasurementLabel={latestMeasurementLabel}
         selectedFastenerLabel={
           selectedFastener ? SCREW_MAP[selectedFastener.type].name : null
         }
@@ -3120,7 +3323,9 @@ export default function App() {
         onRenameProject={handleRenameProject}
         onDeleteProject={handleDeleteProject}
         onLoadTemplate={handleLoadTemplate}
-        templates={cloudTemplates}
+        onInsertCabinetTemplate={handleInsertCabinetTemplate}
+        onEditCabinetTemplate={handleEditCabinetTemplate}
+        templates={mergedTemplates}
         templatesLoading={cloudTemplatesLoading}
         templatesError={cloudTemplatesError}
         isCloudSignedIn={Boolean(cloudUser)}
@@ -3164,6 +3369,8 @@ export default function App() {
         allParts={project.parts}
         partFasteners={selectedPartFasteners}
         hasParametricConfig={selectedHasParametricConfig}
+        parametricCabinetConfig={selectedSingleCabinet?.config ?? null}
+        parametricCabinetGroupId={selectedSingleCabinet?.groupId ?? null}
         materialsVersion={materialsVersion}
         customTextures={customTextures}
         isColliding={Boolean(selectedPart && collisionReport.collidingIds.has(selectedPart.id))}
@@ -3193,6 +3400,8 @@ export default function App() {
         }}
         onSetClearanceDistance={handleSetClearanceDistance}
         onOpenParametricEditor={() => handleOpenParametricEditorForPart(selectedPartId)}
+        onUpdateParametricCabinet={handleUpdateParametricCabinet}
+        onSaveCabinetAsTemplate={(cfg) => void handleSaveCabinetAsTemplate(cfg)}
         onGroupSelected={handleGroupSelected}
         onUngroupSelected={handleUngroupSelected}
         onDuplicatePart={handleDuplicatePart}
@@ -3222,6 +3431,7 @@ export default function App() {
         }}
         onOpenCabinetBuilder={() => {
           setEditingCabinetGroupId(null);
+          setEditingTemplate(null);
           setCabinetBuilderOpen(true);
         }}
         onOpenMaterialsManager={() => setMaterialsModalOpen(true)}
@@ -3243,12 +3453,16 @@ export default function App() {
         selectedPartId={selectedPartId}
         room={project.room}
         editingCabinet={editingCabinetProp}
+        editingTemplate={editingTemplate}
+        savedCabinetTemplates={savedCabinetTemplates}
         onClose={() => {
           setCabinetBuilderOpen(false);
           setEditingCabinetGroupId(null);
+          setEditingTemplate(null);
         }}
         onInsertCabinet={handleInsertCabinet}
         onUpdateCabinet={handleUpdateParametricCabinet}
+        onSaveAsTemplate={(cfg, existingId) => void handleSaveCabinetAsTemplate(cfg, existingId)}
       />
 
       <ShapeSketchModal
@@ -3336,7 +3550,7 @@ export default function App() {
         open={startModalOpen}
         projects={projectStore.projects}
         activeProjectId={projectStore.activeProjectId}
-        templates={cloudTemplates}
+        templates={mergedTemplates}
         templatesLoading={cloudTemplatesLoading}
         templatesError={cloudTemplatesError}
         isCloudSignedIn={Boolean(cloudUser)}

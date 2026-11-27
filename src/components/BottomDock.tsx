@@ -108,9 +108,11 @@ interface BottomDockProps {
   onUndo: () => void;
   onRedo: () => void;
   selectedPartName: string | null;
+  selectedCabinetName?: string | null;
   selectedCount: number;
   selectedCanUngroup: boolean;
   canEditParametricCabinet?: boolean;
+  latestMeasurementLabel?: string | null;
   selectedFastenerLabel: string | null;
   onAlignSelected: (mode: AlignMode) => void;
   onDistributeSelected: (axis: 'x' | 'y' | 'z') => void;
@@ -191,9 +193,11 @@ export const BottomDock: React.FC<BottomDockProps> = ({
   onUndo,
   onRedo,
   selectedPartName,
+  selectedCabinetName = null,
   selectedCount,
   selectedCanUngroup,
   canEditParametricCabinet = false,
+  latestMeasurementLabel = null,
   selectedFastenerLabel,
   onAlignSelected,
   onDistributeSelected,
@@ -292,36 +296,40 @@ export const BottomDock: React.FC<BottomDockProps> = ({
           );
         })}
 
-        <div className="my-1 h-px w-6 bg-white/[0.08]" />
+        {isExpert && (
+          <>
+            <div className="my-1 h-px w-6 bg-white/[0.08]" />
 
-        {/* SketchUp-Style Group vs Single Part Selection Toggle */}
-        <button
-          type="button"
-          onClick={onToggleSelectionScope}
-          aria-label="Przełącz tryb zaznaczania grupa lub płyta"
-          className={`group relative flex h-10 w-10 flex-col items-center justify-center rounded-xl transition-all cursor-pointer ${
-            selectionScope === 'group'
-              ? 'bg-sky-500/15 text-sky-300 border border-sky-400/30'
-              : 'text-zinc-300 hover:bg-white/[0.08] hover:text-white'
-          }`}
-        >
-          {selectionScope === 'group' ? (
-            <Boxes className="h-4 w-4" />
-          ) : (
-            <Square className="h-4 w-4" />
-          )}
-          <span className="text-[8px] font-semibold leading-none mt-0.5">
-            {selectionScope === 'group' ? 'Grupa' : 'Płyta'}
-          </span>
-          <span
-            role="tooltip"
-            className="pointer-events-none absolute left-[calc(100%+10px)] top-1/2 -translate-y-1/2 -translate-x-1 opacity-0 group-hover:opacity-100 group-hover:translate-x-0 transition-all duration-150 rounded-lg border border-white/[0.1] bg-[#101216]/95 px-2.5 py-1 text-[11px] font-medium text-zinc-100 shadow-xl whitespace-nowrap"
-          >
-            {selectionScope === 'group'
-              ? 'Klik zaznacza całą szafkę (2× = płyta)'
-              : 'Klik zaznacza pojedynczą płytę'}
-          </span>
-        </button>
+            {/* SketchUp-Style Group vs Single Part Selection Toggle (Expert CAD only) */}
+            <button
+              type="button"
+              onClick={onToggleSelectionScope}
+              aria-label="Przełącz tryb zaznaczania szafka lub pojedyncza płyta"
+              className={`group relative flex h-10 w-10 flex-col items-center justify-center rounded-xl transition-all cursor-pointer ${
+                selectionScope === 'group'
+                  ? 'bg-sky-500/15 text-sky-300 border border-sky-400/30'
+                  : 'text-zinc-300 hover:bg-white/[0.08] hover:text-white'
+              }`}
+            >
+              {selectionScope === 'group' ? (
+                <Boxes className="h-4 w-4" />
+              ) : (
+                <Square className="h-4 w-4" />
+              )}
+              <span className="text-[8px] font-semibold leading-none mt-0.5">
+                {selectionScope === 'group' ? 'Moduł' : 'Płyta'}
+              </span>
+              <span
+                role="tooltip"
+                className="pointer-events-none absolute left-[calc(100%+10px)] top-1/2 -translate-y-1/2 -translate-x-1 opacity-0 group-hover:opacity-100 group-hover:translate-x-0 transition-all duration-150 rounded-lg border border-white/[0.1] bg-[#101216]/95 px-2.5 py-1 text-[11px] font-medium text-zinc-100 shadow-xl whitespace-nowrap"
+              >
+                {selectionScope === 'group'
+                  ? 'Klik zaznacza całą szafkę jako 1 element'
+                  : 'Tryb CNC: klik zaznacza pojedynczą płytę'}
+              </span>
+            </button>
+          </>
+        )}
 
         <div className="my-1 h-px w-6 bg-white/[0.08]" />
 
@@ -392,8 +400,10 @@ export const BottomDock: React.FC<BottomDockProps> = ({
                 </>
               ) : tool === 'measure' ? (
                 <>
-                  <span className="text-xs font-medium text-sky-300 truncate pl-1">
-                    Tapnij 2 punkty w 3D, aby zmierzyć
+                  <span className="text-xs font-medium text-sky-300 truncate pl-1 font-mono-num">
+                    {latestMeasurementLabel
+                      ? `Pomiar: ${latestMeasurementLabel}`
+                      : 'Tapnij 2 punkty w 3D, aby zmierzyć'}
                   </span>
                   {measurementsCount > 0 && (
                     <button
@@ -450,16 +460,18 @@ export const BottomDock: React.FC<BottomDockProps> = ({
                     onClick={onExitGroupEdit}
                     className="flex min-h-[36px] items-center gap-1 rounded-xl bg-sky-500/20 border border-sky-400/35 px-3 text-xs font-semibold text-sky-200 whitespace-nowrap shrink-0"
                   >
-                    <span>Wyjdź z grupy</span>
+                    <span>Wyjdź z edycji</span>
                   </button>
                 </>
               ) : (
                 <>
                   <div className="min-w-0 flex-1 pl-1">
                     <div className="text-xs font-semibold text-white truncate">
-                      {selectedCount > 1
-                        ? `Grupa (${selectedCount} elem.)`
-                        : selectedPartName}
+                      {selectedCabinetName
+                        ? selectedCabinetName
+                        : selectedCount > 1
+                          ? `${selectedCount} zaznaczonych`
+                          : selectedPartName}
                     </div>
                     {activeGroupEditLabel ? (
                       <button
@@ -467,9 +479,9 @@ export const BottomDock: React.FC<BottomDockProps> = ({
                         onClick={onExitGroupEdit}
                         className="text-[11px] font-medium text-sky-300"
                       >
-                        ← Wróć do całej grupy
+                        ← Wróć do całej szafki
                       </button>
-                    ) : selectedInGroup && selectedCount > 1 ? (
+                    ) : !selectedCabinetName && selectedInGroup && selectedCount > 1 ? (
                       <button
                         type="button"
                         onClick={onEnterSinglePartEdit}
@@ -1068,7 +1080,7 @@ export const BottomDock: React.FC<BottomDockProps> = ({
           DESKTOP SLIM FLOATING GLASS VIEW & CONTEXT DOCK (>= md)
       ===================================================================== */}
       <div
-        className="hidden md:block fixed bottom-0 left-1/2 z-30 w-[min(1000px,calc(100vw-140px))] pb-3 pointer-events-none transition-transform duration-200 ease-out"
+        className="hidden md:block fixed bottom-0 left-1/2 z-30 w-[min(1140px,calc(100vw-116px))] pb-3 pointer-events-none transition-transform duration-200 ease-out"
         style={{
           transform: collapsed
             ? 'translate(-50%, calc(100% - 34px))'
@@ -1145,10 +1157,40 @@ export const BottomDock: React.FC<BottomDockProps> = ({
                   </button>
                 </div>
               ) : tool === 'measure' ? (
-                <div className="flex items-center gap-2 min-w-0 text-sky-300">
+                <div className="flex items-center gap-2.5 min-w-0 text-sky-300">
                   <Ruler className="h-3.5 w-3.5 shrink-0" />
+                  {latestMeasurementLabel ? (
+                    <span className="truncate font-mono-num">
+                      <span className="text-zinc-400">Ostatni pomiar: </span>
+                      <strong className="text-amber-300 font-semibold">
+                        {latestMeasurementLabel}
+                      </strong>
+                      <span className="hidden lg:inline text-zinc-400">
+                        {' '}
+                        · kliknij kolejne 2 punkty, aby zmierzyć
+                      </span>
+                    </span>
+                  ) : (
+                    <span className="truncate">
+                      Miarka 3D: kliknij 2 punkty na ścianie, podłodze lub meblu, aby zmierzyć dystans w mm
+                    </span>
+                  )}
+                </div>
+              ) : tool === 'resize' && !selectedPartName ? (
+                <div className="flex items-center gap-2 min-w-0 text-amber-300">
+                  <Maximize2 className="h-3.5 w-3.5 shrink-0" />
                   <span className="truncate">
-                    Miarka 3D: kliknij 2 punkty w przestrzeni, aby zmierzyć dystans w mm
+                    Rozciągnij: kliknij szafkę lub płytę w 3D, aby rozciągnąć jej wymiary uchwytami
+                  </span>
+                </div>
+              ) : selectedCabinetName ? (
+                <div className="flex items-center gap-2 min-w-0">
+                  <LayoutPanelTop className="h-3.5 w-3.5 text-amber-400 shrink-0" />
+                  <span className="truncate font-semibold text-white">
+                    {selectedCabinetName}
+                  </span>
+                  <span className="hidden lg:inline text-[11px] text-zinc-400 whitespace-nowrap">
+                    · szafka parametryczna
                   </span>
                 </div>
               ) : selectedCount >= 2 ? (
@@ -1240,7 +1282,7 @@ export const BottomDock: React.FC<BottomDockProps> = ({
               ) : (
                 <div className="flex items-center gap-2 min-w-0">
                   <span className="truncate font-semibold text-white">
-                    {selectedPartName ?? `Wnętrze: ${activeGroupEditLabel}`}
+                    {selectedPartName ?? (activeGroupEditLabel ? `Wnętrze: ${activeGroupEditLabel}` : '')}
                   </span>
                   {activeGroupEditLabel ? (
                     <button
@@ -1248,7 +1290,7 @@ export const BottomDock: React.FC<BottomDockProps> = ({
                       onClick={onExitGroupEdit}
                       className="rounded-lg border border-sky-400/40 bg-sky-500/15 px-2 py-0.5 text-[11px] font-medium text-sky-200 hover:bg-sky-500/25 cursor-pointer whitespace-nowrap"
                     >
-                      ← Wyjdź z grupy
+                      ← Wróć do całej szafki
                     </button>
                   ) : selectedInGroup ? (
                     <button
@@ -1256,7 +1298,7 @@ export const BottomDock: React.FC<BottomDockProps> = ({
                       onClick={onSelectWholeGroup}
                       className="rounded-lg border border-sky-400/35 bg-sky-500/12 px-2 py-0.5 text-[11px] font-medium text-sky-200 hover:bg-sky-500/20 cursor-pointer whitespace-nowrap"
                     >
-                      Zaznacz całą grupę
+                      Zaznacz całą szafkę
                     </button>
                   ) : null}
                 </div>
@@ -1284,7 +1326,7 @@ export const BottomDock: React.FC<BottomDockProps> = ({
                   </button>
                 ) : selectedPartName && tool !== 'screw' ? (
                   <>
-                    {selectedCount >= 2 && !selectedInGroup && (
+                    {!selectedCabinetName && selectedCount >= 2 && !selectedInGroup && (
                       <button
                         type="button"
                         onClick={onGroupSelected}
@@ -1294,7 +1336,7 @@ export const BottomDock: React.FC<BottomDockProps> = ({
                         <span>Grupuj</span>
                       </button>
                     )}
-                    {selectedCanUngroup && (
+                    {!selectedCabinetName && selectedCanUngroup && (
                       <button
                         type="button"
                         onClick={onUngroupSelected}
@@ -1382,11 +1424,11 @@ export const BottomDock: React.FC<BottomDockProps> = ({
             </div>
           )}
 
-          {/* Single Clean Bottom Row: Essential View Controls + Prosty/Ekspert Switch */}
-          <div className="flex flex-wrap items-center justify-between gap-2">
+          {/* Single Clean Bottom Row: Essential View Controls + Prosty/Ekspert Switch (Strict 1-row nowrap) */}
+          <div className="flex flex-nowrap items-center justify-between gap-2 overflow-x-auto cad-scroll">
             {/* Left: Open Doors + (Expert) Exploded */}
-            <div className="flex items-center gap-3">
-              <div className="flex items-center gap-1.5 w-[124px] lg:w-[140px]">
+            <div className="flex items-center gap-2.5 shrink-0">
+              <div className="flex items-center gap-1.5 w-[104px] xl:w-[132px]">
                 <button
                   type="button"
                   onClick={() => onChangeOpenAmount(openAmount > 0.1 ? 0 : 1)}
@@ -1395,7 +1437,7 @@ export const BottomDock: React.FC<BottomDockProps> = ({
                   }`}
                   title="Otwórz/zamknij fronty i szuflady (O)"
                 >
-                  <DoorOpen className="h-3.5 w-3.5" />
+                  <DoorOpen className="h-3.5 w-3.5 shrink-0" />
                   <span>Otwórz</span>
                 </button>
                 <input
@@ -1411,7 +1453,7 @@ export const BottomDock: React.FC<BottomDockProps> = ({
               </div>
 
               {isExpert && (
-                <div className="flex items-center gap-1.5 w-[128px] lg:w-[144px]">
+                <div className="flex items-center gap-1.5 w-[106px] xl:w-[134px]">
                   <span className="text-[11px] font-medium text-zinc-400 whitespace-nowrap">
                     Rozstrzał
                   </span>
@@ -1429,10 +1471,10 @@ export const BottomDock: React.FC<BottomDockProps> = ({
               )}
             </div>
 
-            <div className="hidden lg:block h-4 w-px bg-white/[0.08]" aria-hidden="true" />
+            <div className="hidden lg:block h-4 w-px bg-white/[0.08] shrink-0" aria-hidden="true" />
 
             {/* Center: Precision & Visual Toggles */}
-            <div className="flex flex-wrap items-center gap-0.5">
+            <div className="flex flex-nowrap items-center gap-0.5 shrink-0">
               <button
                 type="button"
                 onClick={onToggleMagneticSnap}
@@ -1444,7 +1486,7 @@ export const BottomDock: React.FC<BottomDockProps> = ({
                 title="Magnes — przyciąganie do krawędzi płyt (M)"
               >
                 <Magnet className="h-3.5 w-3.5" />
-                <span>Magnes</span>
+                <span className="hidden lg:inline">Magnes</span>
               </button>
 
               <button
@@ -1468,7 +1510,7 @@ export const BottomDock: React.FC<BottomDockProps> = ({
 
               {isExpert && (
                 <>
-                  <div className="mx-1 h-4 w-px bg-white/[0.08]" aria-hidden="true" />
+                  <div className="mx-0.5 h-4 w-px bg-white/[0.08] shrink-0" aria-hidden="true" />
 
                   <button
                     type="button"
@@ -1481,7 +1523,7 @@ export const BottomDock: React.FC<BottomDockProps> = ({
                     title="Prześwity w świetle (D)"
                   >
                     <Ruler className="h-3.5 w-3.5" />
-                    <span className="hidden lg:inline">Prześwit</span>
+                    <span className="hidden xl:inline">Prześwit</span>
                   </button>
 
                   <button
@@ -1540,14 +1582,14 @@ export const BottomDock: React.FC<BottomDockProps> = ({
                     title="Instrukcja montażu krok po kroku"
                   >
                     <ListOrdered className="h-3.5 w-3.5" />
-                    <span className="hidden lg:inline">Montaż</span>
+                    <span className="hidden xl:inline">Montaż</span>
                   </button>
                 </>
               )}
             </div>
 
             {/* Right: Simple / Expert Segmented Switch + Shortcuts */}
-            <div className="flex items-center gap-1.5">
+            <div className="flex items-center gap-1 shrink-0">
               <div
                 className="flex items-center rounded-xl border border-white/[0.08] bg-white/[0.04] p-0.5"
                 title="Tryb Prosty ukrywa zaawansowane opcje warsztatowe (wkręty, RTG, CNC). Tryb Ekspert odblokowuje wszystko."
@@ -1555,7 +1597,7 @@ export const BottomDock: React.FC<BottomDockProps> = ({
                 <button
                   type="button"
                   onClick={() => onChangeUiMode('simple')}
-                  className={`rounded-lg px-2.5 py-1 text-[11px] font-medium transition-colors whitespace-nowrap cursor-pointer ${
+                  className={`rounded-lg px-2 py-1 text-[11px] font-medium transition-colors whitespace-nowrap cursor-pointer ${
                     !isExpert
                       ? 'bg-amber-500 text-zinc-950 font-semibold shadow-sm'
                       : 'text-zinc-400 hover:text-zinc-200'
@@ -1566,7 +1608,7 @@ export const BottomDock: React.FC<BottomDockProps> = ({
                 <button
                   type="button"
                   onClick={() => onChangeUiMode('expert')}
-                  className={`rounded-lg px-2.5 py-1 text-[11px] font-medium transition-colors whitespace-nowrap cursor-pointer ${
+                  className={`rounded-lg px-2 py-1 text-[11px] font-medium transition-colors whitespace-nowrap cursor-pointer ${
                     isExpert
                       ? 'bg-amber-500 text-zinc-950 font-semibold shadow-sm'
                       : 'text-zinc-400 hover:text-zinc-200'

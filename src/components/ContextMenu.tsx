@@ -116,7 +116,11 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
         <>
           <div className="mb-1 border-b border-white/[0.08] px-2.5 py-1.5">
             <p className="truncate text-[11px] font-semibold text-amber-400">
-              {selectedCount > 1 ? `Zaznaczono: ${selectedCount} płyty` : menu.partName}
+              {canEditParametricCabinet
+                ? 'Szafka parametryczna'
+                : selectedCount > 1
+                  ? `Zaznaczono: ${selectedCount} płyty`
+                  : menu.partName}
             </p>
           </div>
           <button
@@ -228,7 +232,7 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
               Wkręć łączniki w styki płyty
             </span>
           </button>
-          {selectedCount >= 2 && (
+          {!canEditParametricCabinet && selectedCount >= 2 && (
             <button
               type="button"
               className={itemCls}
@@ -243,7 +247,7 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
               </span>
             </button>
           )}
-          {selectedCanUngroup && (
+          {!canEditParametricCabinet && selectedCanUngroup && (
             <button
               type="button"
               className={itemCls}
@@ -269,7 +273,11 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
           >
             <span className="flex items-center gap-2">
               <Trash2 className="h-3.5 w-3.5 text-red-400" />
-              {selectedCount > 1 ? `Usuń zaznaczone (${selectedCount})` : 'Usuń płytę'}
+              {canEditParametricCabinet
+                ? 'Usuń szafkę'
+                : selectedCount > 1
+                  ? `Usuń zaznaczone (${selectedCount})`
+                  : 'Usuń płytę'}
             </span>
             <span className="text-[10px] text-red-400/70 font-mono-num">Del</span>
           </button>
