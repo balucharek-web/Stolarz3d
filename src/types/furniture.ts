@@ -549,6 +549,7 @@ export const DEFAULT_ROOM_CONFIG: RoomConfig = {
 export type CabinetPresetId =
   | 'base_kitchen'
   | 'corner_l'
+  | 'wall_corner_l'
   | 'drawer_chest'
   | 'wall_cabinet'
   | 'wardrobe'
@@ -557,7 +558,10 @@ export type CabinetPresetId =
   | 'steel_rack'
   | 'oven_tower'
   | 'sink_cabinet'
-  | 'dishwasher_bay';
+  | 'dishwasher_bay'
+  | 'tall_pantry'
+  | 'fridge_tower'
+  | 'kitchen_island';
 
 export type CabinetPlacementMode = 'auto' | 'right' | 'left' | 'back_wall' | 'center';
 

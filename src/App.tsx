@@ -281,6 +281,7 @@ export default function App() {
   const [nudgePadOpen, setNudgePadOpen] = useState<boolean>(false);
   const [viewMode, setViewMode] = useState<'3d' | 'plan2d'>('3d');
   const [sceneTheme, setSceneTheme] = useState<SceneBackdropTheme>('studio_light');
+  const [cameraProjection, setCameraProjection] = useState<'perspective' | 'orthographic'>('perspective');
   const [presentationMode, setPresentationMode] = useState<boolean>(false);
   const [presentationAutoOrbit, setPresentationAutoOrbit] = useState<boolean>(true);
   const [toastMsg, setToastMsg] = useState<string | null>(null);
@@ -2299,6 +2300,18 @@ export default function App() {
     [showToast]
   );
 
+  const handleToggleCameraProjection = useCallback(() => {
+    setCameraProjection((prev) => {
+      const next = prev === 'perspective' ? 'orthographic' : 'perspective';
+      showToast(
+        next === 'orthographic'
+          ? 'Rzut ortograficzny CAD (bez zbiegu perspektywy)'
+          : 'Rzut perspektywiczny 3D'
+      );
+      return next;
+    });
+  }, [showToast]);
+
   const handleSnapshot = useCallback(() => {
     const dataUrl = viewportRef.current?.captureSnapshot();
     if (!dataUrl) return;
@@ -2307,6 +2320,16 @@ export default function App() {
     a.download = `${project.name.toLowerCase().replace(/\s+/g, '_')}_3d.png`;
     a.click();
     showToast('Zapisano wizualizację 3D (PNG)');
+  }, [project.name, showToast]);
+
+  const handleSnapshot4K = useCallback(() => {
+    const dataUrl = viewportRef.current?.captureSnapshot({ highRes: true });
+    if (!dataUrl) return;
+    const a = document.createElement('a');
+    a.href = dataUrl;
+    a.download = `${project.name.toLowerCase().replace(/\s+/g, '_')}_4k_studio.png`;
+    a.click();
+    showToast('Zapisano render Studio 4K (PNG)');
   }, [project.name, showToast]);
 
   const handleChangeMaterialsConfig = useCallback(
@@ -2641,6 +2664,9 @@ export default function App() {
         case 'x':
           setXrayMode((x) => !x);
           break;
+        case 'p':
+          handleToggleCameraProjection();
+          break;
         case '?':
           setShortcutsOpen((s) => !s);
           break;
@@ -2676,6 +2702,7 @@ export default function App() {
     handleRedo,
     handleDuplicatePart,
     handleNudgeSelected,
+    handleToggleCameraProjection,
     selectedPartId,
     selectedFastenerId,
     roomEditMode,
@@ -3528,6 +3555,8 @@ export default function App() {
       {!presentationMode && viewMode === '3d' && (
         <ViewCube
           inspectorOpen={inspectorOpen && Boolean(selectedPart)}
+          cameraProjection={cameraProjection}
+          onToggleProjection={handleToggleCameraProjection}
           onSelectView={(preset) => viewportRef.current?.setCameraPreset(preset)}
           onFocusAll={() => viewportRef.current?.focusAll()}
         />
@@ -3560,6 +3589,7 @@ export default function App() {
           materialsVersion={materialsVersion}
           lighting={lighting}
           sceneTheme={sceneTheme}
+          cameraProjection={cameraProjection}
           presentationMode={presentationMode}
           autoOrbit={presentationAutoOrbit}
           customTextures={customTextures}
@@ -3728,9 +3758,20 @@ export default function App() {
               type="button"
               onClick={handleSnapshot}
               className="flex h-8 items-center gap-1 rounded-lg border border-white/[0.1] bg-white/[0.06] px-2.5 text-xs font-medium text-zinc-100 hover:bg-white/[0.14] transition-colors cursor-pointer"
+              title="Szybki zrzut ekranu PNG"
             >
               <Camera className="h-3.5 w-3.5 text-amber-400" />
               <span>PNG</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={handleSnapshot4K}
+              className="flex h-8 items-center gap-1 rounded-lg border border-amber-400/40 bg-amber-500/15 px-2.5 text-xs font-semibold text-amber-200 hover:bg-amber-500/25 transition-colors cursor-pointer"
+              title="Wyrenderuj wizualizację 4K Studio PNG do oferty klienta"
+            >
+              <Camera className="h-3.5 w-3.5 text-amber-300" />
+              <span>Render 4K</span>
             </button>
 
             <button

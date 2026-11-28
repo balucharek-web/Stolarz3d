@@ -53,10 +53,14 @@ const PRESET_ORDER: CabinetPresetId[] = [
   'base_kitchen',
   'sink_cabinet',
   'oven_tower',
+  'fridge_tower',
+  'tall_pantry',
   'dishwasher_bay',
   'corner_l',
-  'drawer_chest',
   'wall_cabinet',
+  'wall_corner_l',
+  'kitchen_island',
+  'drawer_chest',
   'wardrobe',
   'sliding_wardrobe',
   'tv_console',
@@ -131,7 +135,9 @@ export const CabinetBuilderModal: React.FC<CabinetBuilderModalProps> = ({
     const isHybrid =
       cfg.preset !== 'sliding_wardrobe' &&
       cfg.preset !== 'corner_l' &&
+      cfg.preset !== 'wall_corner_l' &&
       cfg.preset !== 'oven_tower' &&
+      cfg.preset !== 'fridge_tower' &&
       cfg.preset !== 'sink_cabinet' &&
       cfg.preset !== 'dishwasher_bay' &&
       cfg.drawerCount > 0 &&
@@ -188,12 +194,13 @@ export const CabinetBuilderModal: React.FC<CabinetBuilderModalProps> = ({
   };
 
   const isSliding = cfg.preset === 'sliding_wardrobe';
-  const isCorner = cfg.preset === 'corner_l';
+  const isCorner = cfg.preset === 'corner_l' || cfg.preset === 'wall_corner_l';
   const isSteelRack = cfg.preset === 'steel_rack';
   const isOvenTower = cfg.preset === 'oven_tower';
   const isSinkCabinet = cfg.preset === 'sink_cabinet';
   const isDishwasher = cfg.preset === 'dishwasher_bay';
-  const isAgdPreset = isOvenTower || isSinkCabinet || isDishwasher;
+  const isFridgeTower = cfg.preset === 'fridge_tower';
+  const isAgdPreset = isOvenTower || isSinkCabinet || isDishwasher || isFridgeTower;
 
   // Live 2D SVG schematic dimensions
   const totalDrawH = cfg.heightMm + (cfg.addCountertop ? 38 : 0);

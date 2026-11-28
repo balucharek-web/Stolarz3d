@@ -418,6 +418,152 @@ export const CABINET_PRESETS: Record<
       fastenerType: 'confirmat_7x50',
     },
   },
+  wall_corner_l: {
+    label: 'Szafka wisząca narożna L',
+    desc: '860 × 720 × 340 mm · Górna narożna ze ślepym bokiem, 2 półki i frez LED',
+    config: {
+      name: 'Wisząca narożna 86',
+      preset: 'wall_corner_l',
+      widthMm: 860,
+      heightMm: 720,
+      depthMm: 340,
+      boardThicknessMm: 18,
+      plinthHeightMm: 0,
+      elevationYmm: 1440,
+      plinthStyle: 'none',
+      topType: 'full_panel',
+      verticalDividers: 0,
+      shelfCount: 2,
+      drawerCount: 0,
+      doorMode: 'single_right',
+      frontType: 'overlay',
+      frontGapMm: 3,
+      handleStyle: 'tip_on',
+      backType: 'hdf_grooved',
+      slideType: 'none',
+      wallFillerSide: 'none',
+      wallFillerWidthMm: 45,
+      system32Holes: true,
+      cornerBlindWidthMm: 340,
+      addWardrobeRod: false,
+      addLedGroove: true,
+      corpusMaterialId: 'white_matte',
+      frontMaterialId: 'white_matte',
+      frontFinish: 'satin',
+      addCountertop: false,
+      countertopMaterialId: 'concrete_top',
+      autoFasteners: true,
+      fastenerType: 'confirmat_7x50',
+    },
+  },
+  tall_pantry: {
+    label: 'Słupek spiżarniany / Cargo',
+    desc: '600 × 2100 × 560 mm · 4 szuflady dolne Blum + 3 półki górne + front',
+    config: {
+      name: 'Słupek spiżarnia 60',
+      preset: 'tall_pantry',
+      widthMm: 600,
+      heightMm: 2100,
+      depthMm: 560,
+      boardThicknessMm: 18,
+      plinthHeightMm: 100,
+      elevationYmm: 0,
+      plinthStyle: 'plinth_board',
+      topType: 'full_panel',
+      verticalDividers: 0,
+      shelfCount: 3,
+      drawerCount: 4,
+      doorMode: 'single_left',
+      frontType: 'overlay',
+      frontGapMm: 3,
+      handleStyle: 'gola_j',
+      backType: 'hdf_grooved',
+      slideType: 'undermount_blum',
+      wallFillerSide: 'none',
+      wallFillerWidthMm: 45,
+      system32Holes: true,
+      addWardrobeRod: false,
+      corpusMaterialId: 'white_matte',
+      frontMaterialId: 'oak_craft',
+      frontFinish: 'satin',
+      addCountertop: false,
+      countertopMaterialId: 'concrete_top',
+      autoFasteners: true,
+      fastenerType: 'confirmat_7x50',
+    },
+  },
+  fridge_tower: {
+    label: 'Słupek pod lodówkę 210',
+    desc: '600 × 2100 × 580 mm · Komin wentylacyjny, 2 fronty lodówki + szafka górna',
+    config: {
+      name: 'Zabudowa lodówki 60',
+      preset: 'fridge_tower',
+      widthMm: 600,
+      heightMm: 2100,
+      depthMm: 580,
+      boardThicknessMm: 18,
+      plinthHeightMm: 100,
+      elevationYmm: 0,
+      plinthStyle: 'plinth_board',
+      topType: 'full_panel',
+      verticalDividers: 0,
+      shelfCount: 1,
+      drawerCount: 0,
+      doorMode: 'single_left',
+      frontType: 'overlay',
+      frontGapMm: 3,
+      handleStyle: 'gola_j',
+      backType: 'none',
+      slideType: 'none',
+      wallFillerSide: 'none',
+      wallFillerWidthMm: 45,
+      system32Holes: false,
+      addWardrobeRod: false,
+      corpusMaterialId: 'white_matte',
+      frontMaterialId: 'oak_craft',
+      frontFinish: 'satin',
+      addCountertop: false,
+      countertopMaterialId: 'concrete_top',
+      autoFasteners: true,
+      fastenerType: 'confirmat_7x50',
+    },
+  },
+  kitchen_island: {
+    label: 'Wyspa kuchenna z barkiem',
+    desc: '1600 × 900 × 600 mm · Blat 900 mm (nawis 300 mm), 2 przegrody i dekoracyjne plecy',
+    config: {
+      name: 'Wyspa kuchenna 160',
+      preset: 'kitchen_island',
+      widthMm: 1600,
+      heightMm: 900,
+      depthMm: 600,
+      boardThicknessMm: 18,
+      plinthHeightMm: 100,
+      elevationYmm: 0,
+      plinthStyle: 'plinth_board',
+      topType: 'stretchers',
+      verticalDividers: 1,
+      shelfCount: 1,
+      drawerCount: 0,
+      doorMode: 'double',
+      frontType: 'overlay',
+      frontGapMm: 3,
+      handleStyle: 'gola_j',
+      backType: 'hdf_grooved',
+      slideType: 'undermount_blum',
+      wallFillerSide: 'none',
+      wallFillerWidthMm: 45,
+      system32Holes: true,
+      addWardrobeRod: false,
+      corpusMaterialId: 'anthracite_matte',
+      frontMaterialId: 'oak_craft',
+      frontFinish: 'satin',
+      addCountertop: true,
+      countertopMaterialId: 'concrete_top',
+      autoFasteners: true,
+      fastenerType: 'confirmat_7x50',
+    },
+  },
 };
 
 function uid(prefix: string): string {
@@ -456,7 +602,7 @@ export function buildParametricCabinet(
   const innerW = Math.max(120, W - 2 * t);
   const gap = Math.max(1, Math.min(6, Math.round(cfg.frontGapMm)));
   const isSliding = cfg.preset === 'sliding_wardrobe';
-  const isCorner = cfg.preset === 'corner_l';
+  const isCorner = cfg.preset === 'corner_l' || cfg.preset === 'wall_corner_l';
   const topType = cfg.topType ?? 'full_panel';
   const handleStyle: HandleStyle = cfg.handleStyle ?? 'bar';
   const rawDividersCount = isCorner
@@ -1179,6 +1325,226 @@ export function buildParametricCabinet(
       ? autoDetectJointFasteners(parts, [], cfg.fastenerType)
       : [];
     return { parts, fasteners: dwFasteners, groupId };
+  }
+
+  // ==================== DEDICATED BUILT-IN FRIDGE TOWER (2100 mm + COOLING CHIMNEY) ====================
+  if (cfg.preset === 'fridge_tower') {
+    const bodyBottomY = baseY + plinthH;
+    const bodyCenterY = bodyBottomY + bodyH / 2;
+    const frontEdge2mm = { thicknessMm: 2 as const, top: true };
+    const allEdge08 = {
+      thicknessMm: 0.8 as const,
+      top: true,
+      bottom: true,
+      left: true,
+      right: true,
+    };
+    // Built-in fridge needs 60 mm rear ventilation chimney behind bottom deck and upper shelf
+    const chimneyMm = 60;
+    const ventDeckDepth = Math.max(260, D - chimneyMm);
+    const ventDeckZ = offsetZmm + chimneyMm / 2;
+    const fridgeBayH = Math.min(Math.max(1500, bodyH - 320), 1780);
+    const topShelfY = bodyBottomY + t + fridgeBayH + t / 2;
+    const hasTopCompartment = bodyH - (fridgeBayH + t * 2) >= 140;
+
+    // 1. Full-height left & right sides
+    parts.push({
+      id: uid('fr_side_l'),
+      name: `${cfg.name} — Bok lewy`,
+      kind: 'panel',
+      materialId: cfg.corpusMaterialId,
+      width: t,
+      height: bodyH,
+      depth: D,
+      position: [offsetXmm - W / 2 + t / 2, bodyCenterY, offsetZmm],
+      rotation: [0, 0, 0],
+      grainRotated: true,
+      edgeBanding: frontEdge2mm,
+      groupId,
+    });
+    parts.push({
+      id: uid('fr_side_r'),
+      name: `${cfg.name} — Bok prawy`,
+      kind: 'panel',
+      materialId: cfg.corpusMaterialId,
+      width: t,
+      height: bodyH,
+      depth: D,
+      position: [offsetXmm + W / 2 - t / 2, bodyCenterY, offsetZmm],
+      rotation: [0, 0, 0],
+      grainRotated: true,
+      edgeBanding: frontEdge2mm,
+      groupId,
+    });
+
+    // 2. Ventilated bottom deck (recessed 60 mm from back for airflow intake)
+    parts.push({
+      id: uid('fr_bot'),
+      name: `${cfg.name} — Wieniec dolny wentylowany`,
+      kind: 'panel',
+      materialId: cfg.corpusMaterialId,
+      width: innerW,
+      height: t,
+      depth: ventDeckDepth,
+      position: [offsetXmm, bodyBottomY + t / 2, ventDeckZ],
+      rotation: [0, 0, 0],
+      edgeBanding: frontEdge2mm,
+      groupId,
+    });
+
+    // 3. Top deck (also recessed 50 mm at back for warm air exhaust)
+    parts.push({
+      id: uid('fr_top'),
+      name: `${cfg.name} — Wieniec górny (wywiew)`,
+      kind: 'panel',
+      materialId: cfg.corpusMaterialId,
+      width: innerW,
+      height: t,
+      depth: Math.max(260, D - 50),
+      position: [offsetXmm, bodyBottomY + bodyH - t / 2, offsetZmm + 25],
+      rotation: [0, 0, 0],
+      edgeBanding: frontEdge2mm,
+      groupId,
+    });
+
+    // 4. Separator deck above fridge cavity
+    if (hasTopCompartment) {
+      parts.push({
+        id: uid('fr_sep'),
+        name: `${cfg.name} — Wieniec nad lodówką`,
+        kind: 'panel',
+        materialId: cfg.corpusMaterialId,
+        width: innerW,
+        height: t,
+        depth: ventDeckDepth,
+        position: [offsetXmm, topShelfY, ventDeckZ],
+        rotation: [0, 0, 0],
+        edgeBanding: frontEdge2mm,
+        groupId,
+      });
+    }
+
+    // 5. Rear stabilizing rail behind fridge cavity (leaves full cooling chimney open)
+    parts.push({
+      id: uid('fr_brace'),
+      name: `${cfg.name} — Listwa wzmacniająca tylna`,
+      kind: 'panel',
+      materialId: cfg.corpusMaterialId,
+      width: innerW,
+      height: 110,
+      depth: t,
+      position: [offsetXmm, bodyBottomY + Math.round(bodyH * 0.45), offsetZmm - D / 2 + t / 2],
+      rotation: [0, 0, 0],
+      groupId,
+    });
+
+    // 6. Recessed plinth with ventilation gap
+    if (plinthH > 0) {
+      const plinthSetback = 50;
+      parts.push({
+        id: uid('fr_plinth'),
+        name: `${cfg.name} — Cokół wentylowany`,
+        kind: 'panel',
+        materialId: cfg.frontMaterialId,
+        width: W - 4,
+        height: Math.max(30, plinthH - 2),
+        depth: t,
+        position: [offsetXmm, baseY + plinthH / 2, offsetZmm + D / 2 - plinthSetback],
+        rotation: [0, 0, 0],
+        edgeBanding: frontEdge2mm,
+        cutouts: [
+          {
+            id: uid('vent_grille'),
+            shape: 'rect',
+            xMm: 0,
+            yMm: 0,
+            widthMm: Math.min(420, Math.max(180, W - 160)),
+            heightMm: Math.min(54, Math.max(24, plinthH - 34)),
+            label: 'Kratka wentylacyjna lodówki',
+          },
+        ],
+        groupId,
+      });
+    }
+
+    // 7. Split refrigerator fronts (Lower freezer door + Upper fridge door + Top storage door)
+    const doorZ = offsetZmm + D / 2 + t / 2 + 2;
+    const frontW = W - gap;
+    const hingeSide: 'left' | 'right' = cfg.doorMode === 'single_right' ? 'right' : 'left';
+    const handleSide: 'left' | 'right' = hingeSide === 'left' ? 'right' : 'left';
+    const freezerH = Math.min(720, Math.round(fridgeBayH * 0.4));
+    const upperFridgeH = Math.max(400, fridgeBayH - freezerH - gap);
+
+    parts.push({
+      id: uid('fr_door_freezer'),
+      name: `${cfg.name} — Front zamrażarki`,
+      kind: 'door',
+      materialId: cfg.frontMaterialId,
+      surfaceFinish: cfg.frontFinish,
+      width: frontW,
+      height: freezerH,
+      depth: t,
+      position: [offsetXmm, bodyBottomY + freezerH / 2 + gap / 2, doorZ],
+      rotation: [0, 0, 0],
+      grainRotated: true,
+      handleSide,
+      handleStyle,
+      hingeSide,
+      hingeCount: 2,
+      edgeBanding: allEdge08,
+      hardwareTag: 'door_overlay',
+      groupId,
+    });
+
+    parts.push({
+      id: uid('fr_door_main'),
+      name: `${cfg.name} — Front chłodziarki`,
+      kind: 'door',
+      materialId: cfg.frontMaterialId,
+      surfaceFinish: cfg.frontFinish,
+      width: frontW,
+      height: upperFridgeH,
+      depth: t,
+      position: [offsetXmm, bodyBottomY + freezerH + gap + upperFridgeH / 2, doorZ],
+      rotation: [0, 0, 0],
+      grainRotated: true,
+      handleSide,
+      handleStyle,
+      hingeSide,
+      hingeCount: upperFridgeH >= 1000 ? 3 : 2,
+      edgeBanding: allEdge08,
+      hardwareTag: 'door_overlay',
+      groupId,
+    });
+
+    if (hasTopCompartment) {
+      const topDoorBottom = bodyBottomY + fridgeBayH + gap * 1.5;
+      const topDoorH = Math.max(120, bodyBottomY + bodyH - topDoorBottom - gap / 2);
+      parts.push({
+        id: uid('fr_door_top'),
+        name: `${cfg.name} — Front szafki górnej`,
+        kind: 'door',
+        materialId: cfg.frontMaterialId,
+        surfaceFinish: cfg.frontFinish,
+        width: frontW,
+        height: topDoorH,
+        depth: t,
+        position: [offsetXmm, topDoorBottom + topDoorH / 2, doorZ],
+        rotation: [0, 0, 0],
+        handleSide: 'none',
+        handleStyle: 'tip_on',
+        hingeSide: 'top',
+        hingeCount: 2,
+        edgeBanding: allEdge08,
+        hardwareTag: 'flap_door',
+        groupId,
+      });
+    }
+
+    const frFasteners = cfg.autoFasteners
+      ? autoDetectJointFasteners(parts, [], cfg.fastenerType)
+      : [];
+    return { parts, fasteners: frFasteners, groupId };
   }
 
   const bodyBottomY = baseY + plinthH;
@@ -2208,28 +2574,50 @@ export function buildParametricCabinet(
     }
   }
 
-  // 10. Optional 38mm Kitchen Countertop
+  // 10. Optional 38mm Kitchen Countertop (with 300 mm bar overhang & decorative rear panel for kitchen_island)
+  if (cfg.preset === 'kitchen_island') {
+    parts.push({
+      id: uid('cab_island_back_decor'),
+      name: `${cfg.name} — Plecy dekoracyjne wyspy`,
+      kind: 'panel',
+      materialId: cfg.frontMaterialId,
+      surfaceFinish: cfg.frontFinish,
+      width: W,
+      height: bodyH + plinthH,
+      depth: t,
+      position: [offsetXmm, baseY + (bodyH + plinthH) / 2, offsetZmm - D / 2 - t / 2],
+      rotation: [0, 0, 0],
+      edgeBanding: allEdge08,
+      groupId,
+    });
+  }
+
   if (cfg.addCountertop) {
     const topH = 38;
-    const overhangFront = 25;
-    const topDepth = D + overhangFront;
+    const isIsland = cfg.preset === 'kitchen_island';
+    const overhangFront = isIsland ? 30 : 25;
+    const overhangBack = isIsland ? 300 : 0;
+    const topDepth = D + overhangFront + overhangBack + (isIsland ? t : 0);
     const leftFillerExtra =
       cfg.wallFillerSide === 'left' || cfg.wallFillerSide === 'both' ? fillerW : 0;
     const rightFillerExtra =
       cfg.wallFillerSide === 'right' || cfg.wallFillerSide === 'both' ? fillerW : 0;
-    const topW = W + 4 + leftFillerExtra + rightFillerExtra;
+    const topW = W + (isIsland ? 40 : 4) + leftFillerExtra + rightFillerExtra;
     const topCenterX = offsetXmm + (rightFillerExtra - leftFillerExtra) / 2;
+    const topCenterZ = offsetZmm + (overhangFront - overhangBack - (isIsland ? t : 0)) / 2;
     parts.push({
       id: uid('cab_countertop'),
-      name: `${cfg.name} — Blat 38 mm`,
+      name: isIsland ? `${cfg.name} — Blat wyspowy z barkiem 38 mm` : `${cfg.name} — Blat 38 mm`,
       kind: 'countertop',
       materialId: cfg.countertopMaterialId,
       width: topW,
       height: topH,
       depth: topDepth,
-      position: [topCenterX, bodyBottomY + bodyH + topH / 2, offsetZmm + overhangFront / 2],
+      position: [topCenterX, bodyBottomY + bodyH + topH / 2, topCenterZ],
       rotation: [0, 0, 0],
-      edgeBanding: { thicknessMm: 2, top: true, left: true, right: true },
+      edgeBanding: isIsland
+        ? { thicknessMm: 2, top: true, bottom: true, left: true, right: true }
+        : { thicknessMm: 2, top: true, left: true, right: true },
       groupId,
     });
   }

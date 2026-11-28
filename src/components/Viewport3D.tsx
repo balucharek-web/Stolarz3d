@@ -57,7 +57,7 @@ import type { ContextMenuTarget } from './ContextMenu';
 
 export interface Viewport3DHandle {
   setCameraPreset: (preset: CameraPreset) => void;
-  captureSnapshot: () => string | null;
+  captureSnapshot: (options?: { highRes?: boolean }) => string | null;
   focusAll: () => void;
   focusPart: (partId: string) => void;
 }
@@ -92,6 +92,7 @@ interface Viewport3DProps {
   jointZones: JointZone[];
   isParametricCabinetSelected?: boolean;
   sceneTheme?: SceneBackdropTheme;
+  cameraProjection?: 'perspective' | 'orthographic';
   presentationMode?: boolean;
   autoOrbit?: boolean;
   onSelectPart: (id: string | null, additive?: boolean) => void;
@@ -473,7 +474,7 @@ export const Viewport3D = forwardRef<Viewport3DHandle, Viewport3DProps>(
     const runtimeRef = useRef<{
       renderer: THREE.WebGLRenderer;
       scene: THREE.Scene;
-      camera: THREE.PerspectiveCamera;
+      camera: THREE.PerspectiveCamera | THREE.OrthographicCamera;
       orbit: OrbitControls;
       transform: TransformControls;
       groupPivotProxy: THREE.Group;
@@ -512,6 +513,7 @@ export const Viewport3D = forwardRef<Viewport3DHandle, Viewport3DProps>(
       clearPendingMeasure: () => void;
       requestRender: () => void;
       startCameraTransition: (pos: THREE.Vector3, target: THREE.Vector3) => void;
+      setProjection: (mode: 'perspective' | 'orthographic') => void;
       setExplodedTarget: (v: number) => void;
       setOpenTarget: (v: number) => void;
       applyPartAnimations: () => void;
@@ -601,7 +603,7 @@ export const Viewport3D = forwardRef<Viewport3DHandle, Viewport3DProps>(
         dir.normalize();
         rt.startCameraTransition(center.clone().addScaledVector(dir, dist), center);
       },
-      captureSnapshot() {
+      captureSnapshot(options?: { highRes?: boolean }) {
         const rt = runtimeRef.current;
         if (!rt) return null;
         // Hide gizmo, guides, joint zones, resize handles & previews cleanly for studio photo export
@@ -619,8 +621,29 @@ export const Viewport3D = forwardRef<Viewport3DHandle, Viewport3DProps>(
         rt.resizeHandlesRoot.visible = false;
         rt.measureLiveRoot.visible = false;
 
-        rt.renderer.render(rt.scene, rt.camera);
-        const dataUrl = rt.renderer.domElement.toDataURL('image/png');
+        let dataUrl: string | null = null;
+        if (options?.highRes) {
+          const prevSize = new THREE.Vector2();
+          rt.renderer.getSize(prevSize);
+          const prevPr = rt.renderer.getPixelRatio();
+          const aspect = prevSize.x > 0 && prevSize.y > 0 ? prevSize.x / prevSize.y : 16 / 9;
+          const maxTex = Math.min(4096, rt.renderer.capabilities.maxTextureSize || 4096);
+          const targetMax = rt.isSoftwareGl ? Math.min(2560, maxTex) : Math.min(3840, maxTex);
+          const outW = aspect >= 1 ? targetMax : Math.round(targetMax * aspect);
+          const outH = aspect >= 1 ? Math.round(targetMax / aspect) : targetMax;
+          try {
+            rt.renderer.setPixelRatio(1);
+            rt.renderer.setSize(outW, outH, false);
+            rt.renderer.render(rt.scene, rt.camera);
+            dataUrl = rt.renderer.domElement.toDataURL('image/png');
+          } finally {
+            rt.renderer.setPixelRatio(prevPr);
+            rt.renderer.setSize(prevSize.x, prevSize.y, false);
+          }
+        } else {
+          rt.renderer.render(rt.scene, rt.camera);
+          dataUrl = rt.renderer.domElement.toDataURL('image/png');
+        }
 
         if (helper) helper.visible = prevHelperVis;
         rt.screwPreview.visible = prevPreviewVis;
@@ -676,12 +699,25 @@ export const Viewport3D = forwardRef<Viewport3DHandle, Viewport3DProps>(
       const width = container.clientWidth || window.innerWidth;
       const height = container.clientHeight || window.innerHeight;
       const isPortrait = height > width;
-      const camera = new THREE.PerspectiveCamera(isPortrait ? 48 : 42, width / height, 0.05, 60);
-      camera.position.set(
+      const perspCamera = new THREE.PerspectiveCamera(isPortrait ? 48 : 42, width / height, 0.05, 60);
+      perspCamera.position.set(
         isPortrait ? 2.65 : 2.15,
         isPortrait ? 1.85 : 1.65,
         isPortrait ? 3.15 : 2.35
       );
+      const initAspect = width / Math.max(1, height);
+      const initHalfH = 1.6;
+      const orthoCamera = new THREE.OrthographicCamera(
+        -initHalfH * initAspect,
+        initHalfH * initAspect,
+        initHalfH,
+        -initHalfH,
+        -30,
+        80
+      );
+      orthoCamera.position.copy(perspCamera.position);
+      let camera: THREE.PerspectiveCamera | THREE.OrthographicCamera = perspCamera;
+      let currentProjection: 'perspective' | 'orthographic' = 'perspective';
 
       const orbit = new OrbitControls(camera, renderer.domElement);
       orbit.target.set(0, 0.85, 0);
@@ -1073,6 +1109,55 @@ export const Viewport3D = forwardRef<Viewport3DHandle, Viewport3DProps>(
         }
       };
 
+      const setProjection = (mode: 'perspective' | 'orthographic') => {
+        if (mode === currentProjection) return;
+        const w = container.clientWidth || 1;
+        const h = container.clientHeight || 1;
+        const aspect = w / h;
+        const target = orbit.target.clone();
+
+        if (mode === 'orthographic') {
+          const dist = Math.max(0.5, perspCamera.position.distanceTo(target));
+          const halfH = Math.max(
+            0.35,
+            dist * Math.tan(THREE.MathUtils.degToRad(perspCamera.fov * 0.5))
+          );
+          orthoCamera.left = -halfH * aspect;
+          orthoCamera.right = halfH * aspect;
+          orthoCamera.top = halfH;
+          orthoCamera.bottom = -halfH;
+          orthoCamera.zoom = 1;
+          orthoCamera.position.copy(perspCamera.position);
+          orthoCamera.quaternion.copy(perspCamera.quaternion);
+          orthoCamera.updateProjectionMatrix();
+          camera = orthoCamera;
+        } else {
+          const effHalfH = (orthoCamera.top - orthoCamera.bottom) / (2 * Math.max(0.1, orthoCamera.zoom));
+          const dist = Math.max(
+            0.6,
+            Math.min(11.5, effHalfH / Math.tan(THREE.MathUtils.degToRad(perspCamera.fov * 0.5)))
+          );
+          const dir = orthoCamera.position.clone().sub(target);
+          if (dir.lengthSq() < 1e-4) dir.set(0.68, 0.42, 0.74);
+          dir.normalize();
+          perspCamera.aspect = aspect;
+          perspCamera.position.copy(target).addScaledVector(dir, dist);
+          perspCamera.lookAt(target);
+          perspCamera.updateProjectionMatrix();
+          camera = perspCamera;
+        }
+
+        currentProjection = mode;
+        camAnimActive = false;
+        (orbit as unknown as { object: THREE.Camera }).object = camera;
+        transform.camera = camera;
+        if (runtimeRef.current) {
+          runtimeRef.current.camera = camera;
+        }
+        orbit.update();
+        requestRender();
+      };
+
       const setExplodedTarget = (v: number) => {
         explodedTarget = v;
         if (isSoftwareGl) {
@@ -1338,6 +1423,7 @@ export const Viewport3D = forwardRef<Viewport3DHandle, Viewport3DProps>(
         clearPendingMeasure,
         requestRender,
         startCameraTransition,
+        setProjection,
         setExplodedTarget,
         setOpenTarget,
         applyPartAnimations,
@@ -2625,9 +2711,14 @@ export const Viewport3D = forwardRef<Viewport3DHandle, Viewport3DProps>(
         if (!container || disposed) return;
         const w = container.clientWidth || 1;
         const h = container.clientHeight || 1;
-        camera.aspect = w / h;
-        camera.fov = h > w ? 48 : 42;
-        camera.updateProjectionMatrix();
+        const aspect = w / h;
+        perspCamera.aspect = aspect;
+        perspCamera.fov = h > w ? 48 : 42;
+        perspCamera.updateProjectionMatrix();
+        const halfH = (orthoCamera.top - orthoCamera.bottom) * 0.5;
+        orthoCamera.left = -halfH * aspect;
+        orthoCamera.right = halfH * aspect;
+        orthoCamera.updateProjectionMatrix();
         renderer.setSize(w, h, false);
         requestRender();
       });
@@ -3375,11 +3466,100 @@ export const Viewport3D = forwardRef<Viewport3DHandle, Viewport3DProps>(
         rt.contactShadow.visible = false;
       }
 
-      // Rebuild Under-Cabinet Warm 3000K LED Strip Lighting when enabled
+      // Rebuild Under-Cabinet & Milled LED-Groove Warm 3000K Strip Lighting when enabled
       disposeObjectTree(rt.ledRoot);
       rt.ledRoot.clear();
       if (props.ledUnderCabinet && props.explodedAmount < 0.01) {
+        let pointLightBudget = rt.isSoftwareGl ? 0 : 3;
+        const litPartIds = new Set<string>();
+
+        const addLedStripAt = (
+          lenM: number,
+          widthM: number,
+          posM: THREE.Vector3,
+          quat: THREE.Quaternion | null,
+          lightDropM: THREE.Vector3
+        ) => {
+          const g = new THREE.Group();
+          // Recessed anodized aluminum channel housing
+          const aluGeo = new THREE.BoxGeometry(lenM, 0.006, widthM + 0.004);
+          const aluMat = new THREE.MeshStandardMaterial({
+            color: '#C8CDD3',
+            roughness: 0.35,
+            metalness: 0.85,
+          });
+          const aluMesh = new THREE.Mesh(aluGeo, aluMat);
+          aluMesh.userData.disposeMaterial = true;
+          g.add(aluMesh);
+
+          // Warm 3000K milky polycarbonate LED diffuser
+          const diffGeo = new THREE.BoxGeometry(Math.max(0.05, lenM - 0.008), 0.004, widthM);
+          const diffMat = new THREE.MeshStandardMaterial({
+            color: '#FFF4D8',
+            emissive: '#FFCC66',
+            emissiveIntensity: 2.5,
+            roughness: 0.22,
+          });
+          const diffMesh = new THREE.Mesh(diffGeo, diffMat);
+          diffMesh.position.y = -0.002;
+          diffMesh.userData.disposeMaterial = true;
+          g.add(diffMesh);
+
+          g.position.copy(posM);
+          if (quat) g.quaternion.copy(quat);
+          rt.ledRoot.add(g);
+
+          if (pointLightBudget > 0) {
+            const pLight = new THREE.PointLight('#FFD796', 1.55, 2.4, 1.75);
+            pLight.position.copy(posM).add(lightDropM);
+            rt.ledRoot.add(pLight);
+            pointLightBudget--;
+          }
+        };
+
+        // 1. Explicit milled LED grooves (`part.ledGroove?.enabled`)
+        for (const p of props.parts) {
+          if (p.hidden || !p.ledGroove?.enabled) continue;
+          litPartIds.add(p.id);
+          const lg = p.ledGroove;
+          const q = getPartQuaternion(p);
+          const center = new THREE.Vector3(p.position[0] * MM_TO_M, p.position[1] * MM_TO_M, p.position[2] * MM_TO_M);
+          const isHorizontal = p.height <= p.width && p.height <= p.depth;
+          if (isHorizontal) {
+            const localY = -(p.height / 2 + 1) * MM_TO_M;
+            const alongX = lg.edge === 'front' || lg.edge === 'back';
+            const lenM = Math.max(0.12, ((alongX ? p.width : p.depth) - 24) * MM_TO_M);
+            const localPos = new THREE.Vector3(
+              lg.edge === 'left'
+                ? (-p.width / 2 + lg.insetMm) * MM_TO_M
+                : lg.edge === 'right'
+                  ? (p.width / 2 - lg.insetMm) * MM_TO_M
+                  : 0,
+              localY,
+              lg.edge === 'front'
+                ? (p.depth / 2 - lg.insetMm) * MM_TO_M
+                : lg.edge === 'back'
+                  ? (-p.depth / 2 + lg.insetMm) * MM_TO_M
+                  : 0
+            );
+            const worldPos = localPos.applyQuaternion(q).add(center);
+            const stripQuat = q.clone();
+            if (!alongX) {
+              stripQuat.multiply(new THREE.Quaternion().setFromAxisAngle(_upVec, Math.PI / 2));
+            }
+            addLedStripAt(
+              lenM,
+              Math.max(0.008, lg.widthMm * MM_TO_M),
+              worldPos,
+              stripQuat,
+              new THREE.Vector3(0, -0.04, 0.03)
+            );
+          }
+        }
+
+        // 2. Auto-detected hanging wall-cabinet bottoms without explicit ledGroove
         const ledCandidates = props.parts
+          .filter((p) => !p.hidden && !litPartIds.has(p.id))
           .map((p) => ({ part: p, box: getPartWorldBox(p) }))
           .filter(
             ({ part, box }) =>
@@ -3392,30 +3572,18 @@ export const Viewport3D = forwardRef<Viewport3DHandle, Viewport3DProps>(
           )
           .sort((a, b) => b.part.width - a.part.width);
 
-        let pointLightBudget = rt.isSoftwareGl ? 0 : 2;
         for (const { part, box } of ledCandidates) {
           const stripLenM = Math.max(0.18, (part.width - 40) * MM_TO_M);
-          const stripGeo = new THREE.BoxGeometry(stripLenM, 0.005, 0.014);
-          const stripMat = new THREE.MeshStandardMaterial({
-            color: '#FFF1D0',
-            emissive: '#FFCC66',
-            emissiveIntensity: 2.3,
-            roughness: 0.25,
-          });
-          const stripMesh = new THREE.Mesh(stripGeo, stripMat);
           const centerX = ((box.minX + box.maxX) / 2) * MM_TO_M;
           const underY = (box.minY - 3) * MM_TO_M;
           const stripZ = (box.minZ + (box.maxZ - box.minZ) * 0.35) * MM_TO_M;
-          stripMesh.position.set(centerX, underY, stripZ);
-          stripMesh.userData.disposeMaterial = true;
-          rt.ledRoot.add(stripMesh);
-
-          if (pointLightBudget > 0) {
-            const pLight = new THREE.PointLight('#FFD796', 1.45, 2.2, 1.8);
-            pLight.position.set(centerX, underY - 0.035, stripZ + 0.04);
-            rt.ledRoot.add(pLight);
-            pointLightBudget--;
-          }
+          addLedStripAt(
+            stripLenM,
+            0.012,
+            new THREE.Vector3(centerX, underY, stripZ),
+            null,
+            new THREE.Vector3(0, -0.04, 0.04)
+          );
         }
       }
 
@@ -3570,6 +3738,13 @@ export const Viewport3D = forwardRef<Viewport3DHandle, Viewport3DProps>(
       props.isParametricCabinetSelected,
       props.presentationMode,
     ]);
+
+    // Sync Perspective vs Orthographic CAD camera projection
+    useEffect(() => {
+      const rt = runtimeRef.current;
+      if (!rt) return;
+      rt.setProjection(props.cameraProjection ?? 'perspective');
+    }, [props.cameraProjection]);
 
     return (
       <div className="relative w-full h-full overflow-hidden">

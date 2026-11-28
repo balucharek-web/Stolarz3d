@@ -10,7 +10,7 @@ const TOOL_SHORTCUTS: Array<{ keys: string; desc: string }> = [
   { keys: 'Ctrl+K / ⌘K', desc: 'Szybkie polecenia, narzędzia i wyszukiwarka sceny' },
   { keys: 'V / G / R / S', desc: 'Zaznacz / Przesuń / Obróć / Rozciągnij ścianki' },
   { keys: 'W / T', desc: 'Wkręty i Minifix / Miarka punkt-punkt 3D' },
-  { keys: 'O', desc: 'Otwórz lub zamknij fronty i szuflady' },
+  { keys: 'O / P', desc: 'Otwórz fronty i szuflady / Rzut Perspektywa ↔ Ortograficzny CAD' },
   { keys: 'F', desc: 'Wycentruj kamerę na elemencie lub całym projekcie' },
   { keys: 'M / D / X', desc: 'Magnes przyciągania / Prześwity / Tryb RTG' },
   { keys: 'L / H', desc: 'Podświetlenie LED / Ukryj dolny panel' },

@@ -5,6 +5,8 @@ import { CameraPreset } from '../types/furniture';
 interface ViewCubeProps {
   onSelectView: (preset: CameraPreset) => void;
   onFocusAll: () => void;
+  cameraProjection?: 'perspective' | 'orthographic';
+  onToggleProjection?: () => void;
   inspectorOpen?: boolean;
 }
 
@@ -16,6 +18,8 @@ interface ViewCubeProps {
 export const ViewCube: React.FC<ViewCubeProps> = ({
   onSelectView,
   onFocusAll,
+  cameraProjection = 'perspective',
+  onToggleProjection,
   inspectorOpen = false,
 }) => {
   const btn =
@@ -80,14 +84,30 @@ export const ViewCube: React.FC<ViewCubeProps> = ({
           Prawy
         </button>
       </div>
-      <button
-        type="button"
-        onClick={() => onSelectView('back')}
-        className={`${btn} w-full h-6 bg-white/[0.03] text-zinc-400`}
-        title="Widok z tyłu (plecy mebla)"
-      >
-        Tył
-      </button>
+      <div className="grid grid-cols-2 gap-1 w-[124px]">
+        <button
+          type="button"
+          onClick={() => onSelectView('back')}
+          className={`${btn} h-6 bg-white/[0.03] text-zinc-400`}
+          title="Widok z tyłu (plecy mebla)"
+        >
+          Tył
+        </button>
+        {onToggleProjection && (
+          <button
+            type="button"
+            onClick={onToggleProjection}
+            className={`${btn} h-6 font-mono-num ${
+              cameraProjection === 'orthographic'
+                ? 'bg-sky-500/20 text-sky-300 border border-sky-400/40 font-semibold'
+                : 'bg-white/[0.03] text-zinc-400'
+            }`}
+            title="Przełącz rzut: Perspektywa / Ortograficzny CAD (klawisz P)"
+          >
+            {cameraProjection === 'orthographic' ? 'Orto' : 'Persp'}
+          </button>
+        )}
+      </div>
     </div>
   );
 };

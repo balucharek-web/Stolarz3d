@@ -17,6 +17,7 @@ import {
 } from './carpentry';
 import { getProjectDimensionsMm } from './geometry';
 import {
+  isMaterialGrainDirectional,
   nestLinearProfiles,
   type CarpentryCutSpec,
   type MaterialLinearResult,
@@ -1451,18 +1452,86 @@ export function classifyAssemblyStep(part: FurniturePart): 1 | 2 | 3 | 4 | 5 {
 }
 
 /**
+ * Standard Code-128B bar-width pattern table (ISO/IEC 15417) for scannable workshop labels.
+ */
+const CODE128_PATTERNS: string[] = [
+  '212222','222122','222221','121223','121322','131222','122213','122312','132212','221213',
+  '221312','231212','112232','122132','122231','113222','123122','123221','223211','221132',
+  '221231','213212','223112','312131','311222','321122','321221','312212','322112','322211',
+  '212123','212321','232121','111323','131123','131321','112313','132113','132311','211313',
+  '231113','231311','112133','112331','132131','113123','113321','133121','313121','211331',
+  '231131','213113','213311','213131','311123','311321','331121','312113','312311','332111',
+  '314111','221411','431111','111224','111422','121124','121421','141122','141221','112214',
+  '112412','122114','122411','142112','142211','241211','221114','413111','241112','134111',
+  '111242','121142','121241','114212','124112','124211','411212','421112','421211','212141',
+  '214121','412121','111143','111341','131141','114113','114311','411113','411311','113141',
+  '114131','311141','411131','211412','211214','211232','2331112',
+];
+
+function buildCode128Svg(rawText: string): string {
+  const clean = rawText
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^ -~]/g, '')
+    .slice(0, 22) || 'P01';
+  const codes: number[] = [104]; // Start Code B
+  let checksum = 104;
+  for (let i = 0; i < clean.length; i++) {
+    const val = Math.max(0, Math.min(94, clean.charCodeAt(i) - 32));
+    codes.push(val);
+    checksum += val * (i + 1);
+  }
+  codes.push(checksum % 103);
+  codes.push(106); // Stop pattern
+
+  let x = 2;
+  const rects: string[] = [];
+  for (const code of codes) {
+    const pat = CODE128_PATTERNS[code] ?? CODE128_PATTERNS[0];
+    for (let j = 0; j < pat.length; j++) {
+      const w = Number(pat[j]);
+      if (j % 2 === 0) {
+        rects.push(`<rect x="${x}" y="0" width="${w}" height="15" fill="#0F172A"/>`);
+      }
+      x += w;
+    }
+  }
+  const totalW = x + 2;
+  return `<svg viewBox="0 0 ${totalW} 15" preserveAspectRatio="none" class="bc-svg" aria-label="${escapeHtml(clean)}">${rects.join('')}</svg>`;
+}
+
+/**
  * Generates an A4 printable workshop board sticker sheet (3 columns × 7 rows)
- * with board index, saw vs finished dims, CNC notes, and visual ABS edge-banding bars.
+ * with board index, saw vs finished dims, sheet badge, scannable Code-128B barcode,
+ * grain arrow, CNC notes, and visual ABS edge-banding bars.
  */
 export function printBoardLabels(
   project: FurnitureProject,
-  cutSpecs: Map<string, CarpentryCutSpec>
+  cutSpecs: Map<string, CarpentryCutSpec>,
+  nestingResults?: MaterialNestingResult[]
 ) {
+  // Build lookup: partId -> sheet label (e.g. "Ark. 1" or "Odpad 1")
+  const sheetByPartId = new Map<string, string>();
+  if (nestingResults) {
+    for (const res of nestingResults) {
+      for (const sheet of res.sheets) {
+        const prefix = sheet.isOffcut ? 'Odpad' : 'Ark.';
+        const tag = `${prefix} ${sheet.sheetIndex}`;
+        for (const placed of sheet.placements) {
+          sheetByPartId.set(placed.partId, tag);
+        }
+      }
+    }
+  }
+
   const boardParts = project.parts.filter((p) => p.kind !== 'appliance');
   const cardsHtml = boardParts
     .map((p, idx) => {
       const spec = cutSpecs.get(p.id);
       const meta = getMaterialMeta(p.materialId);
+      const sheetTag = sheetByPartId.get(p.id);
+      const cabinetCfg = p.groupId ? project.cabinetConfigs?.[p.groupId] : undefined;
+      const groupLabel = cabinetCfg?.name || p.groupId || '';
 
       // Dedicated linear profile sticker (cross-section + cut length, no fake ABS edge banding)
       if (p.kind === 'profile') {
@@ -1471,10 +1540,11 @@ export function printBoardLabels(
         );
         const secLabel = `${dims[0]}×${dims[1]} mm`;
         const lenMm = dims[2];
+        const barcodeVal = `PR${String(idx + 1).padStart(2, '0')}-${lenMm}`;
         return `<div class="label">
           <div class="l-head">
             <span class="badge">#${idx + 1}</span>
-            <span class="proj">${escapeHtml(project.name)}</span>
+            <span class="proj">${escapeHtml(groupLabel || project.name)}</span>
             <span class="thick">PROFIL 1D</span>
           </div>
           <div class="l-name">${escapeHtml(p.name)}</div>
@@ -1485,10 +1555,14 @@ export function printBoardLabels(
               <div><span class="lbl">Cięcie 1D:</span> <strong>${lenMm} mm</strong></div>
               <div class="cnc">Sztanga / cięcie na długość</div>
             </div>
-            <svg viewBox="0 0 76 52" class="eb-svg">
-              <rect x="6" y="19" width="64" height="14" rx="2" fill="#E2E8F0" stroke="#334155" stroke-width="2" />
-              <text x="38" y="29" text-anchor="middle" font-size="8.5" font-family="monospace" font-weight="700" fill="#0F172A">${lenMm}</text>
+            <svg viewBox="0 0 76 44" class="eb-svg">
+              <rect x="6" y="15" width="64" height="14" rx="2" fill="#E2E8F0" stroke="#334155" stroke-width="2" />
+              <text x="38" y="25" text-anchor="middle" font-size="8.5" font-family="monospace" font-weight="700" fill="#0F172A">${lenMm}</text>
             </svg>
+          </div>
+          <div class="l-foot">
+            ${buildCode128Svg(barcodeVal)}
+            <span class="bc-txt">${escapeHtml(barcodeVal)}</span>
           </div>
         </div>`;
       }
@@ -1504,6 +1578,7 @@ export function printBoardLabels(
       const bottomW = hasEb && eb.bottom ? 5 : 1.5;
       const leftW = hasEb && eb.left ? 5 : 1.5;
       const rightW = hasEb && eb.right ? 5 : 1.5;
+      const grainLocked = isMaterialGrainDirectional(p.materialId);
 
       const cncTags: string[] = [];
       const sawAngles = computeSawCutAngles(p);
@@ -1513,37 +1588,51 @@ export function printBoardLabels(
       if (p.cornerRadiusMm) cncTags.push(`R${p.cornerRadiusMm}`);
       if (p.cutouts?.length) cncTags.push(`${p.cutouts.length} wyc.`);
       if (p.dadoGroove?.enabled) cncTags.push(`Nut ${p.dadoGroove.widthMm}×${p.dadoGroove.depthMm}`);
-      if (p.ledGroove?.enabled) cncTags.push(`Frez LED ${p.ledGroove.widthMm}×${p.ledGroove.depthMm}`);
+      if (p.ledGroove?.enabled) cncTags.push(`LED ${p.ledGroove.widthMm}×${p.ledGroove.depthMm}`);
       if (p.hingeSide && p.hingeSide !== 'none') cncTags.push(`Ø35 ×${p.hingeCount ?? 2}`);
-      if (p.system32ShelfHoles) cncTags.push('Sys32 Ø5');
+      if (p.system32ShelfHoles) cncTags.push('Sys32');
       if (p.kind === 'door' && p.handleStyle === 'gola_j') cncTags.push('Gola J');
       if (p.kind === 'door' && p.handleStyle === 'chamfer_45') cncTags.push('Frez 45°');
       if (p.kind === 'door' && p.handleStyle === 'tip_on') cncTags.push('Tip-On');
       if (p.surfaceFinish === 'gloss') cncTags.push('POŁYSK');
 
+      const sawL = spec ? spec.sawLenMm : Math.round(p.width);
+      const sawW = spec ? spec.sawWidMm : Math.round(p.height);
+      const barcodeVal = `P${String(idx + 1).padStart(2, '0')}-${sawL}x${sawW}`;
+
       return `<div class="label">
         <div class="l-head">
           <span class="badge">#${idx + 1}</span>
-          <span class="proj">${escapeHtml(project.name)}</span>
+          ${sheetTag ? `<span class="sheet">${escapeHtml(sheetTag)}</span>` : ''}
+          <span class="proj">${escapeHtml(groupLabel || project.name)}</span>
           <span class="thick">${spec ? spec.thicknessMm : p.depth} mm</span>
         </div>
         <div class="l-name">${escapeHtml(p.name)}</div>
-        <div class="l-mat">${escapeHtml(meta.name)}</div>
+        <div class="l-mat">${escapeHtml(meta.name)}${grainLocked ? ' · ↔ Słój' : ''}</div>
         <div class="l-body">
           <div class="l-dims">
-            <div><span class="lbl">Gotowy:</span> <strong>${spec ? `${spec.grainLenMm} × ${spec.crossWidMm}` : `${p.width} × ${p.height}`}</strong> mm</div>
-            <div><span class="lbl">Piła:</span> <strong>${spec ? `${spec.sawLenMm} × ${spec.sawWidMm}` : '-'}</strong> mm</div>
+            <div><span class="lbl">Gotowy:</span> <strong>${spec ? `${spec.grainLenMm}×${spec.crossWidMm}` : `${p.width}×${p.height}`}</strong></div>
+            <div><span class="lbl">Piła:</span> <strong>${sawL}×${sawW}</strong></div>
             <div><span class="lbl">ABS:</span> ${escapeHtml(spec?.edgeBandingLabel || 'Brak')}</div>
             ${cncTags.length ? `<div class="cnc">${escapeHtml(cncTags.join(' · '))}</div>` : ''}
           </div>
-          <svg viewBox="0 0 76 52" class="eb-svg">
-            <rect x="8" y="8" width="60" height="36" fill="#F8FAFC" />
-            <line x1="8" y1="8" x2="68" y2="8" stroke="${topStroke}" stroke-width="${topW}" />
-            <line x1="8" y1="44" x2="68" y2="44" stroke="${bottomStroke}" stroke-width="${bottomW}" />
-            <line x1="8" y1="8" x2="8" y2="44" stroke="${leftStroke}" stroke-width="${leftW}" />
-            <line x1="68" y1="8" x2="68" y2="44" stroke="${rightStroke}" stroke-width="${rightW}" />
-            <text x="38" y="29" text-anchor="middle" font-size="9" font-family="monospace" fill="#475569">${spec ? spec.grainLenMm : p.width}</text>
+          <svg viewBox="0 0 76 48" class="eb-svg">
+            <rect x="8" y="6" width="60" height="36" fill="#F8FAFC" />
+            <line x1="8" y1="6" x2="68" y2="6" stroke="${topStroke}" stroke-width="${topW}" />
+            <line x1="8" y1="42" x2="68" y2="42" stroke="${bottomStroke}" stroke-width="${bottomW}" />
+            <line x1="8" y1="6" x2="8" y2="42" stroke="${leftStroke}" stroke-width="${leftW}" />
+            <line x1="68" y1="6" x2="68" y2="42" stroke="${rightStroke}" stroke-width="${rightW}" />
+            ${
+              grainLocked
+                ? `<line x1="16" y1="15" x2="60" y2="15" stroke="#94A3B8" stroke-width="1.2" /><polygon points="60,15 55,12.5 55,17.5" fill="#94A3B8" /><polygon points="16,15 21,12.5 21,17.5" fill="#94A3B8" />`
+                : ''
+            }
+            <text x="38" y="31" text-anchor="middle" font-size="9" font-family="monospace" font-weight="700" fill="#334155">${spec ? spec.grainLenMm : p.width}</text>
           </svg>
+        </div>
+        <div class="l-foot">
+          ${buildCode128Svg(barcodeVal)}
+          <span class="bc-txt">${escapeHtml(barcodeVal)}</span>
         </div>
       </div>`;
     })
@@ -1555,22 +1644,26 @@ export function printBoardLabels(
   <meta charset="UTF-8" />
   <title>Etykiety na formatki — ${escapeHtml(project.name)}</title>
   <style>
-    @page { size: A4 portrait; margin: 8mm; }
+    @page { size: A4 portrait; margin: 7mm; }
     * { box-sizing: border-box; }
     body { margin: 0; font-family: Inter, -apple-system, sans-serif; color: #111827; background: #fff; }
-    .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 3mm; }
-    .label { border: 1px dashed #94A3B8; border-radius: 3px; padding: 2.8mm; height: 37.5mm; display: flex; flex-direction: column; justify-content: space-between; page-break-inside: avoid; }
-    .l-head { display: flex; align-items: center; justify-content: space-between; gap: 4px; font-size: 8px; }
-    .badge { background: #18181B; color: #F59E0B; font-weight: 700; padding: 1px 5px; border-radius: 3px; font-family: monospace; font-size: 9px; }
+    .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 2.5mm; }
+    .label { border: 1px dashed #94A3B8; border-radius: 3px; padding: 2.2mm 2.5mm; height: 38.5mm; display: flex; flex-direction: column; justify-content: space-between; page-break-inside: avoid; }
+    .l-head { display: flex; align-items: center; justify-content: space-between; gap: 3px; font-size: 7.5px; }
+    .badge { background: #18181B; color: #F59E0B; font-weight: 700; padding: 1px 4px; border-radius: 2.5px; font-family: monospace; font-size: 8.5px; }
+    .sheet { background: #E0F2FE; color: #0369A1; font-weight: 700; padding: 1px 4px; border-radius: 2.5px; font-family: monospace; font-size: 7.5px; }
     .proj { color: #64748B; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 1; }
     .thick { font-family: monospace; font-weight: 700; color: #0F172A; }
-    .l-name { font-size: 10px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 1px; }
-    .l-mat { font-size: 8px; color: #475569; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    .l-body { display: flex; align-items: center; justify-content: space-between; gap: 4px; margin-top: 2px; }
-    .l-dims { font-size: 8.5px; line-height: 1.35; font-family: monospace; }
+    .l-name { font-size: 9.5px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; line-height: 1.15; }
+    .l-mat { font-size: 7.5px; color: #475569; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .l-body { display: flex; align-items: center; justify-content: space-between; gap: 3px; }
+    .l-dims { font-size: 8px; line-height: 1.25; font-family: monospace; min-width: 0; }
     .lbl { font-family: Inter, sans-serif; color: #64748B; }
-    .cnc { color: #B45309; font-weight: 700; font-size: 7.5px; }
-    .eb-svg { width: 52px; height: 36px; flex-shrink: 0; }
+    .cnc { color: #B45309; font-weight: 700; font-size: 7px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 34mm; }
+    .eb-svg { width: 48px; height: 31px; flex-shrink: 0; }
+    .l-foot { display: flex; align-items: center; justify-content: space-between; gap: 4px; border-top: 0.5px solid #E2E8F0; padding-top: 1.5px; }
+    .bc-svg { height: 11px; flex: 1; max-width: 36mm; display: block; }
+    .bc-txt { font-family: monospace; font-size: 7px; color: #334155; font-weight: 600; white-space: nowrap; }
   </style>
 </head>
 <body>

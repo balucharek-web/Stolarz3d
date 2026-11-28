@@ -3,6 +3,7 @@ import {
   Box,
   Download,
   Maximize2,
+  Printer,
   ZoomIn,
   ZoomOut,
 } from 'lucide-react';
@@ -449,6 +450,62 @@ export const Plan2DOverlay: React.FC<Plan2DOverlayProps> = ({
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   };
 
+  const handlePrintPlanPdf = () => {
+    const svgEl = svgRef.current;
+    if (!svgEl) return;
+    const serializer = new XMLSerializer();
+    const svgMarkup = serializer.serializeToString(svgEl);
+    const safeName = projectName
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;');
+    const html = `<!DOCTYPE html>
+<html lang="pl">
+<head>
+  <meta charset="UTF-8" />
+  <title>Rzut 2D — ${safeName}</title>
+  <style>
+    @page { size: A4 landscape; margin: 10mm; }
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: Inter, -apple-system, sans-serif; color: #0F172A; background: #fff; display: flex; flex-direction: column; height: 100vh; }
+    .hdr { display: flex; justify-content: space-between; align-items: baseline; border-bottom: 1.5px solid #0F172A; padding-bottom: 6px; margin-bottom: 8px; }
+    .hdr h1 { margin: 0; font-size: 15px; }
+    .hdr span { font-family: monospace; font-size: 11px; color: #475569; }
+    .canvas { flex: 1; border: 1px solid #CBD5E1; border-radius: 6px; overflow: hidden; display: flex; align-items: center; justify-content: center; background: #F8FAFC; }
+    .canvas svg { width: 100%; height: 100%; max-height: 175mm; }
+  </style>
+</head>
+<body>
+  <div class="hdr">
+    <h1>Rzut architektoniczny 2D — ${safeName}</h1>
+    <span>Gabaryt: ${totalW} × ${totalD} mm · Data: ${new Date().toLocaleDateString('pl-PL')}</span>
+  </div>
+  <div class="canvas">${svgMarkup}</div>
+</body>
+</html>`;
+    const iframe = document.createElement('iframe');
+    iframe.style.position = 'fixed';
+    iframe.style.right = '0';
+    iframe.style.bottom = '0';
+    iframe.style.width = '0';
+    iframe.style.height = '0';
+    iframe.style.border = '0';
+    document.body.appendChild(iframe);
+    const doc = iframe.contentDocument;
+    if (doc) {
+      doc.open();
+      doc.write(html);
+      doc.close();
+      setTimeout(() => {
+        iframe.contentWindow?.focus();
+        iframe.contentWindow?.print();
+        setTimeout(() => iframe.remove(), 1200);
+      }, 250);
+    } else {
+      iframe.remove();
+    }
+  };
+
   const movingIdSet = useMemo(() => {
     if (dragState?.mode !== 'move') return new Set<string>();
     return new Set(dragState.movingParts.map((p) => p.id));
@@ -532,6 +589,15 @@ export const Plan2DOverlay: React.FC<Plan2DOverlayProps> = ({
           >
             <Download className="h-3.5 w-3.5" />
             <span className="hidden sm:inline">SVG</span>
+          </button>
+          <button
+            type="button"
+            onClick={handlePrintPlanPdf}
+            className="flex h-8 items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 text-xs font-medium text-slate-700 hover:bg-slate-100 cursor-pointer"
+            title="Drukuj rzut architektoniczny 2D (PDF A4 poziomo)"
+          >
+            <Printer className="h-3.5 w-3.5 text-amber-600" />
+            <span className="hidden sm:inline">PDF</span>
           </button>
           <button
             type="button"
