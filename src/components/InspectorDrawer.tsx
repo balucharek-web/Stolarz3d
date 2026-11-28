@@ -58,7 +58,7 @@ import {
   type ShelfDeflectionAudit,
 } from '../engine/carpentry';
 
-type InspectorTab = 'dimensions' | 'material' | 'machining';
+type InspectorTab = 'dimensions' | 'material' | 'machining' | 'hardware';
 
 interface InspectorDrawerProps {
   open: boolean;
@@ -438,9 +438,13 @@ export const InspectorDrawer: React.FC<InspectorDrawerProps> = ({
     (part.cutouts?.length ?? 0) +
     (part.dadoGroove?.enabled ? 1 : 0) +
     (part.ledGroove?.enabled ? 1 : 0) +
-    (part.system32ShelfHoles ? 1 : 0) +
-    (part.cornerRadiusMm ? 1 : 0) +
-    partFasteners.length;
+    (part.cornerRadiusMm ? 1 : 0);
+
+  const hardwareCount =
+    partFasteners.length +
+    (part.hingeSide && part.hingeSide !== 'none' ? part.hingeCount ?? 2 : 0) +
+    (part.drawerSlideType && part.drawerSlideType !== 'none' ? 1 : 0) +
+    (part.system32ShelfHoles ? 1 : 0);
 
   return (
     <>
@@ -582,34 +586,30 @@ export const InspectorDrawer: React.FC<InspectorDrawerProps> = ({
           </div>
         )}
 
-        {/* Clean Single-Line Tabs (2 tabs in Simple mode, 3 tabs in Expert mode) */}
+        {/* Clean 4-Tab Commercial Architecture: Wymiary | Materiał | Obróbki | Okucia */}
         {!showBatchView && (
-          <div
-            className={`grid gap-1 border-b border-zinc-800 px-3 py-2 bg-[#141518] ${
-              uiMode === 'expert' ? 'grid-cols-3' : 'grid-cols-2'
-            }`}
-          >
+          <div className="grid grid-cols-4 gap-1 border-b border-zinc-800 px-3 py-2 bg-[#141518]">
             {(
               [
                 { id: 'dimensions' as const, label: 'Wymiary' },
                 { id: 'material' as const, label: 'Materiał' },
-                ...(uiMode === 'expert'
-                  ? [
-                      {
-                        id: 'machining' as const,
-                        label: machiningCount > 0 ? `Obróbki (${machiningCount})` : 'Obróbki',
-                      },
-                    ]
-                  : []),
+                {
+                  id: 'machining' as const,
+                  label: machiningCount > 0 ? `Obróbki (${machiningCount})` : 'Obróbki',
+                },
+                {
+                  id: 'hardware' as const,
+                  label: hardwareCount > 0 ? `Okucia (${hardwareCount})` : 'Okucia',
+                },
               ] as const
             ).map((tab) => {
-              const active = (uiMode === 'simple' && activeTab === 'machining' ? 'dimensions' : activeTab) === tab.id;
+              const active = activeTab === tab.id;
               return (
                 <button
                   key={tab.id}
                   type="button"
                   onClick={() => setActiveTab(tab.id)}
-                  className={`min-h-[34px] rounded-lg text-xs font-medium transition-colors whitespace-nowrap cursor-pointer ${
+                  className={`min-h-[34px] rounded-lg px-1 text-[11px] font-medium transition-colors whitespace-nowrap truncate cursor-pointer ${
                     active
                       ? 'bg-amber-500 text-zinc-950 font-semibold'
                       : 'bg-zinc-900 text-zinc-300 hover:bg-zinc-800 hover:text-white'
@@ -990,7 +990,7 @@ export const InspectorDrawer: React.FC<InspectorDrawerProps> = ({
           {/* ===============================================================
               TAB 1: WYMIARY (Dimensions, Clearances, Position, Group & Smart Resize)
           =============================================================== */}
-          {!showBatchView && (activeTab === 'dimensions' || (uiMode === 'simple' && activeTab === 'machining')) && (
+          {!showBatchView && activeTab === 'dimensions' && (
             <div className="space-y-4">
               {/* Quick Parametric Re-Edit Banner if this part belongs to a parametric cabinet */}
               {hasParametricConfig && onOpenParametricEditor && (
@@ -1273,6 +1273,86 @@ export const InspectorDrawer: React.FC<InspectorDrawerProps> = ({
                       onChange={(slopeBottomRight) => onUpdatePart(part.id, { slopeBottomRight })}
                     />
                   </div>
+                </div>
+              )}
+
+              {/* Angled Miter Cuts for Structural Beams / Rafters / Profiles (-45° .. +45°) */}
+              {part.kind === 'profile' && (
+                <div className="space-y-2.5 border-t border-zinc-800/80 pt-3.5">
+                  <div className="flex items-center justify-between gap-2">
+                    <h3 className="text-xs font-semibold text-amber-300">
+                      Zaciosy końców belki (cięcie skośne)
+                    </h3>
+                    {((part.beamCutStartDeg ?? 0) !== 0 || (part.beamCutEndDeg ?? 0) !== 0) && (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          onUpdatePart(part.id, {
+                            beamCutStartDeg: 0,
+                            beamCutEndDeg: 0,
+                          })
+                        }
+                        className="text-[10px] font-medium text-zinc-400 hover:text-amber-300 cursor-pointer"
+                      >
+                        Reset 0°
+                      </button>
+                    )}
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <NumberStepper
+                      label="Start (°)"
+                      value={part.beamCutStartDeg ?? 0}
+                      step={5}
+                      min={-45}
+                      max={45}
+                      onChange={(deg) =>
+                        onUpdatePart(part.id, {
+                          beamCutStartDeg: Math.max(-45, Math.min(45, deg)),
+                        })
+                      }
+                    />
+                    <NumberStepper
+                      label="Koniec (°)"
+                      value={part.beamCutEndDeg ?? 0}
+                      step={5}
+                      min={-45}
+                      max={45}
+                      onChange={(deg) =>
+                        onUpdatePart(part.id, {
+                          beamCutEndDeg: Math.max(-45, Math.min(45, deg)),
+                        })
+                      }
+                    />
+                  </div>
+                  <div className="flex items-center gap-1 flex-wrap">
+                    <span className="text-[10px] text-zinc-500 mr-0.5">Ustaw oba:</span>
+                    {[
+                      { label: '90° prosto', s: 0, e: 0 },
+                      { label: '45° rama', s: 45, e: 45 },
+                      { label: '30° krokiew', s: 30, e: -30 },
+                      { label: '22.5°', s: 22.5, e: 22.5 },
+                    ].map((preset) => (
+                      <button
+                        key={preset.label}
+                        type="button"
+                        onClick={() =>
+                          onUpdatePart(part.id, {
+                            beamCutStartDeg: preset.s,
+                            beamCutEndDeg: preset.e,
+                          })
+                        }
+                        className="rounded-md border border-zinc-800 bg-zinc-900 px-2 py-1 text-[10px] font-medium text-zinc-300 hover:border-amber-500/60 hover:text-amber-300 cursor-pointer"
+                      >
+                        {preset.label}
+                      </button>
+                    ))}
+                  </div>
+                  {((part.beamCutStartDeg ?? 0) !== 0 || (part.beamCutEndDeg ?? 0) !== 0) && (
+                    <div className="rounded-lg border border-amber-500/30 bg-amber-950/20 px-2.5 py-1.5 text-[10px] text-amber-200 font-mono-num">
+                      Piła ukośnica: start {(part.beamCutStartDeg ?? 0).toFixed(1)}° · koniec{' '}
+                      {(part.beamCutEndDeg ?? 0).toFixed(1)}° (widoczne na Liście Cięcia)
+                    </div>
+                  )}
                 </div>
               )}
 
@@ -1749,122 +1829,13 @@ export const InspectorDrawer: React.FC<InspectorDrawerProps> = ({
                 )}
               </div>
 
-              {/* Door Handle, Hinges & Drawer Slides */}
-              {part.kind === 'door' && (
-                <div className="space-y-2.5 border-t border-zinc-800/80 pt-3.5">
-                  <h3 className="text-xs font-semibold text-zinc-200">
-                    Front: uchwyt, zawiasy i prowadnice
-                  </h3>
-                  <div className="grid grid-cols-4 gap-1 rounded-lg bg-zinc-900 p-1 border border-zinc-800">
-                    {(
-                      [
-                        { id: 'left', label: 'Lewy' },
-                        { id: 'right', label: 'Prawy' },
-                        { id: 'top', label: 'Góra' },
-                        { id: 'none', label: 'Brak' },
-                      ] as { id: HandleSide; label: string }[]
-                    ).map((opt) => (
-                      <button
-                        key={opt.id}
-                        type="button"
-                        onClick={() => onUpdatePart(part.id, { handleSide: opt.id })}
-                        className={`rounded-md py-1.5 text-xs font-medium transition-colors cursor-pointer ${
-                          (part.handleSide ?? 'right') === opt.id
-                            ? 'bg-amber-500 text-zinc-950 font-semibold'
-                            : 'text-zinc-400 hover:text-white'
-                        }`}
-                      >
-                        {opt.label}
-                      </button>
-                    ))}
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-2">
-                    <label className="block">
-                      <span className="text-[11px] text-zinc-400">Zawiasy puszkowe Ø35</span>
-                      <select
-                        value={part.hingeSide ?? 'none'}
-                        onChange={(e) => {
-                          const hs = e.target.value as HandleSide;
-                          onUpdatePart(part.id, {
-                            hingeSide: hs,
-                            hingeCount: hs === 'none' ? undefined : part.hingeCount ?? 2,
-                          });
-                        }}
-                        className="mt-1 w-full rounded-lg border border-zinc-800 bg-zinc-900 px-2 py-1.5 text-xs text-white focus:border-amber-500 focus:outline-none"
-                      >
-                        <option value="none">Brak (szuflada/stały)</option>
-                        <option value="left">Lewa krawędź</option>
-                        <option value="right">Prawa krawędź</option>
-                        <option value="top">Góra (klapa)</option>
-                      </select>
-                    </label>
-                    <label className="block">
-                      <span className="text-[11px] text-zinc-400">Prowadnice szuflady</span>
-                      <select
-                        value={part.drawerSlideType ?? 'none'}
-                        onChange={(e) =>
-                          onUpdatePart(part.id, {
-                            drawerSlideType: e.target.value as DrawerSlideType,
-                          })
-                        }
-                        className="mt-1 w-full rounded-lg border border-zinc-800 bg-zinc-900 px-2 py-1.5 text-xs text-white focus:border-amber-500 focus:outline-none"
-                      >
-                        <option value="none">Brak</option>
-                        <option value="ball_26mm">Kulkowe (−26 mm)</option>
-                        <option value="undermount_blum">Dolny montaż Blum/GTV</option>
-                        <option value="tandembox_metabox">Tandembox / Metabox (metalowe)</option>
-                      </select>
-                    </label>
-                  </div>
-
-                  <div className="space-y-1">
-                    <span className="text-[11px] text-zinc-400">System otwierania frontu</span>
-                    <div className="grid grid-cols-4 gap-1 rounded-lg bg-zinc-900 p-1 border border-zinc-800">
-                      {(
-                        [
-                          { id: 'bar', label: 'Reling' },
-                          { id: 'tip_on', label: 'Tip-On' },
-                          { id: 'gola_j', label: 'Gola J' },
-                          { id: 'chamfer_45', label: 'Ukos 45°' },
-                        ] as { id: HandleStyle; label: string }[]
-                      ).map((opt) => (
-                        <button
-                          key={opt.id}
-                          type="button"
-                          onClick={() => onUpdatePart(part.id, { handleStyle: opt.id })}
-                          className={`rounded-md py-1.5 text-[11px] font-medium transition-colors cursor-pointer ${
-                            (part.handleStyle ?? 'bar') === opt.id
-                              ? 'bg-amber-500 text-zinc-950 font-semibold'
-                              : 'text-zinc-400 hover:text-white'
-                          }`}
-                        >
-                          {opt.label}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-
-                  {partFlapRec && (
-                    <div className="rounded-lg border border-violet-500/35 bg-violet-950/25 px-2.5 py-2 text-[11px] space-y-0.5">
-                      <div className="flex items-center justify-between font-semibold text-violet-200">
-                        <span>Dobór podnośnika klapy</span>
-                        <span className="font-mono-num">LF {partFlapRec.powerFactorLF}</span>
-                      </div>
-                      <div className="text-[10px] text-zinc-300">
-                        {partFlapRec.recommendedLift} ({partFlapRec.weightKg} kg)
-                      </div>
-                    </div>
-                  )}
-                </div>
-              )}
             </div>
           )}
 
           {/* ===============================================================
-              TAB 3: OBRÓBKI (CNC Machining, Cutouts, Mirror, Shelves, Fasteners)
+              TAB 3: OBRÓBKI (CNC Machining, Cutouts, Mirror, Shelves)
           =============================================================== */}
-          {!showBatchView && uiMode === 'expert' && activeTab === 'machining' && (
+          {!showBatchView && activeTab === 'machining' && (
             <div className="space-y-4">
               {/* Board Machining: Rounded Corners, Dado Groove, LED, System 32, Miter, Cutouts */}
               <div className="space-y-3">
@@ -1990,28 +1961,6 @@ export const InspectorDrawer: React.FC<InspectorDrawerProps> = ({
                     </div>
                   )}
                 </div>
-
-                {/* System 32 Shelf-Pin Drilling Rows */}
-                {part.kind === 'panel' && part.height >= 400 && part.width <= 45 && (
-                  <label className="flex items-center justify-between gap-2 rounded-lg border border-zinc-800 bg-zinc-900/70 px-3 py-2 cursor-pointer">
-                    <div>
-                      <div className="text-[11px] font-medium text-zinc-200">
-                        System 32 (rzędy otworów Ø5 co 32 mm)
-                      </div>
-                      <div className="text-[10px] text-zinc-500">
-                        Automatyczna mapa nawiertów pod podpórki półek (37 mm od krawędzi)
-                      </div>
-                    </div>
-                    <input
-                      type="checkbox"
-                      checked={Boolean(part.system32ShelfHoles)}
-                      onChange={(e) =>
-                        onUpdatePart(part.id, { system32ShelfHoles: e.target.checked })
-                      }
-                      className="h-4 w-4 accent-amber-500 shrink-0"
-                    />
-                  </label>
-                )}
 
                 {/* 45-degree Miter Edges */}
                 <div className="space-y-1.5">
@@ -2298,12 +2247,156 @@ export const InspectorDrawer: React.FC<InspectorDrawerProps> = ({
                   </div>
                 </div>
               </div>
+            </div>
+          )}
+
+          {/* ===============================================================
+              TAB 4: OKUCIA (Hinges, Handles, Drawer Slides, System 32, Fasteners)
+          =============================================================== */}
+          {!showBatchView && activeTab === 'hardware' && (
+            <div className="space-y-4">
+              {/* Front Hardware: Handle, Hinges Ø35, Drawer Slides */}
+              {part.kind === 'door' ? (
+                <div className="space-y-2.5">
+                  <h3 className="text-xs font-semibold text-zinc-200">
+                    Front: uchwyt, zawiasy i prowadnice
+                  </h3>
+                  <div className="grid grid-cols-4 gap-1 rounded-lg bg-zinc-900 p-1 border border-zinc-800">
+                    {(
+                      [
+                        { id: 'left', label: 'Lewy' },
+                        { id: 'right', label: 'Prawy' },
+                        { id: 'top', label: 'Góra' },
+                        { id: 'none', label: 'Brak' },
+                      ] as { id: HandleSide; label: string }[]
+                    ).map((opt) => (
+                      <button
+                        key={opt.id}
+                        type="button"
+                        onClick={() => onUpdatePart(part.id, { handleSide: opt.id })}
+                        className={`rounded-md py-1.5 text-xs font-medium transition-colors cursor-pointer ${
+                          (part.handleSide ?? 'right') === opt.id
+                            ? 'bg-amber-500 text-zinc-950 font-semibold'
+                            : 'text-zinc-400 hover:text-white'
+                        }`}
+                      >
+                        {opt.label}
+                      </button>
+                    ))}
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-2">
+                    <label className="block">
+                      <span className="text-[11px] text-zinc-400">Zawiasy puszkowe Ø35</span>
+                      <select
+                        value={part.hingeSide ?? 'none'}
+                        onChange={(e) => {
+                          const hs = e.target.value as HandleSide;
+                          onUpdatePart(part.id, {
+                            hingeSide: hs,
+                            hingeCount: hs === 'none' ? undefined : part.hingeCount ?? 2,
+                          });
+                        }}
+                        className="mt-1 w-full rounded-lg border border-zinc-800 bg-zinc-900 px-2 py-1.5 text-xs text-white focus:border-amber-500 focus:outline-none"
+                      >
+                        <option value="none">Brak (szuflada/stały)</option>
+                        <option value="left">Lewa krawędź</option>
+                        <option value="right">Prawa krawędź</option>
+                        <option value="top">Góra (klapa)</option>
+                      </select>
+                    </label>
+                    <label className="block">
+                      <span className="text-[11px] text-zinc-400">Prowadnice szuflady</span>
+                      <select
+                        value={part.drawerSlideType ?? 'none'}
+                        onChange={(e) =>
+                          onUpdatePart(part.id, {
+                            drawerSlideType: e.target.value as DrawerSlideType,
+                          })
+                        }
+                        className="mt-1 w-full rounded-lg border border-zinc-800 bg-zinc-900 px-2 py-1.5 text-xs text-white focus:border-amber-500 focus:outline-none"
+                      >
+                        <option value="none">Brak</option>
+                        <option value="ball_26mm">Kulkowe (−26 mm)</option>
+                        <option value="undermount_blum">Dolny montaż Blum/GTV</option>
+                        <option value="tandembox_metabox">Tandembox / Metabox (metalowe)</option>
+                      </select>
+                    </label>
+                  </div>
+
+                  <div className="space-y-1">
+                    <span className="text-[11px] text-zinc-400">System otwierania frontu</span>
+                    <div className="grid grid-cols-4 gap-1 rounded-lg bg-zinc-900 p-1 border border-zinc-800">
+                      {(
+                        [
+                          { id: 'bar', label: 'Reling' },
+                          { id: 'tip_on', label: 'Tip-On' },
+                          { id: 'gola_j', label: 'Gola J' },
+                          { id: 'chamfer_45', label: 'Ukos 45°' },
+                        ] as { id: HandleStyle; label: string }[]
+                      ).map((opt) => (
+                        <button
+                          key={opt.id}
+                          type="button"
+                          onClick={() => onUpdatePart(part.id, { handleStyle: opt.id })}
+                          className={`rounded-md py-1.5 text-[11px] font-medium transition-colors cursor-pointer ${
+                            (part.handleStyle ?? 'bar') === opt.id
+                              ? 'bg-amber-500 text-zinc-950 font-semibold'
+                              : 'text-zinc-400 hover:text-white'
+                          }`}
+                        >
+                          {opt.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {partFlapRec && (
+                    <div className="rounded-lg border border-violet-500/35 bg-violet-950/25 px-2.5 py-2 text-[11px] space-y-0.5">
+                      <div className="flex items-center justify-between font-semibold text-violet-200">
+                        <span>Dobór podnośnika klapy</span>
+                        <span className="font-mono-num">LF {partFlapRec.powerFactorLF}</span>
+                      </div>
+                      <div className="text-[10px] text-zinc-300">
+                        {partFlapRec.recommendedLift} ({partFlapRec.weightKg} kg)
+                      </div>
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div className="rounded-xl border border-zinc-800/80 bg-zinc-900/50 px-3 py-2.5 text-[11px] text-zinc-400">
+                  Okucia frontowe (zawiasy Ø35, uchwyty, prowadnice) dostępne są dla elementów typu{' '}
+                  <span className="text-zinc-200 font-medium">Front / Drzwi</span>.
+                </div>
+              )}
+
+              {/* System 32 Shelf-Pin Drilling Rows */}
+              {part.kind === 'panel' && part.height >= 400 && part.width <= 45 && (
+                <label className="flex items-center justify-between gap-2 rounded-lg border border-zinc-800 bg-zinc-900/70 px-3 py-2 cursor-pointer">
+                  <div>
+                    <div className="text-[11px] font-medium text-zinc-200">
+                      System 32 (rzędy otworów Ø5 co 32 mm)
+                    </div>
+                    <div className="text-[10px] text-zinc-500">
+                      Automatyczna mapa nawiertów pod podpórki półek (37 mm od krawędzi)
+                    </div>
+                  </div>
+                  <input
+                    type="checkbox"
+                    checked={Boolean(part.system32ShelfHoles)}
+                    onChange={(e) =>
+                      onUpdatePart(part.id, { system32ShelfHoles: e.target.checked })
+                    }
+                    className="h-4 w-4 accent-amber-500 shrink-0"
+                  />
+                </label>
+              )}
 
               {/* Attached Fasteners with Physical Audit */}
               <div className="space-y-2 border-t border-zinc-800/80 pt-3.5">
                 <div className="flex items-center justify-between">
                   <h3 className="text-xs font-semibold text-zinc-200">
-                    Wkręty w elemencie ({partFasteners.length})
+                    Wkręty i łączniki w elemencie ({partFasteners.length})
                   </h3>
                   {partFasteners.length > 0 && (
                     <button
@@ -2317,10 +2410,10 @@ export const InspectorDrawer: React.FC<InspectorDrawerProps> = ({
                 </div>
                 {partFasteners.length === 0 ? (
                   <p className="text-[11px] text-zinc-500">
-                    Wybierz narzędzie „Wkręty” na dolnym pasku i kliknij płytę w 3D, aby dodać wkręty.
+                    Wybierz narzędzie „Wkręty” na dolnym pasku i kliknij płytę w 3D, aby dodać konfirmaty, mimośrody lub wkręty ciesielskie.
                   </p>
                 ) : (
-                  <div className="space-y-1 max-h-40 overflow-y-auto cad-scroll">
+                  <div className="space-y-1 max-h-56 overflow-y-auto cad-scroll">
                     {partFasteners.map((f, idx) => {
                       const audit = fastenerAuditMap.get(f.id);
                       const statusBadge =

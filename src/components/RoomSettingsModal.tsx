@@ -2,6 +2,10 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   AlertTriangle,
   AppWindow,
+  ArrowDown,
+  ArrowLeft,
+  ArrowRight,
+  ArrowUp,
   Bath,
   BedDouble,
   Check,
@@ -16,6 +20,7 @@ import {
   EyeOff,
   Flame,
   Maximize2,
+  Minimize2,
   MousePointer2,
   Pencil,
   PlugZap,
@@ -25,6 +30,7 @@ import {
   Scissors,
   Sofa,
   Trash2,
+  TriangleRight,
   Undo2,
   UtensilsCrossed,
   Wrench,
@@ -54,6 +60,7 @@ import {
   type RoomWallFinish,
   type RoomWallObstacle,
   type RoomWallObstacleType,
+  type RoomWallSlope,
 } from '../types/furniture';
 import {
   analyzeDoorSwingCollisions,
@@ -68,11 +75,15 @@ import {
   WALL_OBSTACLE_PRESETS,
   buildRoomPreset,
   computeFurnitureFootprintXZ,
+  computeMiteredWallOuterCorners,
   computeRoomAreaM2,
   computeRoomBoundsXZ,
   computeRoomPerimeterM,
+  computeSlopeSurfacePolygons2D,
   computeWallSegments,
   deleteRoomVertex,
+  extrudeWallNotch,
+  getEffectiveRoomWallSlopes,
   getRoomPolygonPoints,
   getRoomStyle,
   normalizeRoomPolygonWinding,
@@ -199,6 +210,8 @@ const PRESET_CARDS: Array<{ id: RoomShapePresetId; label: string; desc: string }
   { id: 'l_shape', label: 'Litera L', desc: 'Kuchnia / salon' },
   { id: 'u_shape', label: 'Litera U', desc: 'Zabudowa 3-str.' },
   { id: 'chamfered', label: 'Ze skosem 45°', desc: 'Narożnik ścięty' },
+  { id: 'attic_single', label: 'Poddasze 1 skos', desc: 'Skos tylny' },
+  { id: 'attic_gable', label: 'Poddasze 2 skosy', desc: 'Dach dwuspadowy' },
 ];
 
 const CUTAWAY_MODES: Array<{ id: RoomCutawayMode; label: string; hint: string }> = [
@@ -267,6 +280,7 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
 
   // Drawing custom polygon state
   const [drawPoints, setDrawPoints] = useState<RoomVertex[]>([]);
+  const [quickWallLenMm, setQuickWallLenMm] = useState<number>(2500);
   const [cursorWorld, setCursorWorld] = useState<{ x: number; z: number } | null>(null);
   const [snapGuides, setSnapGuides] = useState<{ x?: number; z?: number }>({});
 
@@ -351,6 +365,18 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
 
   const points = useMemo(() => getRoomPolygonPoints(draft), [draft]);
   const segments = useMemo(() => computeWallSegments(points), [points]);
+  const effectiveSlopes = useMemo(
+    () => getEffectiveRoomWallSlopes(draft, segments),
+    [draft, segments]
+  );
+  const slopeSurfaces2D = useMemo(
+    () => computeSlopeSurfacePolygons2D(draft, effectiveSlopes),
+    [draft, effectiveSlopes]
+  );
+  const miterOuter2D = useMemo(
+    () => computeMiteredWallOuterCorners(segments, draft.wallThicknessMm ?? 120),
+    [segments, draft.wallThicknessMm]
+  );
   const areaM2 = useMemo(() => computeRoomAreaM2(points), [points]);
   const perimeterM = useMemo(() => computeRoomPerimeterM(points), [points]);
   const style = useMemo(() => getRoomStyle(draft), [draft]);
@@ -636,6 +662,82 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
       openings: [],
       wallObstacles: [],
       hiddenWallIndices: [],
+      wallSlopes: [],
+      slopedCeiling: { ...prev.slopedCeiling, enabled: false },
+    }));
+    setDrawPoints([]);
+    setTool('select');
+    setSelection({ kind: 'none' });
+  }, [drawPoints, commitDraft]);
+
+  /** Appends an exact orthogonal wall segment while drawing (effortless on mobile & desktop!) */
+  const appendDirectionalDrawWall = useCallback(
+    (dxSign: number, dzSign: number) => {
+      const len = Math.max(200, Math.min(20000, Math.round(quickWallLenMm || 2000)));
+      setDrawPoints((prev) => {
+        const origin =
+          prev.length > 0
+            ? prev[prev.length - 1]
+            : { id: `dp_${Date.now()}_0`, xMm: -1500, zMm: -500 };
+        const base = prev.length > 0 ? prev : [origin];
+        const nextPt: RoomVertex = {
+          id: `dp_${Date.now()}_${base.length}`,
+          xMm: Math.round(origin.xMm + dxSign * len),
+          zMm: Math.round(origin.zMm + dzSign * len),
+        };
+        // Auto-close if new point lands right on start point
+        if (
+          base.length >= 3 &&
+          Math.hypot(nextPt.xMm - base[0].xMm, nextPt.zMm - base[0].zMm) < 60
+        ) {
+          const normalized = normalizeRoomPolygonWinding(base);
+          commitDraft((r) => ({
+            ...r,
+            enabled: true,
+            floorPoints: normalized,
+            openings: [],
+            wallObstacles: [],
+            hiddenWallIndices: [],
+            wallSlopes: [],
+            slopedCeiling: { ...r.slopedCeiling, enabled: false },
+          }));
+          setTool('select');
+          setSelection({ kind: 'none' });
+          return [];
+        }
+        return [...base, nextPt];
+      });
+    },
+    [quickWallLenMm, commitDraft]
+  );
+
+  /** Auto-closes an open polyline with a crisp 90° corner if start and end aren't aligned */
+  const autoCloseOrthoDrawing = useCallback(() => {
+    if (drawPoints.length < 2) return;
+    const first = drawPoints[0];
+    const last = drawPoints[drawPoints.length - 1];
+    const dx = Math.abs(last.xMm - first.xMm);
+    const dz = Math.abs(last.zMm - first.zMm);
+    let ptsToClose = [...drawPoints];
+    if (dx > 50 && dz > 50) {
+      // Insert orthogonal closing corner
+      ptsToClose.push({
+        id: `dp_${Date.now()}_close`,
+        xMm: first.xMm,
+        zMm: last.zMm,
+      });
+    }
+    if (ptsToClose.length < 3) return;
+    const normalized = normalizeRoomPolygonWinding(ptsToClose);
+    commitDraft((prev) => ({
+      ...prev,
+      enabled: true,
+      floorPoints: normalized,
+      openings: [],
+      wallObstacles: [],
+      hiddenWallIndices: [],
+      wallSlopes: [],
+      slopedCeiling: { ...prev.slopedCeiling, enabled: false },
     }));
     setDrawPoints([]);
     setTool('select');
@@ -710,6 +812,11 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
       openings: preset.openings,
       wallObstacles: preset.wallObstacles,
       hiddenWallIndices: [],
+      slopedCeiling: preset.slopedCeiling ?? {
+        ...draft.slopedCeiling,
+        enabled: false,
+      },
+      wallSlopes: preset.wallSlopes ?? [],
     });
     commitDraft(() => nextRoom);
     setTool('select');
@@ -1139,11 +1246,78 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
       ? applianceParts.find((p) => p.id === selection.id) ?? null
       : null;
 
-  const slope = draft.slopedCeiling ?? {
-    enabled: false,
-    side: 'right' as const,
-    kneeWallHeightMm: 1350,
-    slopeWidthMm: 1600,
+  const materializeWallSlopes = (prev: RoomConfig): RoomWallSlope[] => {
+    if (prev.wallSlopes && prev.wallSlopes.length > 0) {
+      return prev.wallSlopes.map((s) => ({ ...s }));
+    }
+    const resolved = getEffectiveRoomWallSlopes(prev);
+    return resolved
+      .filter((s) => s.wallIndex !== null)
+      .map((s) => ({
+        wallIndex: s.wallIndex as number,
+        kneeWallHeightMm: Math.round(s.kneeWallHeightMm),
+        slopeDepthMm: Math.round(s.slopeDepthMm),
+      }));
+  };
+
+  const toggleWallSlope2D = (wallIndex: number) => {
+    commitDraft((prev) => {
+      const list = materializeWallSlopes(prev);
+      const exists = list.some((s) => s.wallIndex === wallIndex);
+      const nextList = exists
+        ? list.filter((s) => s.wallIndex !== wallIndex)
+        : [
+            ...list,
+            {
+              wallIndex,
+              kneeWallHeightMm: Math.min(1250, Math.max(400, prev.heightMm - 700)),
+              slopeDepthMm: 1600,
+            },
+          ];
+      return {
+        ...prev,
+        slopedCeiling: { ...prev.slopedCeiling, enabled: false },
+        wallSlopes: nextList,
+      };
+    });
+  };
+
+  const updateWallSlope2D = (
+    wallIndex: number,
+    patch: Partial<Pick<RoomWallSlope, 'kneeWallHeightMm' | 'slopeDepthMm'>>
+  ) => {
+    commitDraft((prev) => {
+      const list = materializeWallSlopes(prev);
+      const exists = list.some((s) => s.wallIndex === wallIndex);
+      const nextList = exists
+        ? list.map((s) => (s.wallIndex === wallIndex ? { ...s, ...patch } : s))
+        : [
+            ...list,
+            {
+              wallIndex,
+              kneeWallHeightMm: patch.kneeWallHeightMm ?? 1250,
+              slopeDepthMm: patch.slopeDepthMm ?? 1600,
+            },
+          ];
+      return {
+        ...prev,
+        slopedCeiling: { ...prev.slopedCeiling, enabled: false },
+        wallSlopes: nextList,
+      };
+    });
+  };
+
+  const updateWallSlopeByAngle2D = (
+    wallIndex: number,
+    angleDeg: number,
+    kneeWallHeightMm: number
+  ) => {
+    const clampedAngle = Math.max(12, Math.min(72, angleDeg));
+    const rise = Math.max(150, draft.heightMm - kneeWallHeightMm);
+    const nextDepth = Math.round(
+      Math.max(250, Math.min(6000, rise / Math.tan((clampedAngle * Math.PI) / 180)))
+    );
+    updateWallSlope2D(wallIndex, { slopeDepthMm: nextDepth });
   };
 
   const patchDraft = (next: Partial<RoomConfig>) =>
@@ -1153,18 +1327,6 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
     commitDraft((prev) => ({
       ...prev,
       style: { ...getRoomStyle(prev), ...next },
-    }));
-
-  const patchSlope = (next: Partial<NonNullable<RoomConfig['slopedCeiling']>>) =>
-    commitDraft((prev) => ({
-      ...prev,
-      slopedCeiling: {
-        enabled: prev.slopedCeiling?.enabled ?? false,
-        side: prev.slopedCeiling?.side ?? 'right',
-        kneeWallHeightMm: prev.slopedCeiling?.kneeWallHeightMm ?? 1350,
-        slopeWidthMm: prev.slopedCeiling?.slopeWidthMm ?? 1600,
-        ...next,
-      },
     }));
 
   const updateOpening = (id: string, patch: Partial<RoomOpening>) => {
@@ -1633,6 +1795,27 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
                   />
                 )}
 
+                {/* Hatch pattern for 2D attic roof slope projection zones */}
+                <defs>
+                  <pattern
+                    id="roomSlopeHatch"
+                    width="10"
+                    height="10"
+                    patternTransform="rotate(45 0 0)"
+                    patternUnits="userSpaceOnUse"
+                  >
+                    <line
+                      x1="0"
+                      y1="0"
+                      x2="0"
+                      y2="10"
+                      stroke="#F59E0B"
+                      strokeWidth="1.4"
+                      strokeOpacity="0.45"
+                    />
+                  </pattern>
+                </defs>
+
                 {/* Existing Room Floor Polygon (dimmed while drawing a new one) */}
                 <g opacity={tool === 'draw' ? 0.3 : 1}>
                   <polygon
@@ -1641,6 +1824,44 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
                     fillOpacity={0.14}
                     stroke="none"
                   />
+
+                  {/* Live 2D Clipped Attic Roof Slope Zones */}
+                  {slopeSurfaces2D.map(({ slope: sl, polygon }) => {
+                    const polyPts = polygon
+                      .map((p) => {
+                        const s = worldToScreen(p.xMm, p.zMm);
+                        return `${s.sx},${s.sy}`;
+                      })
+                      .join(' ');
+                    const cx =
+                      polygon.reduce((sum, p) => sum + p.xMm, 0) / polygon.length;
+                    const cz =
+                      polygon.reduce((sum, p) => sum + p.zMm, 0) / polygon.length;
+                    const cScr = worldToScreen(cx, cz);
+                    return (
+                      <g key={sl.id} pointerEvents="none">
+                        <polygon
+                          points={polyPts}
+                          fill="url(#roomSlopeHatch)"
+                          stroke="#F59E0B"
+                          strokeWidth={1.3}
+                          strokeDasharray="6 3"
+                          strokeOpacity={0.85}
+                        />
+                        <text
+                          x={cScr.sx}
+                          y={cScr.sy}
+                          textAnchor="middle"
+                          fill="#FCD34D"
+                          fontSize="10"
+                          fontWeight="600"
+                          className="tabular-nums"
+                        >
+                          SKOS {sl.angleDeg.toFixed(0)}° (kol. {Math.round(sl.kneeWallHeightMm)})
+                        </text>
+                      </g>
+                    );
+                  })}
 
                   {/* Room Center Area Label */}
                   <g pointerEvents="none">
@@ -1735,16 +1956,19 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
                       hoverWallPlacement?.seg.index === seg.index;
 
                     const t = wallThicknessMm;
+                    const nSegs = segments.length;
+                    const outerStart = miterOuter2D[seg.index] ?? {
+                      xMm: seg.start.xMm + seg.outNx * t,
+                      zMm: seg.start.zMm + seg.outNz * t,
+                    };
+                    const outerEnd = miterOuter2D[(seg.index + 1) % nSegs] ?? {
+                      xMm: seg.end.xMm + seg.outNx * t,
+                      zMm: seg.end.zMm + seg.outNz * t,
+                    };
                     const p0 = worldToScreen(seg.start.xMm, seg.start.zMm);
                     const p1 = worldToScreen(seg.end.xMm, seg.end.zMm);
-                    const p2 = worldToScreen(
-                      seg.end.xMm + seg.outNx * t,
-                      seg.end.zMm + seg.outNz * t
-                    );
-                    const p3 = worldToScreen(
-                      seg.start.xMm + seg.outNx * t,
-                      seg.start.zMm + seg.outNz * t
-                    );
+                    const p2 = worldToScreen(outerEnd.xMm, outerEnd.zMm);
+                    const p3 = worldToScreen(outerStart.xMm, outerStart.zMm);
 
                     const wallPoly = `${p0.sx},${p0.sy} ${p1.sx},${p1.sy} ${p2.sx},${p2.sy} ${p3.sx},${p3.sy}`;
 
@@ -2407,35 +2631,93 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
                 )}
               </svg>
 
-              {/* Contextual Floating Action Bar when Drawing */}
+              {/* Contextual Floating Action Bar + Directional Length Builder when Drawing */}
               {tool === 'draw' && (
-                <div className="absolute bottom-3 left-1/2 -translate-x-1/2 flex items-center gap-2 rounded-xl border border-zinc-700 bg-[#141518]/95 px-3 py-2 shadow-xl backdrop-blur-sm">
-                  <span className="text-xs text-zinc-300 whitespace-nowrap">
-                    {drawPoints.length === 0
-                      ? 'Kliknij na siatce, aby rozpocząć pierwszą ścianę'
-                      : drawPoints.length < 3
-                        ? `Dodano ${drawPoints.length} pkt — wskaż kolejne narożniki`
-                        : `Kliknij zielony punkt startowy lub zamknij (${drawPoints.length} naroż.)`}
-                  </span>
-                  {drawPoints.length >= 3 && (
+                <div className="absolute bottom-3 left-1/2 -translate-x-1/2 max-w-[calc(100%-16px)] flex flex-col gap-2 rounded-xl border border-zinc-700 bg-[#141518]/95 px-3 py-2 shadow-xl backdrop-blur-sm">
+                  <div className="flex flex-wrap items-center justify-center gap-1.5">
+                    <span className="text-[11px] text-zinc-400 whitespace-nowrap">
+                      Dł. ściany (mm):
+                    </span>
+                    <input
+                      type="number"
+                      min={200}
+                      max={20000}
+                      step={50}
+                      value={quickWallLenMm}
+                      onChange={(e) => setQuickWallLenMm(Number(e.target.value) || 0)}
+                      className="w-20 rounded-lg border border-zinc-700 bg-zinc-900 px-2 py-1 text-xs font-mono tabular-nums text-white focus:border-amber-500 focus:outline-none"
+                    />
+                    <div className="flex items-center gap-1">
+                      <button
+                        type="button"
+                        onClick={() => appendDirectionalDrawWall(-1, 0)}
+                        className="flex h-8 w-8 items-center justify-center rounded-lg border border-zinc-700 bg-zinc-900 text-zinc-100 hover:border-amber-500 hover:text-amber-300 cursor-pointer"
+                        title="Dodaj ścianę w lewo o wpisanej długości"
+                      >
+                        <ArrowLeft className="h-3.5 w-3.5" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => appendDirectionalDrawWall(0, -1)}
+                        className="flex h-8 w-8 items-center justify-center rounded-lg border border-zinc-700 bg-zinc-900 text-zinc-100 hover:border-amber-500 hover:text-amber-300 cursor-pointer"
+                        title="Dodaj ścianę w górę o wpisanej długości"
+                      >
+                        <ArrowUp className="h-3.5 w-3.5" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => appendDirectionalDrawWall(0, 1)}
+                        className="flex h-8 w-8 items-center justify-center rounded-lg border border-zinc-700 bg-zinc-900 text-zinc-100 hover:border-amber-500 hover:text-amber-300 cursor-pointer"
+                        title="Dodaj ścianę w dół o wpisanej długości"
+                      >
+                        <ArrowDown className="h-3.5 w-3.5" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => appendDirectionalDrawWall(1, 0)}
+                        className="flex h-8 w-8 items-center justify-center rounded-lg border border-zinc-700 bg-zinc-900 text-zinc-100 hover:border-amber-500 hover:text-amber-300 cursor-pointer"
+                        title="Dodaj ścianę w prawo o wpisanej długości"
+                      >
+                        <ArrowRight className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+                  </div>
+                  <div className="flex flex-wrap items-center justify-center gap-1.5 border-t border-zinc-800 pt-1.5">
+                    <span className="text-[11px] text-zinc-400">
+                      {drawPoints.length === 0
+                        ? 'Kliknij siatkę lub użyj strzałek ↑↓←→'
+                        : `${drawPoints.length} pkt · kliknij punkt startowy lub domknij`}
+                    </span>
+                    {drawPoints.length >= 2 && (
+                      <button
+                        type="button"
+                        onClick={autoCloseOrthoDrawing}
+                        className="min-h-[28px] rounded-lg bg-emerald-500 px-2.5 text-[11px] font-semibold text-zinc-950 hover:bg-emerald-400 whitespace-nowrap cursor-pointer"
+                        title="Automatycznie domknij obrys pod kątem prostym"
+                      >
+                        Domknij 90°
+                      </button>
+                    )}
+                    {drawPoints.length >= 3 && (
+                      <button
+                        type="button"
+                        onClick={finishDrawingPolygon}
+                        className="min-h-[28px] rounded-lg border border-emerald-500/50 bg-emerald-500/15 px-2.5 text-[11px] font-medium text-emerald-300 hover:bg-emerald-500/25 whitespace-nowrap cursor-pointer"
+                      >
+                        Połącz ze startem
+                      </button>
+                    )}
                     <button
                       type="button"
-                      onClick={finishDrawingPolygon}
-                      className="min-h-[30px] rounded-lg bg-emerald-500 px-2.5 text-xs font-semibold text-zinc-950 hover:bg-emerald-400 whitespace-nowrap cursor-pointer"
+                      onClick={() => {
+                        setDrawPoints([]);
+                        setTool('select');
+                      }}
+                      className="min-h-[28px] rounded-lg border border-zinc-700 bg-zinc-900 px-2.5 text-[11px] text-zinc-300 hover:text-white whitespace-nowrap cursor-pointer"
                     >
-                      Zamknij obrys
+                      Anuluj
                     </button>
-                  )}
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setDrawPoints([]);
-                      setTool('select');
-                    }}
-                    className="min-h-[30px] rounded-lg border border-zinc-700 bg-zinc-900 px-2.5 text-xs text-zinc-300 hover:text-white whitespace-nowrap cursor-pointer"
-                  >
-                    Anuluj
-                  </button>
+                  </div>
                 </div>
               )}
 
@@ -2699,6 +2981,118 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
                           <Plus className="h-3 w-3" /> WC górnopł.
                         </button>
                       </div>
+
+                      <div className="grid grid-cols-3 gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() =>
+                            commitDraft((prev) => extrudeWallNotch(prev, selectedWall.index, 600))
+                          }
+                          disabled={selectedWall.lengthMm < 900 || points.length > 20}
+                          className="flex min-h-[32px] items-center justify-center gap-1 rounded-lg border border-zinc-700 bg-zinc-900 px-2 text-[11px] font-medium text-zinc-200 hover:border-amber-500/60 hover:text-amber-300 disabled:opacity-40 cursor-pointer"
+                          title="Wysuń środek ściany na zewnątrz o 600 mm (wykusz / wnęka na zabudowę)"
+                        >
+                          <Maximize2 className="h-3 w-3 shrink-0" />
+                          <span>+ Wykusz</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            commitDraft((prev) => extrudeWallNotch(prev, selectedWall.index, -600))
+                          }
+                          disabled={selectedWall.lengthMm < 900 || points.length > 20}
+                          className="flex min-h-[32px] items-center justify-center gap-1 rounded-lg border border-zinc-700 bg-zinc-900 px-2 text-[11px] font-medium text-zinc-200 hover:border-amber-500/60 hover:text-amber-300 disabled:opacity-40 cursor-pointer"
+                          title="Wsuń środek ściany do wnętrza o 600 mm (filar / komin)"
+                        >
+                          <Minimize2 className="h-3 w-3 shrink-0" />
+                          <span>+ Filar</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => toggleWallSlope2D(selectedWall.index)}
+                          className={`flex min-h-[32px] items-center justify-center gap-1 rounded-lg border px-2 text-[11px] font-medium cursor-pointer ${
+                            effectiveSlopes.some((s) => s.wallIndex === selectedWall.index)
+                              ? 'border-sky-400/60 bg-sky-500/20 text-sky-200'
+                              : 'border-zinc-700 bg-zinc-900 text-zinc-200 hover:border-sky-500/60 hover:text-sky-300'
+                          }`}
+                          title="Dodaj lub usuń skos dachu (ściankę kolankową) na tej ścianie"
+                        >
+                          <TriangleRight className="h-3 w-3 shrink-0" />
+                          <span>
+                            {effectiveSlopes.some((s) => s.wallIndex === selectedWall.index)
+                              ? 'Usuń skos'
+                              : '+ Skos'}
+                          </span>
+                        </button>
+                      </div>
+
+                      {(() => {
+                        const wallSlope = effectiveSlopes.find(
+                          (s) => s.wallIndex === selectedWall.index
+                        );
+                        if (!wallSlope) return null;
+                        return (
+                          <div className="space-y-2 rounded-lg border border-sky-500/35 bg-sky-500/10 p-2.5">
+                            <div className="flex items-center justify-between text-[11px]">
+                              <span className="font-semibold text-sky-300">
+                                Skos na tej ścianie
+                              </span>
+                              <span className="font-mono tabular-nums text-sky-200">
+                                {wallSlope.angleDeg.toFixed(1)}°
+                              </span>
+                            </div>
+                            <div className="grid grid-cols-3 gap-1.5">
+                              <label className="block">
+                                <span className="text-[10px] text-zinc-400">Kolankowa</span>
+                                <NumericInput
+                                  min={300}
+                                  max={draft.heightMm - 100}
+                                  step={50}
+                                  value={Math.round(wallSlope.kneeWallHeightMm)}
+                                  onChange={(val) =>
+                                    updateWallSlope2D(selectedWall.index, {
+                                      kneeWallHeightMm: val,
+                                    })
+                                  }
+                                  className="mt-0.5 w-full rounded-md border border-zinc-700 bg-zinc-900 px-2 py-1 text-xs font-mono tabular-nums text-white focus:border-sky-400 focus:outline-none"
+                                />
+                              </label>
+                              <label className="block">
+                                <span className="text-[10px] text-zinc-400">Głęb. skosu</span>
+                                <NumericInput
+                                  min={250}
+                                  max={6000}
+                                  step={50}
+                                  value={Math.round(wallSlope.slopeDepthMm)}
+                                  onChange={(val) =>
+                                    updateWallSlope2D(selectedWall.index, {
+                                      slopeDepthMm: val,
+                                    })
+                                  }
+                                  className="mt-0.5 w-full rounded-md border border-zinc-700 bg-zinc-900 px-2 py-1 text-xs font-mono tabular-nums text-white focus:border-sky-400 focus:outline-none"
+                                />
+                              </label>
+                              <label className="block">
+                                <span className="text-[10px] text-zinc-400">Kąt (°)</span>
+                                <NumericInput
+                                  min={12}
+                                  max={72}
+                                  step={1}
+                                  value={Math.round(wallSlope.angleDeg)}
+                                  onChange={(deg) =>
+                                    updateWallSlopeByAngle2D(
+                                      selectedWall.index,
+                                      deg,
+                                      wallSlope.kneeWallHeightMm
+                                    )
+                                  }
+                                  className="mt-0.5 w-full rounded-md border border-zinc-700 bg-zinc-900 px-2 py-1 text-xs font-mono tabular-nums text-white focus:border-sky-400 focus:outline-none"
+                                />
+                              </label>
+                            </div>
+                          </div>
+                        );
+                      })()}
 
                       <label className="flex items-center justify-between pt-1 text-xs text-zinc-300 cursor-pointer">
                         <span className="flex items-center gap-1.5">
@@ -3703,58 +4097,109 @@ export const RoomSettingsModal: React.FC<RoomSettingsModalProps> = ({
                     </label>
                   </div>
 
-                  {/* Sloped Attic Ceiling */}
-                  <div className="space-y-2.5 border-t border-zinc-800 pt-4">
-                    <label className="flex items-center justify-between text-xs font-semibold text-amber-300 cursor-pointer">
-                      <span>Skos dachu / poddasze</span>
-                      <input
-                        type="checkbox"
-                        checked={slope.enabled}
-                        onChange={(e) => patchSlope({ enabled: e.target.checked })}
-                        className="h-4 w-4 accent-amber-500"
-                      />
-                    </label>
-                    {slope.enabled && (
-                      <div className="grid grid-cols-1 gap-2">
-                        <label className="block">
-                          <span className="text-[11px] text-zinc-400">Strona skosu</span>
-                          <select
-                            value={slope.side}
-                            onChange={(e) =>
-                              patchSlope({ side: e.target.value as 'left' | 'right' })
-                            }
-                            className="mt-1 w-full rounded-lg border border-zinc-800 bg-zinc-900 px-2.5 py-1.5 text-xs text-white"
+                  {/* Multi-Wall Sloped Attic Ceiling Manager (works on ANY polygon wall!) */}
+                  <div className="space-y-3 border-t border-zinc-800 pt-4">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-semibold text-amber-300">
+                        Skosy dachu / poddasze
+                      </span>
+                      <span className="text-[11px] text-zinc-400 tabular-nums">
+                        {effectiveSlopes.length} akt.
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-zinc-400 leading-snug">
+                      Wybierz ściany, na których ma opierać się połać dachu. Skosy automatycznie przycinają ściany szczytowe i dopasowują się do kształtów L/U.
+                    </p>
+                    <div className="flex flex-wrap gap-1.5">
+                      {segments.map((seg) => {
+                        const active = effectiveSlopes.some((s) => s.wallIndex === seg.index);
+                        return (
+                          <button
+                            key={seg.index}
+                            type="button"
+                            onClick={() => toggleWallSlope2D(seg.index)}
+                            className={`min-h-[30px] rounded-lg border px-2.5 text-[11px] font-medium transition-colors cursor-pointer ${
+                              active
+                                ? 'border-amber-400 bg-amber-500 text-zinc-950 font-semibold'
+                                : 'border-zinc-800 bg-zinc-900 text-zinc-300 hover:border-amber-500/50 hover:text-amber-300'
+                            }`}
                           >
-                            <option value="right">Prawa ściana</option>
-                            <option value="left">Lewa ściana</option>
-                          </select>
-                        </label>
-                        <div className="grid grid-cols-2 gap-2">
-                          <label className="block">
-                            <span className="text-[11px] text-zinc-400">Kolankowa (mm)</span>
-                            <NumericInput
-                              min={300}
-                              max={draft.heightMm - 100}
-                              step={50}
-                              value={slope.kneeWallHeightMm}
-                              onChange={(val) => patchSlope({ kneeWallHeightMm: val })}
-                              className="mt-1 w-full rounded-lg border border-zinc-800 bg-zinc-900 px-2 py-1.5 text-xs font-mono tabular-nums text-white focus:border-amber-500 focus:outline-none"
-                            />
-                          </label>
-                          <label className="block">
-                            <span className="text-[11px] text-zinc-400">Szer. skosu (mm)</span>
-                            <NumericInput
-                              min={300}
-                              max={draft.widthMm}
-                              step={50}
-                              value={slope.slopeWidthMm}
-                              onChange={(val) => patchSlope({ slopeWidthMm: val })}
-                              className="mt-1 w-full rounded-lg border border-zinc-800 bg-zinc-900 px-2 py-1.5 text-xs font-mono tabular-nums text-white focus:border-amber-500 focus:outline-none"
-                            />
-                          </label>
+                            {seg.label}
+                          </button>
+                        );
+                      })}
+                    </div>
+
+                    {effectiveSlopes.map((sl) => {
+                      if (sl.wallIndex === null) return null;
+                      const wIdx = sl.wallIndex;
+                      return (
+                        <div
+                          key={sl.id}
+                          className="space-y-2 rounded-xl border border-zinc-800 bg-zinc-900/70 p-2.5"
+                        >
+                          <div className="flex items-center justify-between text-xs">
+                            <span className="font-semibold text-sky-300 truncate">
+                              {sl.label}
+                            </span>
+                            <div className="flex items-center gap-1.5 shrink-0">
+                              <span className="font-mono text-[11px] tabular-nums text-zinc-300">
+                                {sl.angleDeg.toFixed(1)}°
+                              </span>
+                              <button
+                                type="button"
+                                onClick={() => toggleWallSlope2D(wIdx)}
+                                className="text-zinc-500 hover:text-red-400 cursor-pointer"
+                                title="Usuń ten skos"
+                              >
+                                <Trash2 className="h-3.5 w-3.5" />
+                              </button>
+                            </div>
+                          </div>
+                          <div className="grid grid-cols-3 gap-1.5">
+                            <label className="block">
+                              <span className="text-[10px] text-zinc-400">Kolankowa</span>
+                              <NumericInput
+                                min={300}
+                                max={draft.heightMm - 100}
+                                step={50}
+                                value={Math.round(sl.kneeWallHeightMm)}
+                                onChange={(val) =>
+                                  updateWallSlope2D(wIdx, { kneeWallHeightMm: val })
+                                }
+                                className="mt-0.5 w-full rounded-md border border-zinc-800 bg-zinc-950 px-2 py-1 text-xs font-mono tabular-nums text-white focus:border-amber-500 focus:outline-none"
+                              />
+                            </label>
+                            <label className="block">
+                              <span className="text-[10px] text-zinc-400">Głębokość</span>
+                              <NumericInput
+                                min={250}
+                                max={6000}
+                                step={50}
+                                value={Math.round(sl.slopeDepthMm)}
+                                onChange={(val) =>
+                                  updateWallSlope2D(wIdx, { slopeDepthMm: val })
+                                }
+                                className="mt-0.5 w-full rounded-md border border-zinc-800 bg-zinc-950 px-2 py-1 text-xs font-mono tabular-nums text-white focus:border-amber-500 focus:outline-none"
+                              />
+                            </label>
+                            <label className="block">
+                              <span className="text-[10px] text-zinc-400">Kąt (°)</span>
+                              <NumericInput
+                                min={12}
+                                max={72}
+                                step={1}
+                                value={Math.round(sl.angleDeg)}
+                                onChange={(deg) =>
+                                  updateWallSlopeByAngle2D(wIdx, deg, sl.kneeWallHeightMm)
+                                }
+                                className="mt-0.5 w-full rounded-md border border-zinc-800 bg-zinc-950 px-2 py-1 text-xs font-mono tabular-nums text-white focus:border-amber-500 focus:outline-none"
+                              />
+                            </label>
+                          </div>
                         </div>
-                      </div>
-                    )}
+                      );
+                    })}
                   </div>
                 </>
               )}

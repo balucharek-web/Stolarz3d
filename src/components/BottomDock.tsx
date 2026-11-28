@@ -27,7 +27,10 @@ import {
   Lightbulb,
   ListOrdered,
   Magnet,
+  Map,
   Maximize2,
+  MonitorPlay,
+  Moon,
   MousePointer2,
   Move,
   Palette,
@@ -51,6 +54,7 @@ import {
   AlignMode,
   CameraPreset,
   EditorTool,
+  SceneBackdropTheme,
   SCREW_CATALOG,
   ScrewType,
   StudioLighting,
@@ -142,6 +146,12 @@ interface BottomDockProps {
   onOpenShortcuts?: () => void;
   onOpenCommandPalette?: () => void;
   onSnapshot: () => void;
+  viewMode?: '3d' | 'plan2d';
+  onToggleViewMode?: () => void;
+  sceneTheme?: SceneBackdropTheme;
+  onCycleSceneTheme?: () => void;
+  onEnterPresentation?: () => void;
+  onAddCornerBracket?: () => void;
 }
 
 const LIGHTING_LABELS: Record<StudioLighting, string> = {
@@ -149,6 +159,12 @@ const LIGHTING_LABELS: Record<StudioLighting, string> = {
   studio: 'Studio',
   warm: 'Ciepłe',
   photoreal: 'Studio HQ',
+};
+
+const THEME_LABELS: Record<SceneBackdropTheme, string> = {
+  studio_light: 'Jasne',
+  workshop_dark: 'Ciemne',
+  blueprint_sketch: 'Szkic',
 };
 
 export const BottomDock: React.FC<BottomDockProps> = ({
@@ -232,6 +248,12 @@ export const BottomDock: React.FC<BottomDockProps> = ({
   onOpenShortcuts,
   onOpenCommandPalette,
   onSnapshot,
+  viewMode = '3d',
+  onToggleViewMode,
+  sceneTheme = 'studio_light',
+  onCycleSceneTheme,
+  onEnterPresentation,
+  onAddCornerBracket,
 }) => {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [mobileTab, setMobileTab] = useState<MobileSheetTab>('tools');
@@ -643,6 +665,15 @@ export const BottomDock: React.FC<BottomDockProps> = ({
                     >
                       W linii
                     </button>
+                    {onAddCornerBracket && (
+                      <button
+                        type="button"
+                        onClick={onAddCornerBracket}
+                        className="flex min-h-[36px] items-center justify-center rounded-xl border border-emerald-400/45 bg-emerald-500/18 px-2.5 text-[11px] font-semibold text-emerald-200 active:bg-emerald-500 active:text-zinc-950 whitespace-nowrap shrink-0"
+                      >
+                        + Kątownik
+                      </button>
+                    )}
                     <button
                       type="button"
                       onClick={() => onAlignSelected('front')}
@@ -1102,6 +1133,46 @@ export const BottomDock: React.FC<BottomDockProps> = ({
                           <span>Włącz tryb Ekspert (RTG, LED, rozstrzał, montaż)</span>
                         </button>
                       )}
+                      {onToggleViewMode && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            onToggleViewMode();
+                            setMobileMenuOpen(false);
+                          }}
+                          className={`flex min-h-[44px] items-center justify-center gap-1.5 rounded-xl border px-3 text-xs font-semibold ${
+                            viewMode === 'plan2d'
+                              ? 'border-amber-400/50 bg-amber-500/20 text-amber-200'
+                              : 'border-white/[0.08] bg-white/[0.04] text-zinc-100'
+                          }`}
+                        >
+                          <Map className="h-4 w-4 text-amber-400" />
+                          <span>{viewMode === 'plan2d' ? 'Widok 3D' : 'Rzut Plan 2D'}</span>
+                        </button>
+                      )}
+                      {onCycleSceneTheme && (
+                        <button
+                          type="button"
+                          onClick={onCycleSceneTheme}
+                          className="flex min-h-[44px] items-center justify-center gap-1.5 rounded-xl border border-white/[0.08] bg-white/[0.04] px-3 text-xs font-medium text-zinc-200"
+                        >
+                          <Moon className="h-4 w-4 text-sky-300" />
+                          <span>Tło: {THEME_LABELS[sceneTheme]}</span>
+                        </button>
+                      )}
+                      {onEnterPresentation && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setMobileMenuOpen(false);
+                            onEnterPresentation();
+                          }}
+                          className="col-span-2 flex min-h-[44px] items-center justify-center gap-1.5 rounded-xl border border-amber-400/45 bg-amber-500/15 px-3 text-xs font-semibold text-amber-200 active:bg-amber-500 active:text-zinc-950"
+                        >
+                          <MonitorPlay className="h-4 w-4" />
+                          <span>Tryb Prezentacji Klienta (Render 360°)</span>
+                        </button>
+                      )}
                     </div>
                   </>
                 )}
@@ -1503,6 +1574,16 @@ export const BottomDock: React.FC<BottomDockProps> = ({
                       >
                         W linii
                       </button>
+                      {onAddCornerBracket && (
+                        <button
+                          type="button"
+                          onClick={onAddCornerBracket}
+                          title="Wstaw automatycznie stalowy kątownik ciesielski 3D w narożnik 2 zaznaczonych elementów"
+                          className="h-7 rounded-lg border border-emerald-400/45 bg-emerald-500/18 px-2 text-[11px] font-semibold text-emerald-200 hover:bg-emerald-500/30 cursor-pointer whitespace-nowrap transition-colors"
+                        >
+                          + Kątownik
+                        </button>
+                      )}
                       <div className="mx-0.5 h-4 w-px bg-white/[0.1] shrink-0" aria-hidden="true" />
                     </>
                   ) : null}
@@ -1821,6 +1902,46 @@ export const BottomDock: React.FC<BottomDockProps> = ({
                 <Sun className="h-3.5 w-3.5 text-amber-400" />
                 <span>{LIGHTING_LABELS[lighting]}</span>
               </button>
+
+              {onCycleSceneTheme && (
+                <button
+                  type="button"
+                  onClick={onCycleSceneTheme}
+                  className="flex h-8 items-center gap-1 rounded-lg px-2 text-xs font-medium text-zinc-300 hover:bg-white/[0.07] hover:text-white whitespace-nowrap cursor-pointer transition-colors"
+                  title="Zmień tło sceny 3D (Jasne Studio / Ciemny Warsztat / Szkic)"
+                >
+                  <Moon className="h-3.5 w-3.5 text-sky-300" />
+                  <span className="hidden xl:inline">{THEME_LABELS[sceneTheme]}</span>
+                </button>
+              )}
+
+              {onToggleViewMode && (
+                <button
+                  type="button"
+                  onClick={onToggleViewMode}
+                  className={`flex h-8 items-center gap-1 rounded-lg px-2 text-xs font-medium transition-colors whitespace-nowrap cursor-pointer ${
+                    viewMode === 'plan2d'
+                      ? 'bg-amber-500 text-zinc-950 font-semibold'
+                      : 'text-zinc-200 hover:bg-white/[0.07] hover:text-white'
+                  }`}
+                  title="Przełącz interaktywny rzut z góry Plan 2D z wymiarami łańcuchowymi"
+                >
+                  <Map className="h-3.5 w-3.5" />
+                  <span>Plan 2D</span>
+                </button>
+              )}
+
+              {onEnterPresentation && (
+                <button
+                  type="button"
+                  onClick={onEnterPresentation}
+                  className="flex h-8 items-center gap-1 rounded-lg px-2 text-xs font-medium text-amber-300 hover:bg-amber-500/15 whitespace-nowrap cursor-pointer transition-colors"
+                  title="Tryb Prezentacji Klienta — czysty widok 3D z obrotem 360°"
+                >
+                  <MonitorPlay className="h-3.5 w-3.5" />
+                  <span className="hidden xl:inline">Prezentacja</span>
+                </button>
+              )}
 
               {isExpert && (
                 <>

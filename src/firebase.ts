@@ -2,9 +2,11 @@ import { initializeApp } from 'firebase/app';
 import { getAuth, GoogleAuthProvider } from 'firebase/auth';
 import {
   doc,
+  enableNetwork,
   getDocFromServer,
   getFirestore,
   initializeFirestore,
+  memoryLocalCache,
   type Firestore,
 } from 'firebase/firestore';
 import firebaseConfig from '../firebase-applet-config.json';
@@ -17,12 +19,13 @@ export const app = initializeApp(firebaseConfig);
 function createFirestoreInstance(): Firestore {
   const dbId = firebaseConfig.firestoreDatabaseId || undefined;
   try {
-    // Auto-detect long-polling for mobile carriers, proxies, and sandboxed iframes
-    // while explicitly targeting the provisioned named Firestore database.
+    // Use native HTTP/2 WebChannel with automatic long-polling detection for proxies
+    // and memoryLocalCache so sandboxed preview iframes / multi-tab reloads never stall on IndexedDB locks.
     return initializeFirestore(
       app,
       {
         experimentalAutoDetectLongPolling: true,
+        localCache: memoryLocalCache(),
       },
       dbId
     );
@@ -105,13 +108,38 @@ export function handleFirestoreError(
 }
 
 async function testConnection() {
-  try {
-    await getDocFromServer(doc(db, 'test', 'connection'));
-  } catch (error) {
-    if (error instanceof Error && error.message.includes('the client is offline')) {
-      console.error('Please check your Firebase configuration.');
+  if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+    return;
+  }
+  if (typeof document !== 'undefined' && document.visibilityState === 'hidden') {
+    return;
+  }
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    try {
+      await getDocFromServer(doc(db, 'test', 'connection'));
+      return;
+    } catch (error) {
+      if (error instanceof Error && error.message.includes('the client is offline')) {
+        if (attempt === 1) {
+          await enableNetwork(db).catch(() => {});
+          await new Promise((resolve) => setTimeout(resolve, 2000));
+          continue;
+        }
+        // Only log config warning if browser still reports online after retry
+        if (typeof navigator === 'undefined' || navigator.onLine !== false) {
+          console.error('Please check your Firebase configuration.');
+        }
+      }
+      return;
     }
   }
 }
 
-void testConnection();
+if (typeof window !== 'undefined') {
+  // Defer startup probe slightly so the initial render & iframe network stack settle cleanly
+  window.setTimeout(() => {
+    void testConnection();
+  }, 600);
+} else {
+  void testConnection();
+}

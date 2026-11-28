@@ -17,6 +17,7 @@ import {
   FurniturePart,
   MeasureSegment,
   RoomConfig,
+  SceneBackdropTheme,
   ScrewType,
   StudioLighting,
 } from '../types/furniture';
@@ -45,6 +46,7 @@ import {
 import { buildArchitecturalRoom3D } from '../engine/roomMesh3D';
 import {
   buildCabinetHardwareScene,
+  buildCarpentryConnectorDetailGroup,
   buildFurnitureLegGroup,
   buildSlidingDoorRollersGroup,
   buildSlidingTrackGroup,
@@ -89,6 +91,9 @@ interface Viewport3DProps {
   clearances: ClearanceGuide[];
   jointZones: JointZone[];
   isParametricCabinetSelected?: boolean;
+  sceneTheme?: SceneBackdropTheme;
+  presentationMode?: boolean;
+  autoOrbit?: boolean;
   onSelectPart: (id: string | null, additive?: boolean) => void;
   onSelectFastener: (id: string | null) => void;
   onTransformPart: (
@@ -129,6 +134,12 @@ interface Viewport3DProps {
     guide: ClearanceGuide,
     targetDistanceMm: number
   ) => void;
+  roomEditMode?: boolean;
+  selectedRoomWallIndex?: number | null;
+  selectedRoomSlopeWallIndex?: number | null;
+  selectedLegacySlope?: boolean;
+  onSelectRoomWall?: (wallIndex: number | null) => void;
+  onSelectRoomSlope?: (wallIndex: number | null, isLegacy?: boolean) => void;
 }
 
 const _vec3A = new THREE.Vector3();
@@ -495,6 +506,8 @@ export const Viewport3D = forwardRef<Viewport3DHandle, Viewport3DProps>(
       rimLight: THREE.DirectionalLight;
       softboxLights: THREE.RectAreaLight[];
       contactShadow: THREE.Mesh;
+      contactShadowMat: THREE.MeshBasicMaterial;
+      gridHelper: THREE.GridHelper;
       isSoftwareGl: boolean;
       clearPendingMeasure: () => void;
       requestRender: () => void;
@@ -1026,7 +1039,7 @@ export const Viewport3D = forwardRef<Viewport3DHandle, Viewport3DProps>(
           }
 
           const orbitMoved = orbit.update();
-          if (orbitMoved && orbit.enableDamping) {
+          if ((orbitMoved && orbit.enableDamping) || orbit.autoRotate) {
             needsMoreFrames = true;
           }
 
@@ -1319,6 +1332,8 @@ export const Viewport3D = forwardRef<Viewport3DHandle, Viewport3DProps>(
         rimLight,
         softboxLights,
         contactShadow,
+        contactShadowMat,
+        gridHelper,
         isSoftwareGl,
         clearPendingMeasure,
         requestRender,
@@ -2327,13 +2342,92 @@ export const Viewport3D = forwardRef<Viewport3DHandle, Viewport3DProps>(
         }
 
         setActiveClearanceEdit(null);
+
+        const raycastRoomElement = ():
+          | { kind: 'wall'; wallIndex: number }
+          | { kind: 'slope'; wallIndex: number | null; isLegacy: boolean }
+          | null => {
+          if (!propsRef.current.room?.enabled) return null;
+          const roomTargets: THREE.Object3D[] = [];
+          roomRoot.traverse((obj) => {
+            if (
+              obj instanceof THREE.Mesh &&
+              (obj.userData.raycastKind === 'room_wall' ||
+                obj.userData.raycastKind === 'room_slope')
+            ) {
+              roomTargets.push(obj);
+            }
+          });
+          if (roomTargets.length === 0) return null;
+          const rHits = raycaster.intersectObjects(roomTargets, false);
+          if (rHits.length === 0) return null;
+          const hitObj = rHits[0].object;
+          if (hitObj.userData.raycastKind === 'room_slope') {
+            return {
+              kind: 'slope',
+              wallIndex:
+                typeof hitObj.userData.slopeWallIndex === 'number'
+                  ? hitObj.userData.slopeWallIndex
+                  : null,
+              isLegacy: Boolean(hitObj.userData.isLegacySlope),
+            };
+          }
+          if (
+            hitObj.userData.raycastKind === 'room_wall' &&
+            typeof hitObj.userData.wallIndex === 'number'
+          ) {
+            return { kind: 'wall', wallIndex: hitObj.userData.wallIndex };
+          }
+          return null;
+        };
+
+        // In dedicated 3D Wall/Slope Edit Mode, prioritize selecting room walls & roof slopes!
+        if (propsRef.current.roomEditMode && propsRef.current.tool !== 'screw') {
+          const roomHit = raycastRoomElement();
+          if (roomHit?.kind === 'slope') {
+            propsRef.current.onSelectPart(null, false);
+            propsRef.current.onSelectFastener(null);
+            propsRef.current.onSelectRoomWall?.(null);
+            propsRef.current.onSelectRoomSlope?.(roomHit.wallIndex, roomHit.isLegacy);
+            return;
+          }
+          if (roomHit?.kind === 'wall') {
+            propsRef.current.onSelectPart(null, false);
+            propsRef.current.onSelectFastener(null);
+            propsRef.current.onSelectRoomSlope?.(null, false);
+            propsRef.current.onSelectRoomWall?.(roomHit.wallIndex);
+            return;
+          }
+          propsRef.current.onSelectRoomWall?.(null);
+          propsRef.current.onSelectRoomSlope?.(null, false);
+          return;
+        }
+
         const targets = collectRaycastTargets();
         const hits = raycaster.intersectObjects(targets, true);
 
         if (hits.length === 0) {
           if (propsRef.current.tool !== 'screw') {
+            const hadFurnitureSelection = Boolean(
+              propsRef.current.selectedPartId || propsRef.current.selectedFastenerId
+            );
             propsRef.current.onSelectPart(null, false);
             propsRef.current.onSelectFastener(null);
+            if (!hadFurnitureSelection) {
+              const roomHit = raycastRoomElement();
+              if (roomHit?.kind === 'slope') {
+                propsRef.current.onSelectRoomWall?.(null);
+                propsRef.current.onSelectRoomSlope?.(roomHit.wallIndex, roomHit.isLegacy);
+                return;
+              }
+              if (roomHit?.kind === 'wall') {
+                propsRef.current.onSelectRoomSlope?.(null, false);
+                propsRef.current.onSelectRoomWall?.(roomHit.wallIndex);
+                return;
+              }
+            }
+            propsRef.current.onSelectRoomWall?.(null);
+            propsRef.current.onSelectRoomSlope?.(null, false);
           }
           return;
         }
@@ -2436,6 +2530,45 @@ export const Viewport3D = forwardRef<Viewport3DHandle, Viewport3DProps>(
               dir.normalize();
               startCameraTransition(center.clone().addScaledVector(dir, dist), center);
               return;
+            }
+          }
+        }
+        // Double-clicking a room wall or roof slope directly opens 3D wall/slope editing
+        if (propsRef.current.room?.enabled) {
+          const roomTargets: THREE.Object3D[] = [];
+          roomRoot.traverse((obj) => {
+            if (
+              obj instanceof THREE.Mesh &&
+              (obj.userData.raycastKind === 'room_wall' ||
+                obj.userData.raycastKind === 'room_slope')
+            ) {
+              roomTargets.push(obj);
+            }
+          });
+          if (roomTargets.length > 0) {
+            const rHits = raycaster.intersectObjects(roomTargets, false);
+            if (rHits.length > 0) {
+              const hitObj = rHits[0].object;
+              if (hitObj.userData.raycastKind === 'room_slope') {
+                propsRef.current.onSelectPart(null, false);
+                propsRef.current.onSelectRoomWall?.(null);
+                propsRef.current.onSelectRoomSlope?.(
+                  typeof hitObj.userData.slopeWallIndex === 'number'
+                    ? hitObj.userData.slopeWallIndex
+                    : null,
+                  Boolean(hitObj.userData.isLegacySlope)
+                );
+                return;
+              }
+              if (
+                hitObj.userData.raycastKind === 'room_wall' &&
+                typeof hitObj.userData.wallIndex === 'number'
+              ) {
+                propsRef.current.onSelectPart(null, false);
+                propsRef.current.onSelectRoomSlope?.(null, false);
+                propsRef.current.onSelectRoomWall?.(hitObj.userData.wallIndex);
+                return;
+              }
             }
           }
         }
@@ -2551,27 +2684,97 @@ export const Viewport3D = forwardRef<Viewport3DHandle, Viewport3DProps>(
       };
     }, []);
 
-    // Sync lighting preset (including Studio HQ RectAreaLight softboxes & PMREM intensity)
+    // Sync lighting preset + scene backdrop theme + Presentation Mode (Studio Render)
     useEffect(() => {
       const rt = runtimeRef.current;
       if (!rt) return;
       const cfg = LIGHTING_CONFIGS[props.lighting];
-      rt.scene.background = new THREE.Color(cfg.bg);
-      rt.scene.fog = new THREE.Fog(cfg.bg, 7.5, 22);
-      rt.scene.environmentIntensity = cfg.envIntensity;
+      const theme: SceneBackdropTheme = props.sceneTheme ?? 'studio_light';
+      const isPres = Boolean(props.presentationMode);
+
+      let bgColor = cfg.bg;
+      let envBoost = 1;
+      let keyBoost = 1;
+      let rimBoost = 1;
+      let exposureBoost = 0;
+
+      if (theme === 'workshop_dark') {
+        bgColor = isPres ? '#12151C' : '#161A22';
+        envBoost = 0.88;
+        keyBoost = 1.18;
+        rimBoost = 1.45;
+        exposureBoost = 0.04;
+      } else if (theme === 'blueprint_sketch') {
+        bgColor = '#F4F7FB';
+        envBoost = 1.04;
+        keyBoost = 0.96;
+        rimBoost = 0.9;
+      } else if (isPres) {
+        bgColor = '#F1F3F6';
+        envBoost = 1.12;
+        keyBoost = 1.08;
+        exposureBoost = 0.03;
+      }
+
+      rt.scene.background = new THREE.Color(bgColor);
+      rt.scene.fog = new THREE.Fog(bgColor, isPres ? 9.5 : 7.5, isPres ? 28 : 22);
+      rt.scene.environmentIntensity = cfg.envIntensity * envBoost;
       rt.keyLight.color.set(cfg.keyColor);
-      rt.keyLight.intensity = cfg.keyIntensity;
-      rt.hemiLight.color.set(cfg.hemiSky);
-      rt.hemiLight.groundColor.set(cfg.hemiGround);
-      rt.hemiLight.intensity = cfg.hemiIntensity;
-      rt.rimLight.color.set(cfg.rimColor);
-      rt.rimLight.intensity = cfg.rimIntensity;
-      rt.renderer.toneMappingExposure = cfg.exposure;
+      rt.keyLight.intensity = cfg.keyIntensity * keyBoost;
+      rt.hemiLight.color.set(theme === 'workshop_dark' ? '#CBD5E1' : cfg.hemiSky);
+      rt.hemiLight.groundColor.set(theme === 'workshop_dark' ? '#1E2430' : cfg.hemiGround);
+      rt.hemiLight.intensity = cfg.hemiIntensity * (theme === 'workshop_dark' ? 0.72 : 1);
+      rt.rimLight.color.set(theme === 'workshop_dark' ? '#E2E8F0' : cfg.rimColor);
+      rt.rimLight.intensity = cfg.rimIntensity * rimBoost;
+      rt.renderer.toneMappingExposure = cfg.exposure + exposureBoost;
       rt.softboxLights.forEach((sb, idx) => {
-        sb.intensity = idx === 0 ? cfg.softboxIntensity : cfg.softboxIntensity * 0.65;
+        const base = idx === 0 ? cfg.softboxIntensity : cfg.softboxIntensity * 0.65;
+        sb.intensity = base * (isPres ? 1.25 : 1);
       });
+
+      // Repaint metric floor grid to match theme & hide completely in Presentation Mode
+      rt.gridHelper.visible = !isPres;
+      const gridColorAttr = rt.gridHelper.geometry.getAttribute('color');
+      if (gridColorAttr) {
+        const majorCol = new THREE.Color(
+          theme === 'workshop_dark'
+            ? '#333C4D'
+            : theme === 'blueprint_sketch'
+              ? '#93C5FD'
+              : '#B5BCC6'
+        );
+        const minorCol = new THREE.Color(
+          theme === 'workshop_dark'
+            ? '#232936'
+            : theme === 'blueprint_sketch'
+              ? '#DBEAFE'
+              : '#D5DAE1'
+        );
+        // Three.js GridHelper writes center lines first (4 vertices per axis = 8 verts), then minor grid lines
+        for (let i = 0; i < gridColorAttr.count; i++) {
+          const c = i < 8 || i % 20 < 2 ? majorCol : minorCol;
+          gridColorAttr.setXYZ(i, c.r, c.g, c.b);
+        }
+        gridColorAttr.needsUpdate = true;
+      }
+
+      // Grounding contact shadow feels richer in presentation studio mode
+      rt.contactShadowMat.opacity = isPres ? 0.9 : theme === 'workshop_dark' ? 0.55 : 0.75;
+
+      // Hide CAD overlays cleanly in Presentation Mode
+      rt.guidesRoot.visible = !isPres;
+      rt.jointZonesRoot.visible = !isPres;
+      rt.resizeHandlesRoot.visible = !isPres;
+      rt.measureRoot.visible = !isPres;
+      rt.measureLiveRoot.visible = !isPres;
+
+      // Turntable auto-orbit in Presentation Mode (skipped on software WebGL for smoothness)
+      const shouldAutoOrbit = Boolean(isPres && props.autoOrbit && !rt.isSoftwareGl);
+      rt.orbit.autoRotate = shouldAutoOrbit;
+      rt.orbit.autoRotateSpeed = 1.15;
+
       rt.requestRender();
-    }, [props.lighting]);
+    }, [props.lighting, props.sceneTheme, props.presentationMode, props.autoOrbit]);
 
     // Sync saved 3D Tape Measure segments
     useEffect(() => {
@@ -2615,9 +2818,20 @@ export const Viewport3D = forwardRef<Viewport3DHandle, Viewport3DProps>(
         return;
       }
 
-      buildArchitecturalRoom3D(rt.roomRoot, room);
+      buildArchitecturalRoom3D(rt.roomRoot, room, {
+        selectedWallIndex: props.selectedRoomWallIndex,
+        selectedSlopeWallIndex: props.selectedRoomSlopeWallIndex,
+        selectedLegacySlope: props.selectedLegacySlope,
+        roomEditMode: props.roomEditMode,
+      });
       rt.requestRender();
-    }, [props.room]);
+    }, [
+      props.room,
+      props.selectedRoomWallIndex,
+      props.selectedRoomSlopeWallIndex,
+      props.selectedLegacySlope,
+      props.roomEditMode,
+    ]);
 
     // Rebuild 3D parts & fasteners whenever scene model or custom textures change
     useEffect(() => {
@@ -2864,6 +3078,19 @@ export const Viewport3D = forwardRef<Viewport3DHandle, Viewport3DProps>(
               }
             });
             group.add(machiningGroup);
+          }
+
+          // Perforated galvanized steel carpentry connector details (Ø5/Ø11 mm nail holes + stamped 45° stiffening rib)
+          const connectorDetail = buildCarpentryConnectorDetailGroup(part);
+          if (connectorDetail) {
+            connectorDetail.traverse((c) => {
+              if (c instanceof THREE.Mesh || c instanceof THREE.InstancedMesh) {
+                c.userData.disposeMaterial = true;
+                c.userData.partId = part.id;
+                c.userData.raycastKind = 'part_mesh';
+              }
+            });
+            group.add(connectorDetail);
           }
         }
 
@@ -3246,6 +3473,7 @@ export const Viewport3D = forwardRef<Viewport3DHandle, Viewport3DProps>(
       // so rotating or moving transforms the ENTIRE cabinet/group as one rigid body!
       rt.activeGizmoMemberIds.clear();
       if (
+        !props.presentationMode &&
         props.selectedPartId &&
         (props.tool === 'move' || props.tool === 'rotate') &&
         props.explodedAmount < 0.01
@@ -3340,6 +3568,7 @@ export const Viewport3D = forwardRef<Viewport3DHandle, Viewport3DProps>(
       props.clearances,
       props.jointZones,
       props.isParametricCabinetSelected,
+      props.presentationMode,
     ]);
 
     return (

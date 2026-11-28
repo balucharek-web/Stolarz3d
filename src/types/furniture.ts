@@ -90,6 +90,8 @@ export type CameraPreset = 'iso' | 'front' | 'back' | 'left' | 'right' | 'side' 
 
 export type StudioLighting = 'daylight' | 'studio' | 'warm' | 'photoreal';
 
+export type SceneBackdropTheme = 'studio_light' | 'workshop_dark' | 'blueprint_sketch';
+
 export type MaterialCategory =
   | 'Płyty konstrukcyjne'
   | 'Płyty meblowe'
@@ -236,6 +238,10 @@ export interface FurniturePart {
   slopeBottomLeft?: number;
   /** Bottom-right corner vertical lift in mm (for sloped panels) */
   slopeBottomRight?: number;
+  /** Angled saw miter cut at start end of timber/steel profile (-45..45 deg) */
+  beamCutStartDeg?: number;
+  /** Angled saw miter cut at far end of timber/steel profile (-45..45 deg) */
+  beamCutEndDeg?: number;
   /** Handle placement for cabinet doors/drawers */
   handleSide?: HandleSide;
   /** Front opening style: classic bar handle, handleless Tip-On, Gola J-profile, or 45° chamfer pull */
@@ -468,6 +474,15 @@ export interface RoomSlopedCeiling {
   slopeWidthMm: number;
 }
 
+export interface RoomWallSlope {
+  /** Polygon wall segment index where the knee wall sits */
+  wallIndex: number;
+  /** Knee wall height along this wall (mm), e.g. 1200 mm */
+  kneeWallHeightMm: number;
+  /** Horizontal run of the roof slope inward from this wall (mm), e.g. 1600 mm */
+  slopeDepthMm: number;
+}
+
 export interface RoomConfig {
   enabled: boolean;
   /** Total room / alcove width (X, centered around 0, mm) — synced with polygon bounds */
@@ -483,6 +498,8 @@ export interface RoomConfig {
   showRightWall: boolean;
   showCeiling: boolean;
   slopedCeiling: RoomSlopedCeiling;
+  /** Per-wall roof slopes attached to any polygon wall segment(s) */
+  wallSlopes?: RoomWallSlope[];
   /** Legacy rectangular wall obstacles (kept for backward compatibility) */
   obstacles: RoomObstacle[];
   /** Custom 2D architectural floorplan polygon vertices in world (xMm, zMm) */

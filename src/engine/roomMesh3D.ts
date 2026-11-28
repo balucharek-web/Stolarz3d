@@ -8,14 +8,28 @@ import type {
 import {
   FLOOR_FINISH_CATALOG,
   WALL_FINISH_CATALOG,
-  computeRoomBoundsXZ,
+  computeFlatCeilingPolygon2D,
+  computeMiteredWallOuterCorners,
+  computeSlopeSurfacePolygons2D,
   computeWallSegments,
+  getEffectiveRoomWallSlopes,
+  getRoomCeilingHeightAtXZ,
   getRoomPolygonPoints,
   getRoomStyle,
+  getWallTopProfileMm,
+  type Point2DMm,
+  type ResolvedRoomSlope,
   type WallSegment,
 } from './roomGeometry';
 import { getRoomObstacleWorldBox } from './carpentry';
 import { buildSanitaryToilet3D, isSanitaryToiletType } from './sanitary3D';
+
+export interface ArchitecturalRoom3DOptions {
+  selectedWallIndex?: number | null;
+  selectedSlopeWallIndex?: number | null;
+  selectedLegacySlope?: boolean;
+  roomEditMode?: boolean;
+}
 
 const MM_TO_M = 0.001;
 
@@ -154,12 +168,13 @@ function adjustHex(hex: string, delta: number): string {
 
 /**
  * Populates `roomRoot` with the complete 3D architectural room:
- * textured polygon floor, extruded walls with real cut-out doors/windows,
- * casings, glazing, sills, baseboards, wall obstacles, optional ceiling, and attic slope.
+ * textured polygon floor, mitered roof-clipped walls with real cut-out doors/windows,
+ * casings, glazing, sills, baseboards, wall obstacles, polygon-clipped ceiling & roof slopes.
  */
 export function buildArchitecturalRoom3D(
   roomRoot: THREE.Group,
-  room: RoomConfig
+  room: RoomConfig,
+  options?: ArchitecturalRoom3DOptions
 ): void {
   const pts = getRoomPolygonPoints(room);
   const segments = computeWallSegments(pts);
@@ -169,7 +184,8 @@ export function buildArchitecturalRoom3D(
   const wallMeta = WALL_FINISH_CATALOG[style.wallFinish];
   const floorMeta = FLOOR_FINISH_CATALOG[style.floorFinish];
   const hM = room.heightMm * MM_TO_M;
-  const wallThickM = Math.max(0.05, Math.min(0.4, (room.wallThicknessMm ?? 120) * MM_TO_M));
+  const wallThickMm = Math.max(50, Math.min(400, room.wallThicknessMm ?? 120));
+  const wallThickM = wallThickMm * MM_TO_M;
   const hiddenSet = new Set<number>(room.hiddenWallIndices ?? []);
 
   // Legacy rectangular wall toggle compatibility when polygon is untouched 4-wall rect
@@ -180,6 +196,9 @@ export function buildArchitecturalRoom3D(
     hiddenSet.add(2); // legacy alcove had open front
     if (!room.showLeftWall) hiddenSet.add(3);
   }
+
+  const slopes = getEffectiveRoomWallSlopes(room, segments);
+  const miterOuterCorners = computeMiteredWallOuterCorners(segments, wallThickMm);
 
   // 1. ARCHITECTURAL POLYGON FLOOR
   const floorShape = new THREE.Shape();
@@ -209,120 +228,116 @@ export function buildArchitecturalRoom3D(
   outlinePts.push(outlinePts[0].clone());
   const outlineGeo = new THREE.BufferGeometry().setFromPoints(outlinePts);
   const outlineMat = new THREE.LineBasicMaterial({
-    color: style.wallCutawayMode === 'translucent' ? '#0EA5E9' : '#64748B',
+    color: options?.roomEditMode
+      ? '#F59E0B'
+      : style.wallCutawayMode === 'translucent'
+        ? '#0EA5E9'
+        : '#64748B',
     transparent: true,
-    opacity: style.wallCutawayMode === 'translucent' ? 0.85 : 0.45,
+    opacity: options?.roomEditMode ? 0.9 : style.wallCutawayMode === 'translucent' ? 0.85 : 0.45,
   });
   const outlineLine = new THREE.Line(outlineGeo, outlineMat);
   outlineLine.userData.disposeMaterial = true;
   roomRoot.add(outlineLine);
 
-  // 2. POLYGON WALLS WITH CUTOUT OPENINGS, FRAMES, BASEBOARDS & WALL OBSTACLES
+  // 2. POLYGON WALLS (MITERED CORNERS + CLIPPED UNDER ROOF SLOPES + OPENINGS + OBSTACLES)
   const openings = room.openings ?? [];
   const wallObstacles = room.wallObstacles ?? [];
+  const nSegs = segments.length;
 
   for (const seg of segments) {
-    if (hiddenSet.has(seg.index)) continue;
-    const wallOpenings = openings.filter((o) => o.wallIndex === seg.index);
-    const segObstacles = wallObstacles.filter((o) => o.wallIndex === seg.index);
+    const isSelectedWall = options?.selectedWallIndex === seg.index;
+    const isHidden = hiddenSet.has(seg.index);
+    // If hidden in normal mode, skip; if in roomEditMode, show faint clickable ghost curb so user can unhide it in 3D!
+    if (isHidden && !options?.roomEditMode) continue;
+
+    const wallOpenings = isHidden ? [] : openings.filter((o) => o.wallIndex === seg.index);
+    const segObstacles = isHidden ? [] : wallObstacles.filter((o) => o.wallIndex === seg.index);
+    const outerStart = miterOuterCorners[seg.index] ?? {
+      xMm: seg.start.xMm + seg.outNx * wallThickMm,
+      zMm: seg.start.zMm + seg.outNz * wallThickMm,
+    };
+    const outerEnd = miterOuterCorners[(seg.index + 1) % nSegs] ?? {
+      xMm: seg.end.xMm + seg.outNx * wallThickMm,
+      zMm: seg.end.zMm + seg.outNz * wallThickMm,
+    };
+
     buildWallSegment3D(
       roomRoot,
+      room,
       seg,
-      hM,
+      slopes,
+      outerStart,
+      outerEnd,
       wallThickM,
       wallMeta.color,
       wallMeta.roughness,
-      style.wallCutawayMode,
-      style.showBaseboards,
+      isHidden ? 'translucent' : style.wallCutawayMode,
+      style.showBaseboards && !isHidden,
       style.baseboardHeightMm * MM_TO_M,
       wallOpenings,
-      segObstacles
+      segObstacles,
+      isSelectedWall,
+      isHidden,
+      Boolean(options?.roomEditMode)
     );
   }
 
-  // 3. OPTIONAL FLAT CEILING (polygon matched)
-  if (room.showCeiling && !room.slopedCeiling?.enabled) {
-    const ceilGeo = new THREE.ShapeGeometry(floorShape);
-    const ceilMat = new THREE.MeshStandardMaterial({
-      color: '#F8FAFC',
-      roughness: 0.94,
-      metalness: 0,
-      transparent: style.wallCutawayMode !== 'solid',
-      opacity: style.wallCutawayMode === 'solid' ? 1 : 0.18,
-      side: THREE.FrontSide, // Looking down from above you see THROUGH ceiling into the room!
-      depthWrite: style.wallCutawayMode === 'solid',
-    });
-    const ceilMesh = new THREE.Mesh(ceilGeo, ceilMat);
-    ceilMesh.rotation.x = Math.PI / 2;
-    ceilMesh.position.y = hM;
-    ceilMesh.userData.disposeMaterial = true;
-    roomRoot.add(ceilMesh);
+  // 3. POLYGON-CLIPPED FLAT CEILING PLATEAU (trimmed around all active roof slopes!)
+  if (room.showCeiling) {
+    const flatPoly =
+      slopes.length > 0
+        ? computeFlatCeilingPolygon2D(room, slopes)
+        : pts.map((v) => ({ xMm: v.xMm, zMm: v.zMm }));
+    if (flatPoly.length >= 3) {
+      const flatShape = new THREE.Shape();
+      flatPoly.forEach((v, idx) => {
+        const x = v.xMm * MM_TO_M;
+        const y = -v.zMm * MM_TO_M;
+        if (idx === 0) flatShape.moveTo(x, y);
+        else flatShape.lineTo(x, y);
+      });
+      flatShape.closePath();
+
+      const ceilGeo = new THREE.ShapeGeometry(flatShape);
+      const ceilMat = new THREE.MeshStandardMaterial({
+        color: '#F8FAFC',
+        roughness: 0.94,
+        metalness: 0,
+        transparent: style.wallCutawayMode !== 'solid',
+        opacity: style.wallCutawayMode === 'solid' ? 1 : 0.22,
+        side: THREE.FrontSide, // Looking down from above you see THROUGH ceiling into the room!
+        depthWrite: style.wallCutawayMode === 'solid',
+      });
+      const ceilMesh = new THREE.Mesh(ceilGeo, ceilMat);
+      ceilMesh.rotation.x = Math.PI / 2;
+      ceilMesh.position.y = hM;
+      ceilMesh.userData.disposeMaterial = true;
+      roomRoot.add(ceilMesh);
+    }
   }
 
-  // 4. OPTIONAL SLOPED ATTIC CEILING (bounded to polygon XZ extents)
-  if (room.slopedCeiling?.enabled) {
-    const bounds = computeRoomBoundsXZ(pts);
-    const minX = bounds.minX * MM_TO_M;
-    const maxX = bounds.maxX * MM_TO_M;
-    const wM = bounds.widthMm * MM_TO_M;
-    const dM = bounds.depthMm * MM_TO_M;
-    const centerZ = bounds.centerZ * MM_TO_M;
+  // 4. TRUE POLYGON-CLIPPED SLOPED ATTIC ROOF PLANES (zero wall bleed-through on L/U/custom rooms!)
+  if (slopes.length > 0) {
+    const slopeSurfaces = computeSlopeSurfacePolygons2D(room, slopes);
+    for (const { slope, polygon } of slopeSurfaces) {
+      const isSelectedSlope = slope.isLegacy
+        ? Boolean(options?.selectedLegacySlope) ||
+          (slope.wallIndex !== null && options?.selectedSlopeWallIndex === slope.wallIndex)
+        : options?.selectedSlopeWallIndex === slope.wallIndex;
 
-    const kneeH = Math.min(room.heightMm, Math.max(150, room.slopedCeiling.kneeWallHeightMm)) * MM_TO_M;
-    const slopeW = Math.min(bounds.widthMm, Math.max(200, room.slopedCeiling.slopeWidthMm)) * MM_TO_M;
-    const rise = Math.max(0.05, hM - kneeH);
-    const slopeLen = Math.hypot(slopeW, rise);
-    const angle = Math.atan2(rise, slopeW);
-
-    const slopeGeo = new THREE.BoxGeometry(slopeLen, 0.035, dM);
-    const slopeMat = new THREE.MeshStandardMaterial({
-      color: '#F59E0B',
-      roughness: 0.78,
-      transparent: true,
-      opacity: 0.24,
-      depthWrite: false,
-    });
-    const slopeMesh = new THREE.Mesh(slopeGeo, slopeMat);
-    const isRight = room.slopedCeiling.side === 'right';
-    slopeMesh.position.set(
-      isRight ? maxX - slopeW / 2 : minX + slopeW / 2,
-      kneeH + rise / 2,
-      centerZ
-    );
-    slopeMesh.rotation.z = isRight ? -angle : angle;
-    slopeMesh.userData.disposeMaterial = true;
-    roomRoot.add(slopeMesh);
-
-    const slopeEdgesGeo = new THREE.EdgesGeometry(slopeGeo);
-    const slopeEdgesMat = new THREE.LineBasicMaterial({ color: '#D97706' });
-    const slopeEdges = new THREE.LineSegments(slopeEdgesGeo, slopeEdgesMat);
-    slopeEdges.position.copy(slopeMesh.position);
-    slopeEdges.rotation.copy(slopeMesh.rotation);
-    slopeEdges.userData.disposeMaterial = true;
-    roomRoot.add(slopeEdges);
-
-    if (room.showCeiling) {
-      const flatW = Math.max(0.05, wM - slopeW);
-      if (flatW > 0.08) {
-        const flatGeo = new THREE.PlaneGeometry(flatW, dM);
-        const flatMat = new THREE.MeshStandardMaterial({
-          color: '#E2E8F0',
-          roughness: 0.9,
-          transparent: true,
-          opacity: 0.22,
-          side: THREE.DoubleSide,
-          depthWrite: false,
-        });
-        const flatMesh = new THREE.Mesh(flatGeo, flatMat);
-        flatMesh.rotation.x = Math.PI / 2;
-        flatMesh.position.set(
-          isRight ? minX + flatW / 2 : maxX - flatW / 2,
-          hM,
-          centerZ
-        );
-        flatMesh.userData.disposeMaterial = true;
-        roomRoot.add(flatMesh);
-      }
+      buildClippedSlopeSlab3D(
+        roomRoot,
+        room,
+        slope,
+        slopes,
+        polygon,
+        wallMeta.color,
+        wallMeta.roughness,
+        style.wallCutawayMode,
+        isSelectedSlope,
+        Boolean(options?.roomEditMode)
+      );
     }
   }
 
@@ -374,10 +389,311 @@ export function buildArchitecturalRoom3D(
   }
 }
 
+/**
+ * Helper to append a triangle (v0, v1, v2) into a raw position float array.
+ */
+function pushTri(
+  out: number[],
+  a: [number, number, number],
+  b: [number, number, number],
+  c: [number, number, number]
+): void {
+  out.push(a[0], a[1], a[2], b[0], b[1], b[2], c[0], c[1], c[2]);
+}
+
+function pushQuad(
+  out: number[],
+  a: [number, number, number],
+  b: [number, number, number],
+  c: [number, number, number],
+  d: [number, number, number]
+): void {
+  pushTri(out, a, b, c);
+  pushTri(out, a, c, d);
+}
+
+/**
+ * Builds a true polygon-clipped 3D attic roof slope slab that conforms strictly
+ * to ANY L-shape, U-shape, chamfered, or arbitrary room polygon with zero overhang.
+ */
+function buildClippedSlopeSlab3D(
+  roomRoot: THREE.Group,
+  room: RoomConfig,
+  slope: ResolvedRoomSlope,
+  allSlopes: ResolvedRoomSlope[],
+  polygon: Point2DMm[],
+  wallColor: string,
+  wallRoughness: number,
+  cutawayMode: 'smart_cutaway' | 'solid' | 'translucent',
+  isSelected: boolean,
+  roomEditMode: boolean
+): void {
+  if (polygon.length < 3) return;
+
+  const contour2D = polygon.map((p) => new THREE.Vector2(p.xMm * MM_TO_M, p.zMm * MM_TO_M));
+  const tris = THREE.ShapeUtils.triangulateShape(contour2D, []);
+  if (tris.length === 0) return;
+
+  // Compute exact 3D bottom points on the roof underside plane
+  const rise = Math.max(10, slope.ceilingHeightMm - slope.kneeWallHeightMm);
+  const run = Math.max(100, slope.slopeDepthMm);
+  const upNormal = new THREE.Vector3(-slope.inNx * rise, run, -slope.inNz * rise).normalize();
+  const slabThickM = 0.042;
+
+  const botPts: Array<[number, number, number]> = polygon.map((p) => [
+    p.xMm * MM_TO_M,
+    getRoomCeilingHeightAtXZ(p.xMm, p.zMm, room, allSlopes) * MM_TO_M,
+    p.zMm * MM_TO_M,
+  ]);
+  const topPts: Array<[number, number, number]> = botPts.map((p) => [
+    p[0] + upNormal.x * slabThickM,
+    p[1] + upNormal.y * slabThickM,
+    p[2] + upNormal.z * slabThickM,
+  ]);
+
+  const underPos: number[] = [];
+  const fullPos: number[] = [];
+
+  for (const [i0, i1, i2] of tris) {
+    const a = botPts[i0];
+    const b = botPts[i1];
+    const c = botPts[i2];
+    // Verify triangle normal Y sign so underside points DOWN (y < 0) into the room interior
+    const abx = b[0] - a[0];
+    const aby = b[1] - a[1];
+    const abz = b[2] - a[2];
+    const acx = c[0] - a[0];
+    const acy = c[1] - a[1];
+    const acz = c[2] - a[2];
+    const ny = abz * acx - abx * acz;
+
+    if (ny < 0) {
+      pushTri(underPos, a, b, c);
+      pushTri(fullPos, a, b, c);
+      pushTri(fullPos, topPts[i0], topPts[i2], topPts[i1]);
+    } else {
+      pushTri(underPos, a, c, b);
+      pushTri(fullPos, a, c, b);
+      pushTri(fullPos, topPts[i0], topPts[i1], topPts[i2]);
+    }
+  }
+
+  // Add perimeter rim quads to the thick slab
+  const n = polygon.length;
+  for (let i = 0; i < n; i++) {
+    const j = (i + 1) % n;
+    pushQuad(fullPos, botPts[i], botPts[j], topPts[j], topPts[i]);
+  }
+
+  const isTranslucent = cutawayMode === 'translucent';
+  const isSmartCutaway = cutawayMode === 'smart_cutaway';
+
+  // In smart_cutaway mode (when not highlighted), use underside FrontSide so looking down from above
+  // lets you see cleanly into the room, while looking from inside shows a solid realistic roof slope!
+  const useCutawayPlane = isSmartCutaway && !isSelected && !roomEditMode;
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute(
+    'position',
+    new THREE.Float32BufferAttribute(useCutawayPlane ? underPos : fullPos, 3)
+  );
+  geo.computeVertexNormals();
+
+  const mat = new THREE.MeshStandardMaterial({
+    color: isSelected
+      ? '#F59E0B'
+      : isTranslucent
+        ? '#F59E0B'
+        : wallColor,
+    emissive: isSelected ? '#B45309' : '#000000',
+    emissiveIntensity: isSelected ? 0.35 : 0,
+    roughness: isTranslucent || isSelected ? 0.72 : Math.min(0.95, wallRoughness + 0.04),
+    metalness: 0.02,
+    transparent: isTranslucent || (isSmartCutaway && roomEditMode) || isSelected,
+    opacity: isSelected
+      ? 0.48
+      : isTranslucent
+        ? 0.28
+        : isSmartCutaway && roomEditMode
+          ? 0.34
+          : 1,
+    side: useCutawayPlane ? THREE.FrontSide : THREE.DoubleSide,
+    depthWrite: !isTranslucent && !isSelected && !(isSmartCutaway && roomEditMode),
+  });
+
+  const mesh = new THREE.Mesh(geo, mat);
+  mesh.receiveShadow = !isTranslucent;
+  mesh.userData.disposeMaterial = true;
+  mesh.userData.raycastKind = 'room_slope';
+  mesh.userData.slopeWallIndex = slope.wallIndex;
+  mesh.userData.slopeId = slope.id;
+  mesh.userData.isLegacySlope = slope.isLegacy;
+  roomRoot.add(mesh);
+
+  // Crisp perimeter outline along the exact clipped roof boundary (eave, gable rakes & ridge)
+  const loopPts = botPts.map((p) => new THREE.Vector3(p[0], p[1] - 0.002, p[2]));
+  loopPts.push(loopPts[0].clone());
+  const loopGeo = new THREE.BufferGeometry().setFromPoints(loopPts);
+  const loopMat = new THREE.LineBasicMaterial({
+    color: isSelected ? '#FBBF24' : isTranslucent ? '#D97706' : '#64748B',
+    transparent: true,
+    opacity: isSelected ? 1 : isTranslucent ? 0.92 : 0.52,
+  });
+  const loopLine = new THREE.Line(loopGeo, loopMat);
+  loopLine.userData.disposeMaterial = true;
+  roomRoot.add(loopLine);
+}
+
+/**
+ * Evaluates wall local top height (m) at horizontal coordinate `uM` from `profileM`.
+ */
+function sampleWallProfileHeightM(
+  profileM: Array<{ uM: number; yM: number }>,
+  uM: number
+): number {
+  if (profileM.length === 0) return 2.6;
+  if (uM <= profileM[0].uM) return profileM[0].yM;
+  for (let i = 0; i < profileM.length - 1; i++) {
+    const a = profileM[i];
+    const b = profileM[i + 1];
+    if (uM <= b.uM) {
+      const span = Math.max(1e-6, b.uM - a.uM);
+      const t = (uM - a.uM) / span;
+      return a.yM + t * (b.yM - a.yM);
+    }
+  }
+  return profileM[profileM.length - 1].yM;
+}
+
+/**
+ * Builds a single clean watertight mitered 3D wall geometry (inner face + mitered outer face
+ * + sloped/flat top cap + bottom + miter end caps + opening reveal jambs) with ZERO corner overlaps!
+ */
+function buildMiteredWallGeometry(
+  innerShape: THREE.Shape,
+  outerShape: THREE.Shape,
+  innerProfileM: Array<{ uM: number; yM: number }>,
+  outerProfileM: Array<{ uM: number; yM: number }>,
+  validOpenings: Array<{ u0: number; u1: number; y0: number; y1: number }>,
+  wallThickM: number
+): THREE.BufferGeometry {
+  const pos: number[] = [];
+
+  const appendShapeFace = (shape: THREE.Shape, z: number, flipWinding: boolean) => {
+    const g = new THREE.ShapeGeometry(shape);
+    const nonIdx = g.index ? g.toNonIndexed() : g;
+    const pAttr = nonIdx.getAttribute('position');
+    for (let i = 0; i < pAttr.count; i += 3) {
+      const a: [number, number, number] = [pAttr.getX(i), pAttr.getY(i), z];
+      const b: [number, number, number] = [pAttr.getX(i + 1), pAttr.getY(i + 1), z];
+      const c: [number, number, number] = [pAttr.getX(i + 2), pAttr.getY(i + 2), z];
+      if (flipWinding) pushTri(pos, a, c, b);
+      else pushTri(pos, a, b, c);
+    }
+    if (nonIdx !== g) nonIdx.dispose();
+    g.dispose();
+  };
+
+  // 1. Inner face (+Z) and Mitered Outer face (-Z)
+  appendShapeFace(innerShape, 0, false);
+  appendShapeFace(outerShape, -wallThickM, true);
+
+  // 2. Top cap strip following exact roof-clipped profile
+  const kMax = Math.min(innerProfileM.length, outerProfileM.length);
+  for (let i = 0; i < kMax - 1; i++) {
+    const iA = innerProfileM[i];
+    const iB = innerProfileM[i + 1];
+    const oA = outerProfileM[i];
+    const oB = outerProfileM[i + 1];
+    pushQuad(
+      pos,
+      [iA.uM, iA.yM, 0],
+      [iB.uM, iB.yM, 0],
+      [oB.uM, oB.yM, -wallThickM],
+      [oA.uM, oA.yM, -wallThickM]
+    );
+  }
+
+  // 3. Bottom floor contact quad
+  const iStart = innerProfileM[0];
+  const iEnd = innerProfileM[innerProfileM.length - 1];
+  const oStart = outerProfileM[0];
+  const oEnd = outerProfileM[outerProfileM.length - 1];
+  pushQuad(
+    pos,
+    [iStart.uM, 0, 0],
+    [oStart.uM, 0, -wallThickM],
+    [oEnd.uM, 0, -wallThickM],
+    [iEnd.uM, 0, 0]
+  );
+
+  // 4. Start & End miter end-caps (watertight when a neighbor wall is hidden)
+  pushQuad(
+    pos,
+    [oStart.uM, 0, -wallThickM],
+    [iStart.uM, 0, 0],
+    [iStart.uM, iStart.yM, 0],
+    [oStart.uM, oStart.yM, -wallThickM]
+  );
+  pushQuad(
+    pos,
+    [iEnd.uM, 0, 0],
+    [oEnd.uM, 0, -wallThickM],
+    [oEnd.uM, oEnd.yM, -wallThickM],
+    [iEnd.uM, iEnd.yM, 0]
+  );
+
+  // 5. Window & door opening reveal jambs (inner wall thickness lining)
+  for (const op of validOpenings) {
+    const holeY0 = op.y0 <= 0.002 ? 0.004 : op.y0;
+    // Left jamb
+    pushQuad(
+      pos,
+      [op.u0, holeY0, 0],
+      [op.u0, op.y1, 0],
+      [op.u0, op.y1, -wallThickM],
+      [op.u0, holeY0, -wallThickM]
+    );
+    // Right jamb
+    pushQuad(
+      pos,
+      [op.u1, holeY0, -wallThickM],
+      [op.u1, op.y1, -wallThickM],
+      [op.u1, op.y1, 0],
+      [op.u1, holeY0, 0]
+    );
+    // Top lintel soffit
+    pushQuad(
+      pos,
+      [op.u0, op.y1, 0],
+      [op.u1, op.y1, 0],
+      [op.u1, op.y1, -wallThickM],
+      [op.u0, op.y1, -wallThickM]
+    );
+    // Bottom sill reveal
+    if (op.y0 > 0.002) {
+      pushQuad(
+        pos,
+        [op.u0, holeY0, -wallThickM],
+        [op.u1, holeY0, -wallThickM],
+        [op.u1, holeY0, 0],
+        [op.u0, holeY0, 0]
+      );
+    }
+  }
+
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  geo.computeVertexNormals();
+  return geo;
+}
+
 function buildWallSegment3D(
   roomRoot: THREE.Group,
+  room: RoomConfig,
   seg: WallSegment,
-  hM: number,
+  slopes: ResolvedRoomSlope[],
+  outerStartMm: Point2DMm,
+  outerEndMm: Point2DMm,
   wallThickM: number,
   wallColor: string,
   wallRoughness: number,
@@ -385,7 +701,10 @@ function buildWallSegment3D(
   showBaseboards: boolean,
   baseboardHM: number,
   openings: RoomOpening[],
-  obstacles: RoomWallObstacle[]
+  obstacles: RoomWallObstacle[],
+  isSelectedWall: boolean,
+  isHiddenGhost: boolean,
+  roomEditMode: boolean
 ): void {
   const lenM = seg.lengthMm * MM_TO_M;
   if (lenM < 0.05) return;
@@ -399,13 +718,68 @@ function buildWallSegment3D(
   wallGroup.position.set(seg.start.xMm * MM_TO_M, 0, seg.start.zMm * MM_TO_M);
   wallGroup.rotation.y = -Math.atan2(seg.tz, seg.tx);
 
-  // Build wall elevation shape in (x: 0..lenM, y: 0..hM) with real rectangular holes for openings
-  const wallShape = new THREE.Shape();
-  wallShape.moveTo(0, 0);
-  wallShape.lineTo(lenM, 0);
-  wallShape.lineTo(lenM, hM);
-  wallShape.lineTo(0, hM);
-  wallShape.closePath();
+  // Exact roof-clipped top profile along this wall (forms authentic sloped gable & knee walls!)
+  const innerProfileM = getWallTopProfileMm(seg, room, slopes).map((p) => ({
+    uM: p.uMm * MM_TO_M,
+    yM: Math.max(0.15, p.yMm * MM_TO_M),
+  }));
+
+  // Compute mitered outer face start/end U coordinates so corners join cleanly at 45° miters
+  const uOuterStartM =
+    ((outerStartMm.xMm - seg.start.xMm) * seg.tx +
+      (outerStartMm.zMm - seg.start.zMm) * seg.tz) *
+    MM_TO_M;
+  const uOuterEndM =
+    ((outerEndMm.xMm - seg.start.xMm) * seg.tx +
+      (outerEndMm.zMm - seg.start.zMm) * seg.tz) *
+    MM_TO_M;
+
+  // Guard degenerate ultra-short outer segments on tiny reflex walls
+  const safeOuterStartM = uOuterEndM - uOuterStartM >= 0.04 ? uOuterStartM : 0;
+  const safeOuterEndM = uOuterEndM - uOuterStartM >= 0.04 ? uOuterEndM : lenM;
+
+  const outerProfileM = innerProfileM.map((p, idx) => {
+    if (idx === 0) {
+      return {
+        uM: safeOuterStartM,
+        yM: Math.max(
+          0.15,
+          getRoomCeilingHeightAtXZ(outerStartMm.xMm, outerStartMm.zMm, room, slopes) * MM_TO_M
+        ),
+      };
+    }
+    if (idx === innerProfileM.length - 1) {
+      return {
+        uM: safeOuterEndM,
+        yM: Math.max(
+          0.15,
+          getRoomCeilingHeightAtXZ(outerEndMm.xMm, outerEndMm.zMm, room, slopes) * MM_TO_M
+        ),
+      };
+    }
+    const clampedU = Math.max(safeOuterStartM + 0.01, Math.min(safeOuterEndM - 0.01, p.uM));
+    const wx = seg.start.xMm + seg.tx * (clampedU / MM_TO_M) + seg.outNx * (wallThickM / MM_TO_M);
+    const wz = seg.start.zMm + seg.tz * (clampedU / MM_TO_M) + seg.outNz * (wallThickM / MM_TO_M);
+    return {
+      uM: clampedU,
+      yM: Math.max(0.15, getRoomCeilingHeightAtXZ(wx, wz, room, slopes) * MM_TO_M),
+    };
+  });
+
+  // Build inner & outer elevation shapes with clipped roof silhouette
+  const buildProfileShape = (profile: Array<{ uM: number; yM: number }>) => {
+    const sh = new THREE.Shape();
+    sh.moveTo(profile[0].uM, 0);
+    sh.lineTo(profile[profile.length - 1].uM, 0);
+    for (let i = profile.length - 1; i >= 0; i--) {
+      sh.lineTo(profile[i].uM, profile[i].yM);
+    }
+    sh.closePath();
+    return sh;
+  };
+
+  const innerWallShape = buildProfileShape(innerProfileM);
+  const outerWallShape = buildProfileShape(outerProfileM);
 
   const validOpenings: Array<{
     op: RoomOpening;
@@ -415,99 +789,161 @@ function buildWallSegment3D(
     y1: number;
   }> = [];
 
+  const minHoleU = Math.max(0.02, safeOuterStartM + 0.02);
+  const maxHoleU = Math.min(lenM - 0.02, safeOuterEndM - 0.02);
+
   for (const op of openings) {
-    const u0 = Math.max(0.02, Math.min(lenM - 0.1, op.offsetMm * MM_TO_M));
-    const u1 = Math.min(lenM - 0.02, u0 + op.widthMm * MM_TO_M);
-    const y0 = Math.max(0, Math.min(hM - 0.15, op.sillHeightMm * MM_TO_M));
-    const y1 = Math.min(hM - 0.04, y0 + op.heightMm * MM_TO_M);
+    const u0 = Math.max(minHoleU, Math.min(maxHoleU - 0.14, op.offsetMm * MM_TO_M));
+    const u1 = Math.min(maxHoleU, u0 + op.widthMm * MM_TO_M);
+    // Clamp opening top strictly beneath the lowest point of the sloped ceiling across [u0, u1]!
+    const roofAtU0 = sampleWallProfileHeightM(innerProfileM, u0);
+    const roofAtU1 = sampleWallProfileHeightM(innerProfileM, u1);
+    const roofAtMid = sampleWallProfileHeightM(innerProfileM, (u0 + u1) / 2);
+    const maxWallHAtOpening = Math.min(roofAtU0, roofAtU1, roofAtMid);
+
+    const y0 = Math.max(0, Math.min(maxWallHAtOpening - 0.18, op.sillHeightMm * MM_TO_M));
+    const y1 = Math.min(maxWallHAtOpening - 0.04, y0 + op.heightMm * MM_TO_M);
     if (u1 - u0 < 0.12 || y1 - y0 < 0.15) continue;
 
     // For floor-level openings (sill === 0), nudge hole bottom slightly above 0 so Shape hole stays strictly interior
     const holeY0 = y0 <= 0.002 ? 0.004 : y0;
-    const hole = new THREE.Path();
-    hole.moveTo(u0, holeY0);
-    hole.lineTo(u0, y1);
-    hole.lineTo(u1, y1);
-    hole.lineTo(u1, holeY0);
-    hole.closePath();
-    wallShape.holes.push(hole);
+    const makeHole = () => {
+      const hole = new THREE.Path();
+      hole.moveTo(u0, holeY0);
+      hole.lineTo(u0, y1);
+      hole.lineTo(u1, y1);
+      hole.lineTo(u1, holeY0);
+      hole.closePath();
+      return hole;
+    };
+    innerWallShape.holes.push(makeHole());
+    outerWallShape.holes.push(makeHole());
 
     validOpenings.push({ op, u0, u1, y0, y1 });
   }
+
+  const tagWallMesh = (mesh: THREE.Mesh) => {
+    mesh.userData.disposeMaterial = true;
+    mesh.userData.raycastKind = 'room_wall';
+    mesh.userData.wallIndex = seg.index;
+  };
 
   if (cutawayMode === 'smart_cutaway') {
     // Industry-standard architectural cutaway (PRO100 / IKEA / Planner 5D):
     // Interior wall plane uses FrontSide (+Z facing INTO the room), so walls between the
     // camera and furniture become cleanly transparent/invisible automatically, while walls
     // behind the furniture render as 100% solid architectural plaster with shadows!
-    const innerGeo = new THREE.ShapeGeometry(wallShape);
+    const innerGeo = new THREE.ShapeGeometry(innerWallShape);
     const innerMat = new THREE.MeshStandardMaterial({
-      color: wallColor,
+      color: isSelectedWall ? '#FDE68A' : wallColor,
+      emissive: isSelectedWall ? '#D97706' : '#000000',
+      emissiveIntensity: isSelectedWall ? 0.28 : 0,
       roughness: wallRoughness,
       metalness: 0.02,
-      side: THREE.FrontSide,
+      side: roomEditMode && isSelectedWall ? THREE.DoubleSide : THREE.FrontSide,
     });
     const innerMesh = new THREE.Mesh(innerGeo, innerMat);
     innerMesh.receiveShadow = true;
-    innerMesh.userData.disposeMaterial = true;
+    tagWallMesh(innerMesh);
     wallGroup.add(innerMesh);
 
-    // Subtle thin architectural top cap & low floor curb so room boundaries stay crisp from outside
-    const curbGeo = new THREE.BoxGeometry(lenM + wallThickM, 0.045, wallThickM);
+    // Mitered low floor curb so room footprint stays crisp and clickable even from behind cutaway walls
+    const curbPos: number[] = [];
+    const curbH = 0.048;
+    pushQuad(
+      curbPos,
+      [0, curbH, 0],
+      [lenM, curbH, 0],
+      [safeOuterEndM, curbH, -wallThickM],
+      [safeOuterStartM, curbH, -wallThickM]
+    );
+    pushQuad(
+      curbPos,
+      [safeOuterEndM, 0, -wallThickM],
+      [safeOuterStartM, 0, -wallThickM],
+      [safeOuterStartM, curbH, -wallThickM],
+      [safeOuterEndM, curbH, -wallThickM]
+    );
+    const curbGeo = new THREE.BufferGeometry();
+    curbGeo.setAttribute('position', new THREE.Float32BufferAttribute(curbPos, 3));
+    curbGeo.computeVertexNormals();
     const curbMat = new THREE.MeshStandardMaterial({
-      color: '#475569',
-      roughness: 0.8,
+      color: isSelectedWall ? '#F59E0B' : '#475569',
+      roughness: 0.78,
       metalness: 0.05,
-      transparent: true,
-      opacity: 0.55,
+      transparent: !isSelectedWall,
+      opacity: isSelectedWall ? 1 : 0.58,
+      side: THREE.DoubleSide,
     });
     const curb = new THREE.Mesh(curbGeo, curbMat);
-    curb.position.set(lenM / 2, 0.0225, -wallThickM / 2);
-    curb.userData.disposeMaterial = true;
+    tagWallMesh(curb);
     wallGroup.add(curb);
 
-    // Crisp subtle vertical corner line at wall start
+    // Crisp vertical corner line at wall start (trimmed to exact clipped corner height!)
+    const startCornerH = innerProfileM[0]?.yM ?? 2.6;
     const cornerLineGeo = new THREE.BufferGeometry().setFromPoints([
       new THREE.Vector3(0, 0, 0.002),
-      new THREE.Vector3(0, hM, 0.002),
+      new THREE.Vector3(0, startCornerH, 0.002),
     ]);
     const cornerLineMat = new THREE.LineBasicMaterial({
-      color: '#94A3B8',
+      color: isSelectedWall ? '#F59E0B' : '#94A3B8',
       transparent: true,
-      opacity: 0.35,
+      opacity: isSelectedWall ? 0.95 : 0.35,
     });
     const cornerLine = new THREE.Line(cornerLineGeo, cornerLineMat);
     cornerLine.userData.disposeMaterial = true;
     wallGroup.add(cornerLine);
+
+    if (isSelectedWall) {
+      const topLinePts = innerProfileM.map((p) => new THREE.Vector3(p.uM, p.yM, 0.004));
+      topLinePts.push(new THREE.Vector3(lenM, 0, 0.004));
+      topLinePts.push(new THREE.Vector3(0, 0, 0.004));
+      topLinePts.push(new THREE.Vector3(0, innerProfileM[0].yM, 0.004));
+      const selOutlineGeo = new THREE.BufferGeometry().setFromPoints(topLinePts);
+      const selOutlineMat = new THREE.LineBasicMaterial({ color: '#F59E0B' });
+      const selOutline = new THREE.Line(selOutlineGeo, selOutlineMat);
+      selOutline.userData.disposeMaterial = true;
+      wallGroup.add(selOutline);
+    }
   } else {
-    const extrudeGeo = new THREE.ExtrudeGeometry(wallShape, {
-      depth: wallThickM,
-      bevelEnabled: false,
-    });
+    const miterWallGeo = buildMiteredWallGeometry(
+      innerWallShape,
+      outerWallShape,
+      innerProfileM,
+      outerProfileM,
+      validOpenings,
+      wallThickM
+    );
     const isTranslucent = cutawayMode === 'translucent';
     const wallMat = new THREE.MeshStandardMaterial({
-      color: isTranslucent ? '#CBD5E1' : wallColor,
+      color: isSelectedWall
+        ? '#F59E0B'
+        : isHiddenGhost
+          ? '#64748B'
+          : isTranslucent
+            ? '#CBD5E1'
+            : wallColor,
+      emissive: isSelectedWall ? '#B45309' : '#000000',
+      emissiveIntensity: isSelectedWall ? 0.3 : 0,
       roughness: wallRoughness,
       metalness: 0.02,
-      transparent: isTranslucent,
-      opacity: isTranslucent ? 0.24 : 1,
-      depthWrite: !isTranslucent,
+      transparent: isTranslucent || isHiddenGhost,
+      opacity: isHiddenGhost ? 0.12 : isSelectedWall && isTranslucent ? 0.42 : isTranslucent ? 0.22 : 1,
+      depthWrite: !isTranslucent && !isHiddenGhost,
     });
-    const wallMesh = new THREE.Mesh(extrudeGeo, wallMat);
-    wallMesh.position.z = -wallThickM;
-    wallMesh.receiveShadow = !isTranslucent;
-    wallMesh.castShadow = !isTranslucent;
-    wallMesh.userData.disposeMaterial = true;
+    const wallMesh = new THREE.Mesh(miterWallGeo, wallMat);
+    wallMesh.receiveShadow = !isTranslucent && !isHiddenGhost;
+    wallMesh.castShadow = !isTranslucent && !isHiddenGhost;
+    tagWallMesh(wallMesh);
     wallGroup.add(wallMesh);
 
-    const edgesGeo = new THREE.EdgesGeometry(extrudeGeo, 25);
+    const edgesGeo = new THREE.EdgesGeometry(miterWallGeo, 22);
     const edgesMat = new THREE.LineBasicMaterial({
-      color: isTranslucent ? '#64748B' : '#94A3B8',
+      color: isSelectedWall ? '#FBBF24' : isTranslucent ? '#64748B' : '#94A3B8',
       transparent: true,
-      opacity: isTranslucent ? 0.55 : 0.28,
+      opacity: isSelectedWall ? 1 : isHiddenGhost ? 0.35 : isTranslucent ? 0.55 : 0.26,
     });
     const edges = new THREE.LineSegments(edgesGeo, edgesMat);
-    edges.position.copy(wallMesh.position);
     edges.userData.disposeMaterial = true;
     wallGroup.add(edges);
   }

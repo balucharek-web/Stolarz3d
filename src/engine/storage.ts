@@ -335,6 +335,24 @@ function sanitizeRoomConfig(raw: unknown): RoomConfig | undefined {
         : DEFAULT_ROOM_STYLE.wallCutawayMode,
   };
 
+  const wallSlopes: NonNullable<RoomConfig['wallSlopes']> = [];
+  if (Array.isArray(r.wallSlopes)) {
+    const seen = new Set<number>();
+    for (let i = 0; i < Math.min(r.wallSlopes.length, 16); i++) {
+      const item = r.wallSlopes[i];
+      if (!item || typeof item !== 'object') continue;
+      const o = item as Record<string, unknown>;
+      const wallIndex = Math.round(toFiniteNumber(o.wallIndex, 0, 0, Math.max(0, maxWalls - 1)));
+      if (seen.has(wallIndex)) continue;
+      seen.add(wallIndex);
+      wallSlopes.push({
+        wallIndex,
+        kneeWallHeightMm: toFiniteNumber(o.kneeWallHeightMm, 1200, 200, 3800),
+        slopeDepthMm: toFiniteNumber(o.slopeDepthMm, 1600, 200, 8000),
+      });
+    }
+  }
+
   return {
     enabled: Boolean(r.enabled),
     widthMm: toFiniteNumber(r.widthMm, 3400, 600, 20000),
@@ -346,6 +364,7 @@ function sanitizeRoomConfig(raw: unknown): RoomConfig | undefined {
     showBackWall: r.showBackWall !== false,
     showCeiling: Boolean(r.showCeiling),
     slopedCeiling,
+    wallSlopes,
     obstacles,
     floorPoints,
     wallThicknessMm: toFiniteNumber(r.wallThicknessMm, 120, 50, 400),
@@ -469,6 +488,8 @@ export function sanitizeImportedProject(
       slopeTopRight: p.slopeTopRight !== undefined ? toFiniteNumber(p.slopeTopRight, 0, 0, height - 10) : undefined,
       slopeBottomLeft: p.slopeBottomLeft !== undefined ? toFiniteNumber(p.slopeBottomLeft, 0, 0, height - 10) : undefined,
       slopeBottomRight: p.slopeBottomRight !== undefined ? toFiniteNumber(p.slopeBottomRight, 0, 0, height - 10) : undefined,
+      beamCutStartDeg: p.beamCutStartDeg !== undefined ? toFiniteNumber(p.beamCutStartDeg, 0, -45, 45) : undefined,
+      beamCutEndDeg: p.beamCutEndDeg !== undefined ? toFiniteNumber(p.beamCutEndDeg, 0, -45, 45) : undefined,
       handleSide,
       handleStyle:
         typeof p.handleStyle === 'string' && VALID_HANDLE_STYLES.has(p.handleStyle as HandleStyle)

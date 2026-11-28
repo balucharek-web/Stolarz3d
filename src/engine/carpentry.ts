@@ -9,6 +9,8 @@ import {
 import {
   computeWallSegments,
   findNearestWallSegment,
+  getEffectiveRoomWallSlopes,
+  getRoomCeilingHeightAtXZ,
   getRoomDoorSwingBox,
   getRoomPolygonPoints,
   getWallObstacleWorldBox,
@@ -1629,6 +1631,26 @@ export function computePartClearances(
 export function computeSawCutAngles(part: FurniturePart): SawCutAngle[] {
   const angles: SawCutAngle[] = [];
 
+  if (part.kind === 'profile') {
+    const startDeg = Math.abs(part.beamCutStartDeg ?? 0);
+    const endDeg = Math.abs(part.beamCutEndDeg ?? 0);
+    if (startDeg > 0.4) {
+      angles.push({
+        label: 'Zacios start',
+        interiorDeg: Math.round((90 - startDeg) * 10) / 10,
+        sawMiterDeg: Math.round(startDeg * 10) / 10,
+      });
+    }
+    if (endDeg > 0.4) {
+      angles.push({
+        label: 'Zacios koniec',
+        interiorDeg: Math.round((90 - endDeg) * 10) / 10,
+        sawMiterDeg: Math.round(endDeg * 10) / 10,
+      });
+    }
+    return angles;
+  }
+
   if (part.kind === 'sloped') {
     const tl = Math.max(0, part.slopeTopLeft ?? 0);
     const tr = Math.max(0, part.slopeTopRight ?? 0);
@@ -2224,6 +2246,114 @@ export function joinSelectedParts(
   return { parts: nextParts, fasteners: synced.fasteners, summary };
 }
 
+/**
+ * Automatically computes the inside 90° corner between two selected timber/steel elements
+ * and builds a properly sized, flush-aligned 3D galvanized steel carpentry L-bracket.
+ */
+export function buildCornerBracketForPair(
+  parts: FurniturePart[],
+  selectedIds: string[]
+): { bracket: Omit<FurniturePart, 'id'>; summary: string } | null {
+  const pair = selectedIds
+    .map((id) => parts.find((p) => p.id === id))
+    .filter((p): p is FurniturePart => Boolean(p && !p.hidden));
+  if (pair.length < 2) return null;
+
+  const boxA = getPartWorldBox(pair[0]);
+  const boxB = getPartWorldBox(pair[1]);
+
+  const spanA = {
+    x: boxA.maxX - boxA.minX,
+    y: boxA.maxY - boxA.minY,
+    z: boxA.maxZ - boxA.minZ,
+  };
+  const spanB = {
+    x: boxB.maxX - boxB.minX,
+    y: boxB.maxY - boxB.minY,
+    z: boxB.maxZ - boxB.minZ,
+  };
+
+  const minSection = Math.min(
+    Math.min(spanA.x, spanA.y, spanA.z),
+    Math.min(spanB.x, spanB.y, spanB.z)
+  );
+  const leg = minSection <= 55 ? 60 : minSection <= 90 ? 90 : 105;
+  const widthD = minSection <= 55 ? 40 : minSection <= 90 ? 65 : 90;
+  const wallT = leg >= 105 ? 5 : leg >= 90 ? 4 : 3.5;
+
+  const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
+  const cAx = (boxA.minX + boxA.maxX) / 2;
+  const cAy = (boxA.minY + boxA.maxY) / 2;
+  const cAz = (boxA.minZ + boxA.maxZ) / 2;
+  const cBx = (boxB.minX + boxB.maxX) / 2;
+  const cBy = (boxB.minY + boxB.maxY) / 2;
+  const cBz = (boxB.minZ + boxB.maxZ) / 2;
+
+  const contactX = (clamp(cBx, boxA.minX, boxA.maxX) + clamp(cAx, boxB.minX, boxB.maxX)) / 2;
+  const contactY = (clamp(cBy, boxA.minY, boxA.maxY) + clamp(cAy, boxB.minY, boxB.maxY)) / 2;
+  const contactZ = (clamp(cBz, boxA.minZ, boxA.maxZ) + clamp(cAz, boxB.minZ, boxB.maxZ)) / 2;
+
+  const axisA = getLongestWorldAxis(boxA);
+  const axisB = getLongestWorldAxis(boxB);
+
+  const half = leg / 2;
+  const lPoly: [number, number][] = [
+    [-half, -half],
+    [half, -half],
+    [half, -half + wallT],
+    [-half + wallT, -half + wallT],
+    [-half + wallT, half],
+    [-half, half],
+  ];
+
+  let rotation: [number, number, number] = [0, 0, 0];
+  let posX = contactX;
+  let posY = contactY;
+  let posZ = contactZ;
+
+  const pairAxes = new Set<AxisKey>([axisA, axisB]);
+  if (pairAxes.has('x') && pairAxes.has('z')) {
+    const dirX = cAx + cBx - 2 * contactX >= 0 ? 1 : -1;
+    const dirZ = cAz + cBz - 2 * contactZ >= 0 ? 1 : -1;
+    posX = contactX + dirX * (half * 0.72);
+    posZ = contactZ + dirZ * (half * 0.72);
+    const ry = dirX > 0 && dirZ > 0 ? 0 : dirX < 0 && dirZ > 0 ? 90 : dirX < 0 && dirZ < 0 ? 180 : -90;
+    rotation = [90, ry, 0];
+  } else if (pairAxes.has('y') && pairAxes.has('z')) {
+    const dirY = cAy + cBy - 2 * contactY >= 0 ? 1 : -1;
+    const dirZ = cAz + cBz - 2 * contactZ >= 0 ? 1 : -1;
+    posY = contactY + dirY * (half * 0.72);
+    posZ = contactZ + dirZ * (half * 0.72);
+    const rz = dirY > 0 ? (dirZ > 0 ? 0 : 90) : dirZ > 0 ? -90 : 180;
+    rotation = [0, 90, rz];
+  } else {
+    const dirX = cAx + cBx - 2 * contactX >= 0 ? 1 : -1;
+    const dirY = cAy + cBy - 2 * contactY >= 0 ? 1 : -1;
+    posX = contactX + dirX * (half * 0.72);
+    posY = contactY + dirY * (half * 0.72);
+    const rz = dirX > 0 && dirY > 0 ? 0 : dirX < 0 && dirY > 0 ? 90 : dirX < 0 && dirY < 0 ? 180 : -90;
+    rotation = [0, 0, rz];
+  }
+
+  const safeY = Math.max(half, roundMm(posY));
+  const bracket: Omit<FurniturePart, 'id'> = {
+    name: `Kątownik ciesielski ${leg}×${leg}×${widthD}`,
+    kind: 'custom',
+    materialId: 'steel_galv',
+    width: leg,
+    height: leg,
+    depth: widthD,
+    customPolygon: lPoly,
+    position: [roundMm(posX), safeY, roundMm(posZ)],
+    rotation,
+  };
+
+  return {
+    bracket,
+    summary: `Wstawiono kątownik ${leg}×${leg}×${widthD} mm w narożnik połączenia`,
+  };
+}
+
 export type ShelfLoadStatus = 'ok' | 'warning' | 'critical';
 
 export interface ShelfDeflectionAudit {
@@ -2493,24 +2623,10 @@ export function getRoomObstacleWorldBox(
  */
 export function getRoomCeilingHeightAtX(
   xMm: number,
-  room: import('../types/furniture').RoomConfig
+  room: import('../types/furniture').RoomConfig,
+  zMm = 0
 ): number {
-  if (!room.slopedCeiling.enabled) return room.heightMm;
-  const halfW = room.widthMm / 2;
-  const kneeH = Math.min(room.heightMm, Math.max(200, room.slopedCeiling.kneeWallHeightMm));
-  const run = Math.max(100, Math.min(room.widthMm, room.slopedCeiling.slopeWidthMm));
-
-  if (room.slopedCeiling.side === 'right') {
-    const distFromRight = halfW - xMm;
-    if (distFromRight <= 0) return kneeH;
-    if (distFromRight >= run) return room.heightMm;
-    return kneeH + ((room.heightMm - kneeH) * distFromRight) / run;
-  }
-  // left slope
-  const distFromLeft = xMm + halfW;
-  if (distFromLeft <= 0) return kneeH;
-  if (distFromLeft >= run) return room.heightMm;
-  return kneeH + ((room.heightMm - kneeH) * distFromLeft) / run;
+  return getRoomCeilingHeightAtXZ(xMm, zMm, room);
 }
 
 /**
@@ -2615,20 +2731,26 @@ export function auditRoomClearances(
       });
     }
 
-    if (room.slopedCeiling.enabled) {
-      // Check actual top corners against attic slope ceiling
-      const checkXs = [b.minX, (b.minX + b.maxX) / 2, b.maxX];
-      for (const cx of checkXs) {
-        const ceilAtX = getRoomCeilingHeightAtX(cx, room);
-        const testY = b.maxY;
-        if (testY > ceilAtX + tol) {
-          const probe = new THREE.Vector3(cx, ceilAtX + tol + 2, (b.minZ + b.maxZ) / 2);
+    const activeSlopes = getEffectiveRoomWallSlopes(room, wallSegments);
+    if (activeSlopes.length > 0) {
+      // Check actual 3D top corners + center against all active wall roof slopes
+      const checkPts: Array<[number, number]> = [
+        [b.minX, b.minZ],
+        [b.maxX, b.minZ],
+        [b.maxX, b.maxZ],
+        [b.minX, b.maxZ],
+        [(b.minX + b.maxX) / 2, (b.minZ + b.maxZ) / 2],
+      ];
+      for (const [cx, cz] of checkPts) {
+        const ceilAtXZ = getRoomCeilingHeightAtXZ(cx, cz, room, activeSlopes);
+        if (b.maxY > ceilAtXZ + tol) {
+          const probe = new THREE.Vector3(cx, ceilAtXZ + tol + 2, cz);
           if (isWorldPointInsidePart(probe, p, 2)) {
             issues.push({
               partId: p.id,
               partName: p.name,
               kind: 'slope_hit',
-              message: `„${p.name}” koliduje ze skosem dachu poddasza (wysokość skosu w tym miejscu: ${Math.round(ceilAtX)} mm).`,
+              message: `„${p.name}” koliduje ze skosem dachu poddasza (wysokość skosu w tym miejscu: ${Math.round(ceilAtXZ)} mm).`,
             });
             break;
           }

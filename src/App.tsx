@@ -2,6 +2,8 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import * as THREE from 'three';
 import {
   AlertTriangle,
+  Box,
+  Camera,
   CheckSquare,
   ChevronLeft,
   ChevronRight,
@@ -12,7 +14,10 @@ import {
   LayoutPanelTop,
   Plus,
   RefreshCw,
+  RotateCw,
   Search,
+  SlidersHorizontal,
+  Sun,
   Undo2,
   X,
 } from 'lucide-react';
@@ -40,6 +45,7 @@ import {
 import {
   AlignMode,
   CameraPreset,
+  DEFAULT_ROOM_CONFIG,
   EditorTool,
   Fastener,
   FurniturePart,
@@ -49,6 +55,7 @@ import {
   MeasureSegment,
   ParametricCabinetConfig,
   QuoteSettings,
+  SceneBackdropTheme,
   SCREW_MAP,
   ScrewType,
   StudioLighting,
@@ -74,6 +81,7 @@ import {
   analyzeShelfDeflection,
   auditRoomClearances,
   bindFastenerToJoint,
+  buildCornerBracketForPair,
   computeJointZones,
   computePartClearances,
   createEvenShelfArray,
@@ -90,6 +98,7 @@ import {
   type CarpentryJoinMode,
   type ClearanceGuide,
 } from './engine/carpentry';
+import { exportProjectTo3D, type Export3DFormat } from './engine/export3D';
 import {
   buildParametricCabinet,
   computeSmartCabinetPlacement,
@@ -132,6 +141,7 @@ import { CommandPaletteModal } from './components/CommandPaletteModal';
 import { CutListModal } from './components/CutListModal';
 import { ShapeSketchModal } from './components/ShapeSketchModal';
 import { RoomSettingsModal } from './components/RoomSettingsModal';
+import { Room3DInspectorPanel } from './components/Room3DInspectorPanel';
 import { ContextMenu, type ContextMenuTarget } from './components/ContextMenu';
 import { ViewCube } from './components/ViewCube';
 import { PWAInstallButton, PWAStatusOverlays } from './components/PWAControls';
@@ -141,10 +151,12 @@ import {
   CloudAccountModal,
   type CloudSyncStatus,
 } from './components/CloudAccountModal';
+import { Plan2DOverlay } from './components/Plan2DOverlay';
 import { usePWAUpdate } from './hooks/usePWAUpdate';
 
 const SNAP_STEPS = [10, 5, 25, 0];
 const LIGHTING_ORDER: StudioLighting[] = ['daylight', 'studio', 'warm', 'photoreal'];
+const THEME_ORDER: SceneBackdropTheme[] = ['studio_light', 'workshop_dark', 'blueprint_sketch'];
 const SKIP_START_MODAL_KEY = 'stolarz3d_skip_start_modal';
 const UI_MODE_STORAGE_KEY = 'stolarz3d_ui_mode';
 
@@ -230,6 +242,10 @@ export default function App() {
   const [editingCabinetGroupId, setEditingCabinetGroupId] = useState<string | null>(null);
   const [materialsModalOpen, setMaterialsModalOpen] = useState<boolean>(false);
   const [roomModalOpen, setRoomModalOpen] = useState<boolean>(false);
+  const [roomEditMode, setRoomEditMode] = useState<boolean>(false);
+  const [selectedRoomWallIndex, setSelectedRoomWallIndex] = useState<number | null>(null);
+  const [selectedRoomSlopeWallIndex, setSelectedRoomSlopeWallIndex] = useState<number | null>(null);
+  const [selectedLegacySlope, setSelectedLegacySlope] = useState<boolean>(false);
   const [sketchOpen, setSketchOpen] = useState<boolean>(false);
   const [sketchEditingPart, setSketchEditingPart] = useState<FurniturePart | null>(null);
   const [leftDrawerMode, setLeftDrawerMode] = useState<LeftDrawerMode>(null);
@@ -263,6 +279,10 @@ export default function App() {
   const [selectionScope, setSelectionScope] = useState<SelectionScope>('group');
   const [activeGroupEditId, setActiveGroupEditId] = useState<string | null>(null);
   const [nudgePadOpen, setNudgePadOpen] = useState<boolean>(false);
+  const [viewMode, setViewMode] = useState<'3d' | 'plan2d'>('3d');
+  const [sceneTheme, setSceneTheme] = useState<SceneBackdropTheme>('studio_light');
+  const [presentationMode, setPresentationMode] = useState<boolean>(false);
+  const [presentationAutoOrbit, setPresentationAutoOrbit] = useState<boolean>(true);
   const [toastMsg, setToastMsg] = useState<string | null>(null);
 
   // Firebase Cloud Auth & Real-Time Sync State
@@ -2352,6 +2372,52 @@ export default function App() {
     [commitProject, selectedPartIds, showToast]
   );
 
+  const handleAddCornerBracket = useCallback(() => {
+    if (selectedPartIds.length < 2) return;
+    const res = buildCornerBracketForPair(project.parts, selectedPartIds);
+    if (!res) {
+      showToast('Zaznacz 2 sąsiadujące elementy, aby wstawić kątownik ciesielski');
+      return;
+    }
+    handleAddPart(res.bracket);
+    showToast(res.summary);
+  }, [handleAddPart, project.parts, selectedPartIds, showToast]);
+
+  const handleCycleSceneTheme = useCallback(() => {
+    setSceneTheme((curr) => {
+      const next = THEME_ORDER[(THEME_ORDER.indexOf(curr) + 1) % THEME_ORDER.length];
+      const label =
+        next === 'studio_light'
+          ? 'Jasne Studio'
+          : next === 'workshop_dark'
+            ? 'Ciemny Warsztat'
+            : 'Szkic Architektoniczny';
+      showToast(`Tło sceny: ${label}`);
+      return next;
+    });
+  }, [showToast]);
+
+  const handleToggleViewMode = useCallback(() => {
+    setViewMode((curr) => {
+      const next = curr === '3d' ? 'plan2d' : '3d';
+      showToast(next === 'plan2d' ? 'Rzut z góry Plan 2D (przeciągaj elementy X/Z)' : 'Widok 3D');
+      return next;
+    });
+  }, [showToast]);
+
+  const handleExport3D = useCallback(
+    async (format: Export3DFormat) => {
+      try {
+        await exportProjectTo3D(project, format);
+        showToast(`Wyeksportowano model 3D (.${format.toUpperCase()})`);
+      } catch (err) {
+        console.error('3D export failed:', err);
+        showToast(`Nie udało się wyeksportować pliku .${format.toUpperCase()}`);
+      }
+    },
+    [project, showToast]
+  );
+
   const handleToggleMultiSelectMode = useCallback(() => {
     setMultiSelectMode((prev) => {
       const next = !prev;
@@ -2418,6 +2484,14 @@ export default function App() {
           setCommandPaletteOpen(false);
           return;
         }
+        if (presentationMode) {
+          setPresentationMode(false);
+          return;
+        }
+        if (viewMode === 'plan2d') {
+          setViewMode('3d');
+          return;
+        }
         if (cloudModalOpen) {
           setCloudModalOpen(false);
           return;
@@ -2458,6 +2532,18 @@ export default function App() {
         }
         if (assemblyStep > 0) {
           setAssemblyStep(0);
+          return;
+        }
+        if (
+          roomEditMode ||
+          selectedRoomWallIndex !== null ||
+          selectedRoomSlopeWallIndex !== null ||
+          selectedLegacySlope
+        ) {
+          setRoomEditMode(false);
+          setSelectedRoomWallIndex(null);
+          setSelectedRoomSlopeWallIndex(null);
+          setSelectedLegacySlope(false);
           return;
         }
         setSelectedPartId(null);
@@ -2573,6 +2659,8 @@ export default function App() {
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [
     anyModalOpen,
+    presentationMode,
+    viewMode,
     commandPaletteOpen,
     cloudModalOpen,
     shortcutsOpen,
@@ -2590,6 +2678,10 @@ export default function App() {
     handleNudgeSelected,
     selectedPartId,
     selectedFastenerId,
+    roomEditMode,
+    selectedRoomWallIndex,
+    selectedRoomSlopeWallIndex,
+    selectedLegacySlope,
     handleDeletePart,
     handleDeleteFastener,
   ]);
@@ -2832,8 +2924,13 @@ export default function App() {
   const snapMm = SNAP_STEPS[snapIdx];
 
   return (
-    <div className="relative h-[100dvh] w-screen overflow-hidden bg-[#EAECEF]">
-      {/* Atelier Studio 3-Zone Top Bar (48px mobile / 52px desktop — single dominant brass CTA) */}
+    <div
+      className={`relative h-[100dvh] w-screen overflow-hidden ${
+        sceneTheme === 'workshop_dark' ? 'bg-[#161A22]' : 'bg-[#EAECEF]'
+      }`}
+    >
+      {/* Atelier Studio 3-Zone Top Bar (hidden cleanly in Presentation Mode) */}
+      {!presentationMode && (
       <header className="fixed top-0 inset-x-0 z-30 flex h-12 md:h-[52px] max-w-full items-center justify-between gap-2 lg:gap-4 border-b border-white/[0.08] bg-[#101216]/94 backdrop-blur-xl px-2.5 sm:px-4 text-zinc-100 overflow-hidden">
         {/* Zone 1: Clean Geometric Brand Wordmark (opens Start Launcher) */}
         <button
@@ -2999,6 +3096,41 @@ export default function App() {
             <span className="hidden xl:inline">Pokój 2D</span>
           </button>
 
+          {project.room?.enabled && viewMode === '3d' && (
+            <button
+              type="button"
+              onClick={() => {
+                setRoomEditMode((prev) => {
+                  const next = !prev;
+                  if (next) {
+                    setSelectedPartId(null);
+                    setSelectedPartIds([]);
+                    setSelectedFastenerId(null);
+                    setInspectorOpen(false);
+                  } else {
+                    setSelectedRoomWallIndex(null);
+                    setSelectedRoomSlopeWallIndex(null);
+                    setSelectedLegacySlope(false);
+                  }
+                  return next;
+                });
+              }}
+              className={`flex min-h-[34px] items-center gap-1.5 rounded-xl border px-2 sm:px-2.5 text-xs font-medium transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                roomEditMode ||
+                selectedRoomWallIndex !== null ||
+                selectedRoomSlopeWallIndex !== null ||
+                selectedLegacySlope
+                  ? 'border-amber-400/60 bg-amber-500 text-zinc-950 font-semibold'
+                  : 'border-white/[0.08] bg-white/[0.04] text-zinc-200 hover:bg-white/[0.09] hover:text-white'
+              }`}
+              title="Klikaj i edytuj ściany oraz skosy dachu bezpośrednio w widoku 3D"
+            >
+              <SlidersHorizontal className="h-3.5 w-3.5 shrink-0" />
+              <span className="hidden sm:inline">Ściany 3D</span>
+              <span className="sm:hidden">3D</span>
+            </button>
+          )}
+
           <button
             type="button"
             onClick={() => {
@@ -3022,8 +3154,10 @@ export default function App() {
           </button>
         </div>
       </header>
+      )}
 
       {/* Architectural Frosted Light Project HUD + Actionable Carpentry Warnings */}
+      {!presentationMode && viewMode === '3d' && (
       <div className="pointer-events-none fixed top-[58px] md:top-[62px] left-3 md:left-[70px] z-20 flex flex-col gap-1.5">
         <button
           type="button"
@@ -3098,9 +3232,10 @@ export default function App() {
           </button>
         )}
       </div>
+      )}
 
       {/* Physical Contact-Graph Step-by-Step Workshop Assembly Guide */}
-      {activeAssemblyStepPlan && (
+      {!presentationMode && activeAssemblyStepPlan && (
         <div className="studio-glass animate-studio-pop fixed top-[60px] left-1/2 z-30 -translate-x-1/2 w-[min(660px,calc(100vw-24px))] rounded-2xl border-emerald-400/35 px-4 py-3 text-zinc-100">
           {/* Top navigation & granularity row */}
           <div className="flex flex-wrap items-center justify-between gap-2">
@@ -3285,7 +3420,7 @@ export default function App() {
       )}
 
       {/* Mobile Always-Accessible Floating Quick Strip: Search, Undo, Focus, Multi-Select */}
-      {!anyModalOpen && !startModalOpen && (
+      {!presentationMode && viewMode === '3d' && !anyModalOpen && !startModalOpen && (
         <div className="md:hidden studio-glass fixed top-[58px] right-2.5 z-20 flex flex-col gap-1 rounded-2xl p-1">
           <button
             type="button"
@@ -3347,7 +3482,9 @@ export default function App() {
       )}
 
       {/* Calm Empty-Scene Action Dock (gated on select tool so it NEVER collides with BottomDock context bars) */}
-      {project.parts.length === 0 &&
+      {!presentationMode &&
+        viewMode === '3d' &&
+        project.parts.length === 0 &&
         !anyModalOpen &&
         !startModalOpen &&
         !leftDrawerMode &&
@@ -3388,14 +3525,16 @@ export default function App() {
       )}
 
       {/* Compact CAD View Compass (Desktop/Tablet) */}
-      <ViewCube
-        inspectorOpen={inspectorOpen && Boolean(selectedPart)}
-        onSelectView={(preset) => viewportRef.current?.setCameraPreset(preset)}
-        onFocusAll={() => viewportRef.current?.focusAll()}
-      />
+      {!presentationMode && viewMode === '3d' && (
+        <ViewCube
+          inspectorOpen={inspectorOpen && Boolean(selectedPart)}
+          onSelectView={(preset) => viewportRef.current?.setCameraPreset(preset)}
+          onFocusAll={() => viewportRef.current?.focusAll()}
+        />
+      )}
 
-      {/* Full-Viewport Realistic 3D CAD Canvas */}
-      <main className="h-full w-full pt-12 md:pt-[52px]">
+      {/* Full-Viewport Realistic 3D CAD Canvas OR Interactive 2D Architectural Plan */}
+      <main className={`relative h-full w-full ${presentationMode ? '' : 'pt-12 md:pt-[52px]'}`}>
         <Viewport3D
           ref={viewportRef}
           parts={project.parts}
@@ -3420,6 +3559,9 @@ export default function App() {
           assemblyPlan={clampedAssemblyStep > 0 ? assemblyPlan : null}
           materialsVersion={materialsVersion}
           lighting={lighting}
+          sceneTheme={sceneTheme}
+          presentationMode={presentationMode}
+          autoOrbit={presentationAutoOrbit}
           customTextures={customTextures}
           collidingPartIds={collisionReport.collidingIds}
           fastenerAuditMap={fastenerAuditMap}
@@ -3440,12 +3582,181 @@ export default function App() {
           onContextMenu={setContextMenu}
           onDoubleClickPart={handleDoubleClickPart}
           onSetClearanceDistance={handleSetClearanceDistance}
+          roomEditMode={roomEditMode}
+          selectedRoomWallIndex={selectedRoomWallIndex}
+          selectedRoomSlopeWallIndex={selectedRoomSlopeWallIndex}
+          selectedLegacySlope={selectedLegacySlope}
+          onSelectRoomWall={(idx) => {
+            setSelectedRoomWallIndex(idx);
+            if (idx !== null) {
+              setInspectorOpen(false);
+            }
+          }}
+          onSelectRoomSlope={(wallIdx, isLegacy) => {
+            setSelectedRoomSlopeWallIndex(wallIdx);
+            setSelectedLegacySlope(Boolean(isLegacy));
+            if (wallIdx !== null || isLegacy) {
+              setInspectorOpen(false);
+            }
+          }}
         />
+
+        {/* Direct 3D Wall & Roof Slope Live Inspector Panel */}
+        {!presentationMode &&
+          viewMode === '3d' &&
+          !anyModalOpen &&
+          (roomEditMode ||
+            selectedRoomWallIndex !== null ||
+            selectedRoomSlopeWallIndex !== null ||
+            selectedLegacySlope) && (
+            <Room3DInspectorPanel
+              room={project.room ?? DEFAULT_ROOM_CONFIG}
+              parts={project.parts}
+              roomEditMode={roomEditMode}
+              selectedWallIndex={selectedRoomWallIndex}
+              selectedSlopeWallIndex={selectedRoomSlopeWallIndex}
+              selectedLegacySlope={selectedLegacySlope}
+              onSelectWall={(idx) => setSelectedRoomWallIndex(idx)}
+              onSelectSlope={(wallIdx, isLegacy) => {
+                setSelectedRoomSlopeWallIndex(wallIdx);
+                setSelectedLegacySlope(Boolean(isLegacy));
+              }}
+              onUpdateRoom={(nextRoom, toastMsg) => {
+                commitProject((prev) => ({
+                  ...prev,
+                  room: nextRoom,
+                }));
+                if (toastMsg) showToast(toastMsg);
+              }}
+              onOpen2DEditor={() => {
+                setRoomEditMode(false);
+                setSelectedRoomWallIndex(null);
+                setSelectedRoomSlopeWallIndex(null);
+                setSelectedLegacySlope(false);
+                setRoomModalOpen(true);
+              }}
+              onClose={() => {
+                setRoomEditMode(false);
+                setSelectedRoomWallIndex(null);
+                setSelectedRoomSlopeWallIndex(null);
+                setSelectedLegacySlope(false);
+              }}
+            />
+          )}
+
+        {/* Interactive 2D Architectural Top-Down Plan Overlay */}
+        {!presentationMode && viewMode === 'plan2d' && (
+          <div className="absolute inset-0 top-12 md:top-[52px] z-20">
+            <Plan2DOverlay
+              projectName={project.name}
+              parts={project.parts}
+              room={project.room}
+              selectedPartId={selectedPartId}
+              selectedPartIds={selectedPartIds}
+              snapMm={snapMm}
+              onSelectPart={handleSelectPart}
+              onMoveParts2D={handleBatchTransformParts}
+              onSwitchTo3D={() => setViewMode('3d')}
+            />
+          </div>
+        )}
       </main>
+
+      {/* Clean Minimal Client Presentation Studio Overlay */}
+      {presentationMode && (
+        <div className="pointer-events-none fixed inset-x-0 bottom-5 z-40 flex justify-center px-3">
+          <div className="studio-glass pointer-events-auto flex flex-wrap items-center justify-center gap-1.5 rounded-2xl px-3 py-2 text-zinc-100 max-w-[calc(100vw-24px)] shadow-2xl">
+            <div className="flex flex-col pr-2 border-r border-white/[0.1] max-w-[180px]">
+              <span className="text-xs font-semibold text-white truncate">{project.name}</span>
+              <span className="text-[10px] text-zinc-400 font-mono-num">
+                {overallDims.width} × {overallDims.height} × {overallDims.depth} mm
+              </span>
+            </div>
+
+            <div className="flex items-center gap-0.5">
+              {(
+                [
+                  { id: 'iso' as const, label: 'Iso' },
+                  { id: 'front' as const, label: 'Przód' },
+                  { id: 'right' as const, label: 'Bok' },
+                  { id: 'top' as const, label: 'Góra' },
+                ] as const
+              ).map((v) => (
+                <button
+                  key={v.id}
+                  type="button"
+                  onClick={() => viewportRef.current?.setCameraPreset(v.id)}
+                  className="h-8 rounded-lg px-2 text-[11px] font-medium text-zinc-300 hover:bg-white/[0.1] hover:text-white transition-colors cursor-pointer"
+                >
+                  {v.label}
+                </button>
+              ))}
+            </div>
+
+            <div className="h-4 w-px bg-white/[0.1]" aria-hidden="true" />
+
+            <button
+              type="button"
+              onClick={() => setPresentationAutoOrbit((v) => !v)}
+              className={`flex h-8 items-center gap-1 rounded-lg px-2.5 text-xs font-medium transition-colors cursor-pointer ${
+                presentationAutoOrbit
+                  ? 'bg-amber-500/20 text-amber-300 border border-amber-400/40'
+                  : 'text-zinc-300 hover:bg-white/[0.1]'
+              }`}
+            >
+              <RotateCw className="h-3.5 w-3.5" />
+              <span>360°</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={handleCycleSceneTheme}
+              className="flex h-8 items-center gap-1 rounded-lg px-2 text-xs font-medium text-zinc-300 hover:bg-white/[0.1] hover:text-white transition-colors cursor-pointer"
+              title="Zmień tło sceny"
+            >
+              <Sun className="h-3.5 w-3.5 text-amber-400" />
+              <span className="hidden sm:inline">
+                {sceneTheme === 'workshop_dark'
+                  ? 'Ciemne'
+                  : sceneTheme === 'blueprint_sketch'
+                    ? 'Szkic'
+                    : 'Jasne'}
+              </span>
+            </button>
+
+            <button
+              type="button"
+              onClick={handleSnapshot}
+              className="flex h-8 items-center gap-1 rounded-lg border border-white/[0.1] bg-white/[0.06] px-2.5 text-xs font-medium text-zinc-100 hover:bg-white/[0.14] transition-colors cursor-pointer"
+            >
+              <Camera className="h-3.5 w-3.5 text-amber-400" />
+              <span>PNG</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => void handleExport3D('glb')}
+              className="flex h-8 items-center gap-1 rounded-lg border border-violet-400/35 bg-violet-500/15 px-2.5 text-xs font-medium text-violet-200 hover:bg-violet-500/25 transition-colors cursor-pointer"
+            >
+              <Box className="h-3.5 w-3.5" />
+              <span>GLB</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setPresentationMode(false)}
+              className="flex h-8 items-center gap-1 rounded-lg bg-amber-500 px-3 text-xs font-semibold text-zinc-950 hover:bg-amber-400 transition-colors cursor-pointer"
+            >
+              <X className="h-3.5 w-3.5" />
+              <span>Zakończ</span>
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Floating Thumb-Friendly Precision Nudge, Flush-Snap & 3-Axis Rotate Pad (Mobile & Desktop) */}
       <PrecisionNudgePad
-        open={nudgePadOpen && Boolean(selectedPart) && !anyModalOpen && !inspectorOpen}
+        open={!presentationMode && viewMode === '3d' && nudgePadOpen && Boolean(selectedPart) && !anyModalOpen && !inspectorOpen}
         defaultTab={tool === 'rotate' ? 'rotate' : 'move'}
         label={selectedSingleCabinet?.config.name ?? selectedPart?.name ?? ''}
         selectedCount={selectedPartIds.length}
@@ -3515,6 +3826,7 @@ export default function App() {
       />
 
       {/* Commercial CAD Left Tool Rail + Slim View Dock + 3-Tab Mobile Sheet */}
+      {!presentationMode && (
       <BottomDock
         collapsed={dockCollapsed}
         onToggleCollapse={() => setDockCollapsed((c) => !c)}
@@ -3667,7 +3979,21 @@ export default function App() {
         onOpenShortcuts={() => setShortcutsOpen(true)}
         onOpenCommandPalette={() => setCommandPaletteOpen(true)}
         onSnapshot={handleSnapshot}
+        viewMode={viewMode}
+        onToggleViewMode={handleToggleViewMode}
+        sceneTheme={sceneTheme}
+        onCycleSceneTheme={handleCycleSceneTheme}
+        onEnterPresentation={() => {
+          setViewMode('3d');
+          setInspectorOpen(false);
+          setLeftDrawerMode(null);
+          setNudgePadOpen(false);
+          setPresentationMode(true);
+          showToast('Tryb Prezentacji Klienta — naciśnij Esc, aby wrócić');
+        }}
+        onAddCornerBracket={handleAddCornerBracket}
       />
+      )}
 
       {/* Contextual On-Demand Scene Outliner, Templates & Projects Drawer */}
       <PartsTemplatesDrawer

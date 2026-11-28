@@ -1,6 +1,7 @@
 import React, { useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle,
+  Box,
   Calculator,
   CheckCircle2,
   Crosshair,
@@ -60,6 +61,7 @@ import {
   printTechnicalDocumentation,
 } from '../engine/documentation';
 import { loadOffcuts, sanitizeImportedProject, saveOffcuts } from '../engine/storage';
+import { exportProjectTo3D, type Export3DFormat } from '../engine/export3D';
 
 interface CutListModalProps {
   open: boolean;
@@ -436,6 +438,20 @@ export const CutListModal: React.FC<CutListModalProps> = ({
     a.download = `${project.name.toLowerCase().replace(/\s+/g, '_')}_rozkroj.csv`;
     a.click();
     URL.revokeObjectURL(url);
+  };
+
+  const [exporting3d, setExporting3d] = useState<Export3DFormat | null>(null);
+
+  const handleExport3D = async (format: Export3DFormat) => {
+    if (exporting3d) return;
+    setExporting3d(format);
+    try {
+      await exportProjectTo3D(project, format);
+    } catch (err) {
+      console.error('3D export failed:', err);
+    } finally {
+      setExporting3d(null);
+    }
   };
 
   const exportDxf = () => {
@@ -1976,6 +1992,24 @@ export const CutListModal: React.FC<CutListModalProps> = ({
           </div>
 
           <div className="flex flex-wrap items-center gap-1.5">
+            <div className="flex items-center rounded-xl border border-violet-500/35 bg-violet-500/10 p-0.5">
+              <span className="flex items-center gap-1 px-2 text-[11px] font-semibold text-violet-300">
+                <Box className="h-3.5 w-3.5" />
+                <span>3D:</span>
+              </span>
+              {(['glb', 'obj', 'stl'] as Export3DFormat[]).map((fmt) => (
+                <button
+                  key={fmt}
+                  type="button"
+                  disabled={exporting3d !== null}
+                  onClick={() => void handleExport3D(fmt)}
+                  title={`Eksportuj cały model 3D w formacie ${fmt.toUpperCase()} (Blender, SketchUp, CAD, druk 3D)`}
+                  className="min-h-[32px] rounded-lg px-2 text-[11px] font-semibold uppercase text-violet-200 hover:bg-violet-500/25 disabled:opacity-50 transition-colors cursor-pointer"
+                >
+                  {exporting3d === fmt ? '...' : fmt}
+                </button>
+              ))}
+            </div>
             <button
               type="button"
               onClick={exportDxf}

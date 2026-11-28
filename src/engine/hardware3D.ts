@@ -368,39 +368,57 @@ export function buildDoorHingeCupsGroup(part: FurniturePart): THREE.Group | null
   group.name = 'door_hinge_cups';
 
   const steelMat = new THREE.MeshStandardMaterial({
-    color: '#C2C9D2',
-    metalness: 0.9,
-    roughness: 0.22,
+    color: '#C8CFD8',
+    metalness: 0.91,
+    roughness: 0.2,
+  });
+  const satinSteelMat = new THREE.MeshStandardMaterial({
+    color: '#A7B1BD',
+    metalness: 0.88,
+    roughness: 0.28,
   });
   const darkRecessMat = new THREE.MeshStandardMaterial({
-    color: '#2B3038',
-    metalness: 0.45,
-    roughness: 0.65,
+    color: '#232830',
+    metalness: 0.4,
+    roughness: 0.68,
   });
 
-  const cupGeo = new THREE.CylinderGeometry(0.0175, 0.0175, 0.01, 20);
+  const cupGeo = new THREE.CylinderGeometry(0.0175, 0.0175, 0.0105, 22);
   cupGeo.rotateX(Math.PI / 2);
-  const flangeGeo = new THREE.BoxGeometry(0.024, 0.052, 0.0022);
-  const screwGeo = new THREE.CylinderGeometry(0.0032, 0.0032, 0.003, 10);
+  const innerBowlGeo = new THREE.CylinderGeometry(0.0146, 0.0138, 0.0022, 18);
+  innerBowlGeo.rotateX(Math.PI / 2);
+  const rimRingGeo = new THREE.TorusGeometry(0.0168, 0.0011, 6, 22);
+  const flangeGeo = new THREE.BoxGeometry(0.023, 0.056, 0.0022);
+  const screwGeo = new THREE.CylinderGeometry(0.0033, 0.0033, 0.0026, 12);
   screwGeo.rotateX(Math.PI / 2);
-  const knuckleGeo = new THREE.CylinderGeometry(0.0042, 0.0042, 0.014, 10);
+  const slotBarGeo = new THREE.BoxGeometry(0.0036, 0.0008, 0.0008);
+  const slotBarVGeo = new THREE.BoxGeometry(0.0008, 0.0036, 0.0008);
+  const earLugGeo = new THREE.BoxGeometry(0.006, 0.0032, 0.0085);
+  const knucklePinGeo = new THREE.CylinderGeometry(0.0024, 0.0024, 0.0155, 10);
 
   for (const pos of positions) {
     const unit = new THREE.Group();
     unit.position.copy(pos);
 
-    // Ø35 mm cup recessed INTO the door thickness (+Z from rear face -d/2)
+    // Ø35 mm pressed-steel cup recessed INTO the door thickness (+Z from rear face -d/2)
     const cup = new THREE.Mesh(cupGeo, steelMat);
-    cup.position.z = 0.0045;
+    cup.position.z = 0.0046;
     unit.add(cup);
 
-    // Dark recessed interior shadow ring flush at z = -0.0005
-    const recess = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.0145, 0.0145, 0.0015, 16).rotateX(Math.PI / 2),
-      darkRecessMat
+    // Dark recessed stepped interior cup bowl + rolled outer steel lip
+    const recess = new THREE.Mesh(innerBowlGeo, darkRecessMat);
+    recess.position.z = -0.0003;
+    const rim = new THREE.Mesh(rimRingGeo, steelMat);
+    rim.position.z = -0.0012;
+    unit.add(recess, rim);
+
+    // Internal steel pivot bridge inside the bowl
+    const innerBridge = new THREE.Mesh(
+      new THREE.BoxGeometry(0.011, 0.014, 0.003),
+      satinSteelMat
     );
-    recess.position.z = -0.0005;
-    unit.add(recess);
+    innerBridge.position.z = -0.0008;
+    unit.add(innerBridge);
 
     // Mounting flange ears flush on the back face of the door (oriented along hinge axis)
     const flange = new THREE.Mesh(flangeGeo, steelMat);
@@ -410,24 +428,36 @@ export function buildDoorHingeCupsGroup(part: FurniturePart): THREE.Group | null
     flange.position.z = -0.0012;
     unit.add(flange);
 
-    // 2 mounting screw heads on the flange (spaced 45 mm apart — Blum standard)
+    // 2 countersunk PZ mounting screw heads on the flange (spaced 45 mm apart — Blum standard)
     for (const sOff of [-0.0225, 0.0225]) {
       const scr = new THREE.Mesh(screwGeo, steelMat);
+      const sl1 = new THREE.Mesh(slotBarGeo, darkRecessMat);
+      const sl2 = new THREE.Mesh(slotBarVGeo, darkRecessMat);
       if (part.hingeSide === 'top') {
-        scr.position.set(sOff, 0, -0.0024);
+        scr.position.set(sOff, 0, -0.0023);
+        sl1.position.set(sOff, 0, -0.0035);
+        sl2.position.set(sOff, 0, -0.0035);
       } else {
-        scr.position.set(0, sOff, -0.0024);
+        scr.position.set(0, sOff, -0.0023);
+        sl1.position.set(0, sOff, -0.0035);
+        sl2.position.set(0, sOff, -0.0035);
       }
-      unit.add(scr);
+      unit.add(scr, sl1, sl2);
     }
 
-    // Small hinge knuckle pin sitting 4 mm behind the back face of the door (strictly inside carcass)
-    const knuckle = new THREE.Mesh(knuckleGeo, steelMat);
+    // Twin articulated hinge knuckle lugs + central steel pivot pin tucked strictly inside carcass (-Z)
+    const knuckleGroup = new THREE.Group();
     if (part.hingeSide === 'top') {
-      knuckle.rotation.z = Math.PI / 2;
+      knuckleGroup.rotation.z = Math.PI / 2;
     }
-    knuckle.position.z = -0.0045;
-    unit.add(knuckle);
+    const topLug = new THREE.Mesh(earLugGeo, satinSteelMat);
+    topLug.position.set(0, 0.0062, -0.0046);
+    const botLug = new THREE.Mesh(earLugGeo, satinSteelMat);
+    botLug.position.set(0, -0.0062, -0.0046);
+    const pin = new THREE.Mesh(knucklePinGeo, steelMat);
+    pin.position.set(0, 0, -0.0065);
+    knuckleGroup.add(topLug, botLug, pin);
+    unit.add(knuckleGroup);
 
     group.add(unit);
   }
@@ -437,8 +467,8 @@ export function buildDoorHingeCupsGroup(part: FurniturePart): THREE.Group | null
 }
 
 /**
- * Composite 6-part realistic adjustable kitchen/furniture leg (mounting flange, ABS barrel,
- * reinforcement ribs, threaded leveling spindle, knurled collar, floor protector foot).
+ * Composite realistic adjustable kitchen/furniture leg (mounting flange with 4 countersunk screws,
+ * ribbed ABS upper barrel, knurled adjustment collar, threaded leveling spindle, beveled anti-slip foot).
  */
 export function buildFurnitureLegGroup(part: FurniturePart): THREE.Group {
   const group = new THREE.Group();
@@ -446,61 +476,108 @@ export function buildFurnitureLegGroup(part: FurniturePart): THREE.Group {
 
   const h = Math.max(0.03, part.height * MM_TO_M);
   const absMat = new THREE.MeshStandardMaterial({
-    color: '#1E2025',
-    roughness: 0.55,
+    color: '#1E2127',
+    roughness: 0.52,
     metalness: 0.08,
+  });
+  const absRibMat = new THREE.MeshStandardMaterial({
+    color: '#272B33',
+    roughness: 0.46,
+    metalness: 0.12,
   });
   const matteRubberMat = new THREE.MeshStandardMaterial({
     color: '#111317',
-    roughness: 0.88,
+    roughness: 0.9,
     metalness: 0.02,
   });
-  const metalCollarMat = new THREE.MeshStandardMaterial({
-    color: '#7A8390',
-    roughness: 0.32,
-    metalness: 0.8,
+  const metalScrewMat = new THREE.MeshStandardMaterial({
+    color: '#9BA5B2',
+    roughness: 0.28,
+    metalness: 0.86,
   });
 
   // 1. Top mounting plate screwed to cabinet bottom deck
   const flangeH = Math.min(0.006, h * 0.12);
-  const flange = new THREE.Mesh(new THREE.BoxGeometry(0.052, flangeH, 0.052), absMat);
+  const flange = new THREE.Mesh(new THREE.BoxGeometry(0.054, flangeH, 0.054), absMat);
   flange.position.y = h / 2 - flangeH / 2;
   group.add(flange);
 
-  // 4 corner screw heads on mounting plate
-  const bossGeo = new THREE.CylinderGeometry(0.0032, 0.0032, 0.002, 8);
+  // 4 corner countersunk metal screw heads on mounting plate
+  const bossGeo = new THREE.CylinderGeometry(0.0032, 0.0032, 0.002, 10);
   for (const [bx, bz] of [
-    [-0.019, -0.019],
-    [0.019, -0.019],
-    [-0.019, 0.019],
-    [0.019, 0.019],
+    [-0.02, -0.02],
+    [0.02, -0.02],
+    [-0.02, 0.02],
+    [0.02, 0.02],
   ]) {
-    const boss = new THREE.Mesh(bossGeo, metalCollarMat);
+    const boss = new THREE.Mesh(bossGeo, metalScrewMat);
     boss.position.set(bx, h / 2 - flangeH - 0.0008, bz);
     group.add(boss);
   }
 
-  // 2. Upper cylindrical ABS sleeve
+  // 2. Upper cylindrical ABS sleeve + 4 radial vertical structural reinforcement ribs (żeberka)
   const upperH = Math.max(0.012, h * 0.54);
+  const upperCenterY = h / 2 - flangeH - upperH / 2;
   const sleeve = new THREE.Mesh(new THREE.CylinderGeometry(0.0155, 0.0145, upperH, 16), absMat);
-  sleeve.position.y = h / 2 - flangeH - upperH / 2;
+  sleeve.position.y = upperCenterY;
   group.add(sleeve);
 
-  // 3. Lower threaded leveling stem
+  const ribGeo = new THREE.BoxGeometry(0.0028, upperH * 0.88, 0.0075);
+  for (let i = 0; i < 4; i++) {
+    const ang = (i * Math.PI) / 2 + Math.PI / 4;
+    const rib = new THREE.Mesh(ribGeo, absRibMat);
+    rib.position.set(Math.cos(ang) * 0.0155, upperCenterY + upperH * 0.04, Math.sin(ang) * 0.0155);
+    rib.rotation.y = -ang + Math.PI / 2;
+    group.add(rib);
+  }
+
+  // 3. Lower threaded leveling stem + visible coarse helical thread rings
   const lowerH = Math.max(0.01, h - flangeH - upperH - 0.008);
-  const stem = new THREE.Mesh(new THREE.CylinderGeometry(0.0115, 0.0115, lowerH + 0.008, 14), absMat);
+  const stem = new THREE.Mesh(new THREE.CylinderGeometry(0.0112, 0.0112, lowerH + 0.008, 14), absMat);
   stem.position.y = -h / 2 + 0.008 + lowerH / 2;
   group.add(stem);
 
-  // 4. Adjustment collar ring at sleeve/stem junction
-  const collar = new THREE.Mesh(new THREE.CylinderGeometry(0.0185, 0.0185, 0.009, 18), absMat);
-  collar.position.y = h / 2 - flangeH - upperH;
+  const threadCount = Math.max(3, Math.min(8, Math.floor(lowerH / 0.0055)));
+  const threadGeo = new THREE.TorusGeometry(0.0116, 0.0009, 5, 14);
+  threadGeo.rotateX(Math.PI / 2);
+  const threads = new THREE.InstancedMesh(threadGeo, absRibMat, threadCount);
+  const dummy = new THREE.Object3D();
+  for (let i = 0; i < threadCount; i++) {
+    const frac = threadCount === 1 ? 0.5 : i / (threadCount - 1);
+    dummy.position.set(0, -h / 2 + 0.011 + frac * Math.max(0.004, lowerH - 0.006), 0);
+    dummy.rotation.set(0.05, 0, 0);
+    dummy.scale.set(1, 1, 1);
+    dummy.updateMatrix();
+    threads.setMatrixAt(i, dummy.matrix);
+  }
+  threads.instanceMatrix.needsUpdate = true;
+  group.add(threads);
+
+  // 4. Knurled adjustment collar ring at sleeve/stem junction (with 6 radial grip notches)
+  const collarY = h / 2 - flangeH - upperH;
+  const collar = new THREE.Mesh(new THREE.CylinderGeometry(0.0182, 0.0182, 0.0095, 18), absRibMat);
+  collar.position.y = collarY;
   group.add(collar);
 
-  // 5. Wide flared floor-glider foot pad sitting flush on Y = -h/2
-  const foot = new THREE.Mesh(new THREE.CylinderGeometry(0.016, 0.022, 0.008, 18), matteRubberMat);
-  foot.position.y = -h / 2 + 0.004;
-  group.add(foot);
+  const gripGeo = new THREE.BoxGeometry(0.0024, 0.0082, 0.0028);
+  const grips = new THREE.InstancedMesh(gripGeo, absMat, 8);
+  for (let i = 0; i < 8; i++) {
+    const ang = (i / 8) * Math.PI * 2;
+    dummy.position.set(Math.cos(ang) * 0.0185, collarY, Math.sin(ang) * 0.0185);
+    dummy.rotation.set(0, -ang, 0);
+    dummy.scale.set(1, 1, 1);
+    dummy.updateMatrix();
+    grips.setMatrixAt(i, dummy.matrix);
+  }
+  grips.instanceMatrix.needsUpdate = true;
+  group.add(grips);
+
+  // 5. Wide flared floor-glider foot pad + thin anti-slip rubber sole flush on Y = -h/2
+  const foot = new THREE.Mesh(new THREE.CylinderGeometry(0.0155, 0.0225, 0.0065, 18), absMat);
+  foot.position.y = -h / 2 + 0.0052;
+  const rubberSole = new THREE.Mesh(new THREE.CylinderGeometry(0.0225, 0.022, 0.0022, 18), matteRubberMat);
+  rubberSole.position.y = -h / 2 + 0.0011;
+  group.add(foot, rubberSole);
 
   markDisposable(group);
   return group;
@@ -603,39 +680,78 @@ export function buildSlidingDoorRollersGroup(part: FurniturePart): THREE.Group |
   const d = part.depth * MM_TO_M;
 
   const steelMat = new THREE.MeshStandardMaterial({
-    color: '#B8C0CA',
-    metalness: 0.88,
-    roughness: 0.25,
+    color: '#BFC7D1',
+    metalness: 0.9,
+    roughness: 0.24,
+  });
+  const chromeHubMat = new THREE.MeshStandardMaterial({
+    color: '#E6EBF2',
+    metalness: 0.96,
+    roughness: 0.12,
   });
   const nylonWheelMat = new THREE.MeshStandardMaterial({
-    color: '#1F242C',
-    metalness: 0.1,
+    color: '#1E232B',
+    metalness: 0.08,
     roughness: 0.65,
   });
 
+  const screwGeo = new THREE.CylinderGeometry(0.0028, 0.0028, 0.002, 8).rotateX(Math.PI / 2);
+  const wheelTireGeo = new THREE.CylinderGeometry(0.0135, 0.0135, 0.0068, 18).rotateX(Math.PI / 2);
+  const wheelHubGeo = new THREE.CylinderGeometry(0.0055, 0.0055, 0.0082, 12).rotateX(Math.PI / 2);
+  const axleGeo = new THREE.CylinderGeometry(0.0026, 0.0026, 0.013, 10).rotateX(Math.PI / 2);
+
   const xInset = Math.min(0.085, w * 0.16);
   for (const sx of [-w / 2 + xInset, w / 2 - xInset]) {
-    // Bottom roller bracket + nylon wheel riding on bottom track
-    const botPlate = new THREE.Mesh(new THREE.BoxGeometry(0.058, 0.044, 0.003), steelMat);
+    // Bottom spring-loaded roller carriage: mounting plate + 3 screws + leveling hex bolt + flanged bearing wheel
+    const botPlate = new THREE.Mesh(new THREE.BoxGeometry(0.062, 0.048, 0.003), steelMat);
     botPlate.position.set(sx, -h / 2 + 0.028, -d / 2 - 0.002);
-    const wheel = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.013, 0.013, 0.007, 16).rotateX(Math.PI / 2),
-      nylonWheelMat
-    );
-    wheel.position.set(sx, -h / 2 - 0.002, 0);
-    group.add(botPlate, wheel);
+    const botHousing = new THREE.Mesh(new THREE.BoxGeometry(0.036, 0.03, 0.012), steelMat);
+    botHousing.position.set(sx, -h / 2 + 0.016, -d / 2 - 0.0075);
+    const adjHex = new THREE.Mesh(new THREE.CylinderGeometry(0.004, 0.004, 0.008, 6), chromeHubMat);
+    adjHex.position.set(sx + 0.018, -h / 2 + 0.042, -d / 2 - 0.006);
 
-    // Top guide carriage bracket + twin guide rollers riding inside top track channel
-    const topPlate = new THREE.Mesh(new THREE.BoxGeometry(0.056, 0.038, 0.003), steelMat);
-    topPlate.position.set(sx, h / 2 - 0.025, -d / 2 - 0.002);
-    const guideStem = new THREE.Mesh(new THREE.BoxGeometry(0.024, 0.026, 0.006), steelMat);
+    for (const [dx, dy] of [
+      [-0.022, 0.016],
+      [0.022, 0.016],
+      [-0.022, -0.014],
+    ]) {
+      const scr = new THREE.Mesh(screwGeo, chromeHubMat);
+      scr.position.set(sx + dx, -h / 2 + 0.028 + dy, -d / 2 - 0.0038);
+      group.add(scr);
+    }
+
+    const wheel = new THREE.Mesh(wheelTireGeo, nylonWheelMat);
+    wheel.position.set(sx, -h / 2 - 0.002, 0);
+    const wheelHub = new THREE.Mesh(wheelHubGeo, chromeHubMat);
+    wheelHub.position.set(sx, -h / 2 - 0.002, 0);
+    const wheelAxle = new THREE.Mesh(axleGeo, steelMat);
+    wheelAxle.position.set(sx, -h / 2 - 0.002, 0);
+    group.add(botPlate, botHousing, adjHex, wheel, wheelHub, wheelAxle);
+
+    // Top guide carriage: steel plate + 2 screws + twin coaxial spring-loaded nylon guide wheels
+    const topPlate = new THREE.Mesh(new THREE.BoxGeometry(0.058, 0.04, 0.003), steelMat);
+    topPlate.position.set(sx, h / 2 - 0.024, -d / 2 - 0.002);
+    for (const dx of [-0.02, 0.02]) {
+      const scr = new THREE.Mesh(screwGeo, chromeHubMat);
+      scr.position.set(sx + dx, h / 2 - 0.024, -d / 2 - 0.0038);
+      group.add(scr);
+    }
+    const guideStem = new THREE.Mesh(new THREE.BoxGeometry(0.028, 0.026, 0.006), steelMat);
     guideStem.position.set(sx, h / 2 + 0.008, 0);
-    const guideWheel = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.01, 0.01, 0.008, 12),
-      nylonWheelMat
-    );
-    guideWheel.position.set(sx, h / 2 + 0.016, 0);
-    group.add(topPlate, guideStem, guideWheel);
+    for (const gx of [-0.011, 0.011]) {
+      const gWheel = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.0088, 0.0088, 0.0072, 12),
+        nylonWheelMat
+      );
+      gWheel.position.set(sx + gx, h / 2 + 0.017, 0);
+      const gPin = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.0026, 0.0026, 0.0095, 8),
+        chromeHubMat
+      );
+      gPin.position.set(sx + gx, h / 2 + 0.017, 0);
+      group.add(gWheel, gPin);
+    }
+    group.add(topPlate, guideStem);
   }
 
   markDisposable(group);
@@ -834,35 +950,95 @@ export function buildCabinetHardwareScene(
       plateGroup.position.copy(plateWorld);
       plateGroup.quaternion.copy(doorQuat);
 
-      // Cruciform mounting plate (prowadnik krzyżakowy Blum) flat against inner carcass wall
+      // Cruciform mounting plate (prowadnik krzyżakowy Blum System 32) flat against inner carcass wall
       const sign = door.hingeSide === 'left' ? 1 : door.hingeSide === 'right' ? -1 : -1;
       if (door.hingeSide === 'top') {
-        const crossBar = new THREE.Mesh(new THREE.BoxGeometry(0.044, 0.004, 0.016), galvanizedSteelMat);
-        crossBar.position.set(0, -0.002, 0);
-        const spine = new THREE.Mesh(new THREE.BoxGeometry(0.016, 0.008, 0.036), galvanizedSteelMat);
-        spine.position.set(0, -0.005, 0.004);
-        plateGroup.add(crossBar, spine);
+        const crossBar = new THREE.Mesh(new THREE.BoxGeometry(0.048, 0.0035, 0.017), galvanizedSteelMat);
+        crossBar.position.set(0, -0.0018, 0);
+        const spine = new THREE.Mesh(new THREE.BoxGeometry(0.017, 0.0075, 0.042), galvanizedSteelMat);
+        spine.position.set(0, -0.005, 0.003);
+        const euroGeo = new THREE.CylinderGeometry(0.0035, 0.0035, 0.0028, 10);
+        const slotGeo = new THREE.BoxGeometry(0.0034, 0.0007, 0.0008);
+        for (const sx of [-0.016, 0.016]) {
+          const es = new THREE.Mesh(euroGeo, brushedNickelMat);
+          es.position.set(sx, -0.0042, 0);
+          const sl = new THREE.Mesh(slotGeo, darkPolymerMat);
+          sl.position.set(sx, -0.0056, 0);
+          plateGroup.add(es, sl);
+        }
+        // Central height cam adjuster screw
+        const camScr = new THREE.Mesh(new THREE.CylinderGeometry(0.0032, 0.0032, 0.0024, 10), chromeMat);
+        camScr.position.set(0, -0.009, 0.006);
+        plateGroup.add(crossBar, spine, camScr);
       } else {
-        const crossBar = new THREE.Mesh(new THREE.BoxGeometry(0.004, 0.046, 0.016), galvanizedSteelMat);
-        crossBar.position.set(sign * 0.002, 0, 0);
-        const spine = new THREE.Mesh(new THREE.BoxGeometry(0.009, 0.016, 0.038), galvanizedSteelMat);
-        spine.position.set(sign * 0.006, 0, 0.004);
-        // 2 Euro screw heads spaced 32 mm vertically
-        const euroGeo = new THREE.CylinderGeometry(0.0036, 0.0036, 0.003, 10).rotateZ(Math.PI / 2);
-        const sTop = new THREE.Mesh(euroGeo, brushedNickelMat);
-        sTop.position.set(sign * 0.0045, 0.016, 0);
-        const sBot = new THREE.Mesh(euroGeo, brushedNickelMat);
-        sBot.position.set(sign * 0.0045, -0.016, 0);
-        plateGroup.add(crossBar, spine, sTop, sBot);
+        const crossBar = new THREE.Mesh(new THREE.BoxGeometry(0.0035, 0.048, 0.017), galvanizedSteelMat);
+        crossBar.position.set(sign * 0.0018, 0, 0);
+        const spine = new THREE.Mesh(new THREE.BoxGeometry(0.008, 0.017, 0.042), galvanizedSteelMat);
+        spine.position.set(sign * 0.0052, 0, 0.003);
+        // 2 Euro screw heads spaced 32 mm vertically with PZ slots
+        const euroGeo = new THREE.CylinderGeometry(0.0036, 0.0036, 0.0028, 10).rotateZ(Math.PI / 2);
+        const slotHGeo = new THREE.BoxGeometry(0.0007, 0.0038, 0.0008);
+        const slotVGeo = new THREE.BoxGeometry(0.0007, 0.0008, 0.0038);
+        for (const sy of [-0.016, 0.016]) {
+          const scr = new THREE.Mesh(euroGeo, brushedNickelMat);
+          scr.position.set(sign * 0.0042, sy, 0);
+          const sl1 = new THREE.Mesh(slotHGeo, darkPolymerMat);
+          sl1.position.set(sign * 0.0056, sy, 0);
+          const sl2 = new THREE.Mesh(slotVGeo, darkPolymerMat);
+          sl2.position.set(sign * 0.0056, sy, 0);
+          plateGroup.add(scr, sl1, sl2);
+        }
+        // Central cam height adjuster screw on mounting plate spine
+        const camScr = new THREE.Mesh(
+          new THREE.CylinderGeometry(0.0032, 0.0032, 0.0022, 10).rotateZ(Math.PI / 2),
+          chromeMat
+        );
+        camScr.position.set(sign * 0.0096, 0, -0.006);
+        plateGroup.add(crossBar, spine, camScr);
       }
 
-      // Articulating steel hinge arm anchored at mounting plate -> dynamically points to moving door cup!
+      // Articulating 4-bar Blum CLIP top hinge arm: sculpted cover housing + 2 visible 3D adjustment screws
+      // + rear spring CLIP release tab + dynamically extending linkage bar!
       const armGroup = new THREE.Group();
       armGroup.position.copy(plateWorld);
-      const armGeo = new THREE.BoxGeometry(0.013, 0.013, 1);
-      armGeo.translate(0, 0, 0.5); // origin at plate end, +Z stretches toward door cup
-      const armMesh = new THREE.Mesh(armGeo, brushedNickelMat);
+
+      // Dynamic telescopic inner bridge link scaled strictly from 0..dist in update()
+      const armGeo = new THREE.BoxGeometry(0.0085, 0.009, 1);
+      armGeo.translate(0, 0, 0.5);
+      const armMesh = new THREE.Mesh(armGeo, galvanizedSteelMat);
       armGroup.add(armMesh);
+
+      // Sculpted brushed-nickel CLIP top hinge arm body sitting at the plate side (never stretched)
+      const armBody = new THREE.Mesh(
+        new THREE.BoxGeometry(0.0145, 0.0145, 0.034),
+        brushedNickelMat
+      );
+      armBody.position.set(0, 0, 0.014);
+      // Top bevel cap ridge on hinge arm
+      const armCap = new THREE.Mesh(
+        new THREE.BoxGeometry(0.0115, 0.003, 0.03),
+        chromeMat
+      );
+      armCap.position.set(0, 0.008, 0.014);
+      // Rear spring-loaded CLIP-on release latch tab
+      const clipTab = new THREE.Mesh(
+        new THREE.BoxGeometry(0.012, 0.009, 0.009),
+        galvanizedSteelMat
+      );
+      clipTab.position.set(0, 0, -0.006);
+      // 2 iconic visible 3D adjustment screws: front overlay screw + rear eccentric depth cam screw
+      const adjScrewGeo = new THREE.CylinderGeometry(0.0032, 0.0032, 0.0035, 10);
+      const overlayScrew = new THREE.Mesh(adjScrewGeo, chromeMat);
+      overlayScrew.position.set(0, 0.0098, 0.022);
+      const overlaySlot = new THREE.Mesh(new THREE.BoxGeometry(0.0034, 0.0008, 0.0009), darkPolymerMat);
+      overlaySlot.position.set(0, 0.0116, 0.022);
+
+      const depthCam = new THREE.Mesh(new THREE.CylinderGeometry(0.0038, 0.0038, 0.003, 12), chromeMat);
+      depthCam.position.set(0, 0.0096, 0.008);
+      const depthSlot = new THREE.Mesh(new THREE.BoxGeometry(0.0009, 0.0008, 0.0038), darkPolymerMat);
+      depthSlot.position.set(0, 0.0112, 0.008);
+
+      armGroup.add(armBody, armCap, clipTab, overlayScrew, overlaySlot, depthCam, depthSlot);
 
       markDisposable(plateGroup);
       markDisposable(armGroup);
@@ -891,21 +1067,29 @@ export function buildCabinetHardwareScene(
         const carcassLocal = new THREE.Vector3(sideSign * (w / 2 - 0.022), carcassY, carcassZ);
         const carcassWorld = carcassLocal.clone().applyQuaternion(doorQuat).add(doorBasePos);
 
-        // Stationary ball-stud bracket + dark outer pneumatic cylinder (length 115 mm)
+        // Stationary ball-stud mounting plate + dark anodized pneumatic barrel + rubber seal collar
         const cylinderGroup = new THREE.Group();
         cylinderGroup.position.copy(carcassWorld);
-        const bracket = new THREE.Mesh(new THREE.CylinderGeometry(0.01, 0.01, 0.006, 12), galvanizedSteelMat);
-        bracket.rotation.z = Math.PI / 2;
-        const cylGeo = new THREE.CylinderGeometry(0.0072, 0.0072, 0.11, 12);
+        const mountBase = new THREE.Mesh(new THREE.CylinderGeometry(0.0115, 0.0115, 0.0045, 14), galvanizedSteelMat);
+        mountBase.rotation.z = Math.PI / 2;
+        const ballSocket = new THREE.Mesh(new THREE.SphereGeometry(0.0062, 10, 8), darkPolymerMat);
+        ballSocket.position.z = 0.004;
+        const cylGeo = new THREE.CylinderGeometry(0.0074, 0.0074, 0.108, 14);
         cylGeo.rotateX(Math.PI / 2);
-        cylGeo.translate(0, 0, 0.055);
-        const cylMesh = new THREE.Mesh(cylGeo, darkPolymerMat);
-        cylinderGroup.add(bracket, cylMesh);
+        cylGeo.translate(0, 0, 0.06);
+        const cylMesh = new THREE.Mesh(cylGeo, tandemAnthraciteMat);
+        // Rubber oil-seal collar ring at mouth of cylinder
+        const sealCollar = new THREE.Mesh(
+          new THREE.CylinderGeometry(0.0066, 0.0076, 0.007, 12).rotateX(Math.PI / 2),
+          darkPolymerMat
+        );
+        sealCollar.position.z = 0.116;
+        cylinderGroup.add(mountBase, ballSocket, cylMesh, sealCollar);
 
-        // Chrome telescoping piston rod from cylinder toward door bracket
+        // Chrome telescoping piston rod + far-end ball-socket clevis head
         const pistonGroup = new THREE.Group();
         pistonGroup.position.copy(carcassWorld);
-        const pistonGeo = new THREE.CylinderGeometry(0.0034, 0.0034, 1, 10);
+        const pistonGeo = new THREE.CylinderGeometry(0.0033, 0.0033, 1, 10);
         pistonGeo.rotateX(Math.PI / 2);
         pistonGeo.translate(0, 0, 0.5);
         const pistonMesh = new THREE.Mesh(pistonGeo, chromeMat);
@@ -932,6 +1116,15 @@ export function buildCabinetHardwareScene(
   // 2. 3D DRAWER SLIDES (BALL-BEARING / BLUM UNDERMOUNT / TANDEMBOX METAL)
   // =========================================================================
   const drawerAssemblies = analyzeDrawerAssemblies(visibleParts);
+
+  const slotMat = new THREE.MeshStandardMaterial({
+    color: '#191D23',
+    metalness: 0.25,
+    roughness: 0.78,
+    polygonOffset: true,
+    polygonOffsetFactor: -1,
+    polygonOffsetUnits: -1,
+  });
 
   for (const drw of drawerAssemblies) {
     const frontPos = partBasePos.get(drw.front.id);
@@ -960,22 +1153,33 @@ export function buildCabinetHardwareScene(
         const railY = boxCenterM.y - Math.min(0.012, drw.boxHeightMm * MM_TO_M * 0.12);
         const railZ = boxCenterM.z;
 
-        // (A) Stationary Outer C-Channel screwed to cabinet side wall
+        // (A) Stationary Outer C-Channel screwed to cabinet side wall + oblong mounting slots + rear bumper
         const outerLocal = new THREE.Vector3(wallX + inward * 0.0025, railY, railZ);
         const outerGroup = new THREE.Group();
-        const outerWeb = new THREE.Mesh(new THREE.BoxGeometry(0.002, 0.044, railLenM), galvanizedSteelMat);
-        const outerTopLip = new THREE.Mesh(new THREE.BoxGeometry(0.008, 0.003, railLenM), galvanizedSteelMat);
+        const outerWeb = new THREE.Mesh(new THREE.BoxGeometry(0.0022, 0.044, railLenM), galvanizedSteelMat);
+        const outerTopLip = new THREE.Mesh(new THREE.BoxGeometry(0.0085, 0.0032, railLenM), galvanizedSteelMat);
         outerTopLip.position.set(inward * 0.0035, 0.0205, 0);
-        const outerBotLip = new THREE.Mesh(new THREE.BoxGeometry(0.008, 0.003, railLenM), galvanizedSteelMat);
+        const outerBotLip = new THREE.Mesh(new THREE.BoxGeometry(0.0085, 0.0032, railLenM), galvanizedSteelMat);
         outerBotLip.position.set(inward * 0.0035, -0.0205, 0);
-        outerGroup.add(outerWeb, outerTopLip, outerBotLip);
-        // 3 mounting screw heads along carcass rail
-        const scrGeo = new THREE.CylinderGeometry(0.0028, 0.0028, 0.0025, 8).rotateZ(Math.PI / 2);
-        for (const frac of [-0.38, 0, 0.38]) {
+        // Rear black rubber end-stop bumper
+        const rearStop = new THREE.Mesh(new THREE.BoxGeometry(0.007, 0.026, 0.012), darkPolymerMat);
+        rearStop.position.set(inward * 0.0035, 0, -railLenM * 0.48);
+        outerGroup.add(outerWeb, outerTopLip, outerBotLip, rearStop);
+
+        // Oblong mounting slots (fasolki) + 3 Euro mounting screw heads along carcass rail
+        const slotGeo = new THREE.BoxGeometry(0.0026, 0.0046, 0.012);
+        const scrGeo = new THREE.CylinderGeometry(0.0028, 0.0028, 0.0026, 8).rotateZ(Math.PI / 2);
+        for (const frac of [-0.36, -0.18, 0, 0.18, 0.36]) {
+          const sl = new THREE.Mesh(slotGeo, slotMat);
+          sl.position.set(inward * 0.0004, 0, railLenM * frac);
+          outerGroup.add(sl);
+        }
+        for (const frac of [-0.36, 0, 0.36]) {
           const scr = new THREE.Mesh(scrGeo, brushedNickelMat);
           scr.position.set(inward * 0.002, 0, railLenM * frac);
           outerGroup.add(scr);
         }
+
         const outerWorld = outerLocal.clone().applyQuaternion(frontQuat).add(frontPos);
         outerGroup.position.copy(outerWorld);
         outerGroup.quaternion.copy(frontQuat);
@@ -992,7 +1196,7 @@ export function buildCabinetHardwareScene(
           travelFactor: 0,
         });
 
-        // (B) Intermediate Telescopic Ball-Cage Rail (moves at 0.5x drawer travel!)
+        // (B) Intermediate Telescopic Ball-Cage Rail with visible gleaming chrome steel ball bearings (0.5x!)
         const midX = (wallX + boxEdgeX) * 0.5;
         const midLocal = new THREE.Vector3(midX, railY, railZ);
         const midGroup = new THREE.Group();
@@ -1001,16 +1205,35 @@ export function buildCabinetHardwareScene(
           brushedNickelMat
         );
         const ballCageTop = new THREE.Mesh(
-          new THREE.BoxGeometry(0.0045, 0.0045, railLenM * 0.82),
+          new THREE.BoxGeometry(0.0046, 0.0044, railLenM * 0.84),
           darkPolymerMat
         );
-        ballCageTop.position.y = 0.015;
+        ballCageTop.position.y = 0.0152;
         const ballCageBot = new THREE.Mesh(
-          new THREE.BoxGeometry(0.0045, 0.0045, railLenM * 0.82),
+          new THREE.BoxGeometry(0.0046, 0.0044, railLenM * 0.84),
           darkPolymerMat
         );
-        ballCageBot.position.y = -0.015;
+        ballCageBot.position.y = -0.0152;
         midGroup.add(midRail, ballCageTop, ballCageBot);
+
+        // Visible bright chrome steel ball bearings seated in top & bottom raceways (1 instanced draw call!)
+        const ballsPerTrack = Math.max(5, Math.min(8, Math.round(railLenM * 18)));
+        const ballGeo = new THREE.SphereGeometry(0.0023, 8, 6);
+        const ballInst = new THREE.InstancedMesh(ballGeo, chromeMat, ballsPerTrack * 2);
+        const bDummy = new THREE.Object3D();
+        let bIdx = 0;
+        for (const yOff of [0.0152, -0.0152]) {
+          for (let bi = 0; bi < ballsPerTrack; bi++) {
+            const frac = ballsPerTrack === 1 ? 0 : -0.38 + (bi / (ballsPerTrack - 1)) * 0.76;
+            bDummy.position.set(inward * 0.0014, yOff, railLenM * frac);
+            bDummy.rotation.set(0, 0, 0);
+            bDummy.scale.set(1, 1, 1);
+            bDummy.updateMatrix();
+            ballInst.setMatrixAt(bIdx++, bDummy.matrix);
+          }
+        }
+        ballInst.instanceMatrix.needsUpdate = true;
+        midGroup.add(ballInst);
 
         const midWorld = midLocal.clone().applyQuaternion(frontQuat).add(frontPos);
         midGroup.position.copy(midWorld);
@@ -1028,19 +1251,31 @@ export function buildCabinetHardwareScene(
           travelFactor: 0.5,
         });
 
-        // (C) Inner Runner Profile screwed to drawer box side + black release trigger (moves 1.0x!)
+        // (C) Inner Runner Profile screwed to drawer box side + oblong slots + sculpted black release trigger (1.0x!)
         const innerLocal = new THREE.Vector3(boxEdgeX - inward * 0.0022, railY, railZ);
         const innerGroup = new THREE.Group();
         const innerBar = new THREE.Mesh(
-          new THREE.BoxGeometry(0.0035, 0.022, railLenM * 0.96),
+          new THREE.BoxGeometry(0.0036, 0.022, railLenM * 0.96),
           galvanizedSteelMat
         );
-        const releaseLever = new THREE.Mesh(
-          new THREE.BoxGeometry(0.0048, 0.01, 0.034),
+        for (const frac of [-0.34, -0.08, 0.34]) {
+          const sl = new THREE.Mesh(new THREE.BoxGeometry(0.004, 0.0042, 0.011), slotMat);
+          sl.position.set(0, 0, railLenM * frac);
+          innerGroup.add(sl);
+        }
+        // Sculpted black polymer quick-disconnect trigger lever
+        const releaseBase = new THREE.Mesh(
+          new THREE.BoxGeometry(0.0046, 0.011, 0.036),
           darkPolymerMat
         );
-        releaseLever.position.set(-inward * 0.001, 0, railLenM * 0.22);
-        innerGroup.add(innerBar, releaseLever);
+        releaseBase.position.set(-inward * 0.0012, 0, railLenM * 0.21);
+        const releaseTab = new THREE.Mesh(
+          new THREE.BoxGeometry(0.0056, 0.0075, 0.016),
+          darkPolymerMat
+        );
+        releaseTab.position.set(-inward * 0.002, 0.0025, railLenM * 0.24);
+        releaseTab.rotation.x = 0.22;
+        innerGroup.add(innerBar, releaseBase, releaseTab);
 
         const innerWorld = innerLocal.clone().applyQuaternion(frontQuat).add(frontPos);
         innerGroup.position.copy(innerWorld);
@@ -1058,34 +1293,57 @@ export function buildCabinetHardwareScene(
           travelFactor: 1.0,
         });
       } else if (drw.slideType === 'undermount_blum') {
-        // --- Blum Movento / Tandem Concealed Undermount Slide + Soft-Close Damper + Front Clutches ---
+        // --- Blum Movento / Tandem Concealed Undermount Slide + Hydraulic Soft-Close Damper + Front Clutches ---
         const runnerY = boxBottomYM + 0.006; // tucks cleanly into the 13 mm under-bottom recess
         const railZ = boxCenterM.z;
 
-        // (A) Stationary Heavy-Duty Carcass L-Runner + Blumotion Hydraulic Damper
+        // (A) Stationary Heavy-Duty Carcass L-Runner + Blumotion Hydraulic Damper + Chrome Piston
         const outerLocal = new THREE.Vector3(wallX + inward * 0.009, runnerY, railZ);
         const outerGroup = new THREE.Group();
         const wallPlate = new THREE.Mesh(
-          new THREE.BoxGeometry(0.0028, 0.036, railLenM),
+          new THREE.BoxGeometry(0.0028, 0.038, railLenM),
           galvanizedSteelMat
         );
         wallPlate.position.set(-inward * 0.0075, 0.008, 0);
+        // Oblong mounting holes + 3 Euro screws on wall plate
+        for (const frac of [-0.35, 0, 0.35]) {
+          const sl = new THREE.Mesh(new THREE.BoxGeometry(0.0032, 0.005, 0.012), slotMat);
+          sl.position.set(-inward * 0.0075, 0.014, railLenM * frac);
+          const scr = new THREE.Mesh(
+            new THREE.CylinderGeometry(0.0028, 0.0028, 0.0026, 8).rotateZ(Math.PI / 2),
+            brushedNickelMat
+          );
+          scr.position.set(-inward * 0.0056, 0.014, railLenM * frac);
+          outerGroup.add(sl, scr);
+        }
         const baseLedge = new THREE.Mesh(
-          new THREE.BoxGeometry(0.022, 0.004, railLenM),
+          new THREE.BoxGeometry(0.023, 0.0042, railLenM),
           galvanizedSteelMat
         );
         baseLedge.position.set(inward * 0.002, -0.008, 0);
+        // Sculpted Blumotion soft-close hydraulic cylinder + chrome damper rod + orange catch hook
         const damperBody = new THREE.Mesh(
-          new THREE.BoxGeometry(0.012, 0.013, 0.115),
+          new THREE.BoxGeometry(0.012, 0.013, 0.112),
           darkPolymerMat
         );
-        damperBody.position.set(inward * 0.004, -0.001, -railLenM * 0.25);
+        damperBody.position.set(inward * 0.004, -0.001, -railLenM * 0.26);
+        const damperPiston = new THREE.Mesh(
+          new THREE.CylinderGeometry(0.0024, 0.0024, 0.055, 8).rotateX(Math.PI / 2),
+          chromeMat
+        );
+        damperPiston.position.set(inward * 0.004, 0.001, -railLenM * 0.14);
         const damperAccent = new THREE.Mesh(
-          new THREE.BoxGeometry(0.013, 0.006, 0.028),
+          new THREE.BoxGeometry(0.0135, 0.007, 0.028),
           blumOrangeMat
         );
-        damperAccent.position.set(inward * 0.004, 0.001, -railLenM * 0.09);
-        outerGroup.add(wallPlate, baseLedge, damperBody, damperAccent);
+        damperAccent.position.set(inward * 0.004, 0.0015, -railLenM * 0.08);
+        // Rear steel hook pin engaging back of wooden drawer
+        const rearHook = new THREE.Mesh(
+          new THREE.CylinderGeometry(0.0026, 0.0026, 0.014, 8).rotateX(Math.PI / 2),
+          chromeMat
+        );
+        rearHook.position.set(inward * 0.006, 0.006, -railLenM * 0.47);
+        outerGroup.add(wallPlate, baseLedge, damperBody, damperPiston, damperAccent, rearHook);
 
         const outerWorld = outerLocal.clone().applyQuaternion(frontQuat).add(frontPos);
         outerGroup.position.copy(outerWorld);
@@ -1103,13 +1361,19 @@ export function buildCabinetHardwareScene(
           travelFactor: 0,
         });
 
-        // (B) Synchronized Intermediate Undermount Runner (moves 0.5x!)
+        // (B) Synchronized Intermediate Undermount Runner + twin Delrin roller guides (0.5x!)
         const midLocal = new THREE.Vector3(boxEdgeX + inward * 0.012, boxBottomYM + 0.002, railZ);
         const midGroup = new THREE.Group();
         const midRail = new THREE.Mesh(
-          new THREE.BoxGeometry(0.014, 0.011, railLenM * 0.92),
+          new THREE.BoxGeometry(0.0145, 0.011, railLenM * 0.92),
           brushedNickelMat
         );
+        const rollerGeo = new THREE.CylinderGeometry(0.0048, 0.0048, 0.006, 10).rotateZ(Math.PI / 2);
+        for (const rFrac of [-0.36, 0.36]) {
+          const roller = new THREE.Mesh(rollerGeo, darkPolymerMat);
+          roller.position.set(0, 0.002, railLenM * rFrac);
+          midGroup.add(roller);
+        }
         midGroup.add(midRail);
 
         const midWorld = midLocal.clone().applyQuaternion(frontQuat).add(frontPos);
@@ -1128,25 +1392,32 @@ export function buildCabinetHardwareScene(
           travelFactor: 0.5,
         });
 
-        // (C) Drawer-Mounted Upper Carrier Profile + Orange Blum Locking Clutch under front bottom (moves 1.0x!)
+        // (C) Drawer-Mounted Upper Carrier Profile + Ergonomic Orange Blum Front Locking Clutch (1.0x!)
         const innerLocal = new THREE.Vector3(boxEdgeX + inward * 0.018, boxBottomYM + 0.006, railZ);
         const innerGroup = new THREE.Group();
         const carrierRail = new THREE.Mesh(
-          new THREE.BoxGeometry(0.015, 0.007, railLenM * 0.94),
+          new THREE.BoxGeometry(0.0155, 0.0075, railLenM * 0.94),
           galvanizedSteelMat
         );
         // Signature orange Blum front locking clutch under the drawer floor near front
         const clutch = new THREE.Mesh(
-          new THREE.BoxGeometry(0.032, 0.011, 0.056),
+          new THREE.BoxGeometry(0.034, 0.011, 0.058),
           blumOrangeMat
         );
-        clutch.position.set(inward * 0.016, 0.001, railLenM * 0.42);
+        clutch.position.set(inward * 0.016, 0.001, railLenM * 0.41);
         const clutchHandle = new THREE.Mesh(
-          new THREE.BoxGeometry(0.022, 0.006, 0.026),
+          new THREE.BoxGeometry(0.024, 0.0065, 0.028),
           darkPolymerMat
         );
-        clutchHandle.position.set(inward * 0.022, -0.003, railLenM * 0.46);
-        innerGroup.add(carrierRail, clutch, clutchHandle);
+        clutchHandle.position.set(inward * 0.023, -0.003, railLenM * 0.45);
+        clutchHandle.rotation.y = inward * 0.18;
+        // Side height-adjustment thumbwheel on clutch
+        const adjWheel = new THREE.Mesh(
+          new THREE.CylinderGeometry(0.0062, 0.0062, 0.0045, 12),
+          blumOrangeMat
+        );
+        adjWheel.position.set(inward * 0.034, -0.001, railLenM * 0.39);
+        innerGroup.add(carrierRail, clutch, clutchHandle, adjWheel);
 
         const innerWorld = innerLocal.clone().applyQuaternion(frontQuat).add(frontPos);
         innerGroup.position.copy(innerWorld);
@@ -1168,14 +1439,21 @@ export function buildCabinetHardwareScene(
         const runnerY = boxBottomYM + 0.014;
         const railZ = boxCenterM.z;
 
-        // (A) Stationary Cabinet Runner (0x)
+        // (A) Stationary Cabinet Runner with oblong mounting slots & soft-close damper (0x)
         const outerLocal = new THREE.Vector3(wallX + inward * 0.006, runnerY, railZ);
         const outerGroup = new THREE.Group();
         const cabRail = new THREE.Mesh(
-          new THREE.BoxGeometry(0.009, 0.032, railLenM),
+          new THREE.BoxGeometry(0.0095, 0.034, railLenM),
           galvanizedSteelMat
         );
-        outerGroup.add(cabRail);
+        for (const frac of [-0.34, 0, 0.34]) {
+          const sl = new THREE.Mesh(new THREE.BoxGeometry(0.01, 0.005, 0.012), slotMat);
+          sl.position.set(0, 0.006, railLenM * frac);
+          outerGroup.add(sl);
+        }
+        const tDamper = new THREE.Mesh(new THREE.BoxGeometry(0.011, 0.012, 0.095), darkPolymerMat);
+        tDamper.position.set(inward * 0.003, -0.006, -railLenM * 0.24);
+        outerGroup.add(cabRail, tDamper);
         const outerWorld = outerLocal.clone().applyQuaternion(frontQuat).add(frontPos);
         outerGroup.position.copy(outerWorld);
         outerGroup.quaternion.copy(frontQuat);
@@ -1216,32 +1494,48 @@ export function buildCabinetHardwareScene(
           travelFactor: 0.5,
         });
 
-        // (C) Tandembox Side Branding Cover Cap + Top Gallery Reling on tall drawers (1.0x)
+        // (C) Tandembox Side Branding Cover Cap + Rear Bracket + Top Gallery Reling on tall drawers (1.0x)
         const boxH = drw.boxHeightMm * MM_TO_M;
         const accentLocal = new THREE.Vector3(boxEdgeX + inward * 0.007, boxCenterM.y, railZ);
         const accentGroup = new THREE.Group();
-        // Signature Tandembox oval cover cap on outer face of metal drawer side
+        // Signature Tandembox flush metallic cover cap with dark bezel trim on outer face of metal side
+        const capBezel = new THREE.Mesh(
+          new THREE.BoxGeometry(0.0022, 0.019, 0.056),
+          darkPolymerMat
+        );
+        capBezel.position.set(-inward * 0.0074, boxH * 0.14, railLenM * 0.24);
         const cap = new THREE.Mesh(
-          new THREE.BoxGeometry(0.0025, 0.016, 0.052),
+          new THREE.BoxGeometry(0.0028, 0.015, 0.05),
           brushedNickelMat
         );
-        cap.position.set(-inward * 0.0075, boxH * 0.14, railLenM * 0.24);
-        accentGroup.add(cap);
+        cap.position.set(-inward * 0.0078, boxH * 0.14, railLenM * 0.24);
+        // Rear steel back-panel corner bracket
+        const rearBracket = new THREE.Mesh(
+          new THREE.BoxGeometry(0.014, boxH * 0.84, 0.014),
+          tandemAnthraciteMat
+        );
+        rearBracket.position.set(inward * 0.004, 0, -railLenM * 0.47);
+        accentGroup.add(capBezel, cap, rearBracket);
 
-        // Tall Tandembox drawers (> 150 mm front) get a sleek steel top gallery rail (reling podłużny)
+        // Tall Tandembox drawers (>= 200 mm front) get a sleek cylindrical top gallery rail (reling podłużny)
         if (drw.front.height >= 200) {
-          const relingY = Math.min(boxH * 0.5 + 0.048, (drw.front.height * MM_TO_M) * 0.36);
+          const relingY = Math.min(boxH * 0.5 + 0.05, (drw.front.height * MM_TO_M) * 0.36);
           const relingBar = new THREE.Mesh(
-            new THREE.BoxGeometry(0.007, 0.011, railLenM * 0.96),
+            new THREE.CylinderGeometry(0.0046, 0.0046, railLenM * 0.96, 10).rotateX(Math.PI / 2),
             tandemAnthraciteMat
           );
           relingBar.position.set(0, relingY, 0);
+          const frontSocket = new THREE.Mesh(
+            new THREE.CylinderGeometry(0.007, 0.007, 0.012, 10).rotateX(Math.PI / 2),
+            brushedNickelMat
+          );
+          frontSocket.position.set(0, relingY, railLenM * 0.47);
           const rearPost = new THREE.Mesh(
-            new THREE.BoxGeometry(0.009, relingY - boxH * 0.4 + 0.01, 0.018),
+            new THREE.BoxGeometry(0.01, relingY - boxH * 0.4 + 0.012, 0.018),
             tandemAnthraciteMat
           );
           rearPost.position.set(0, (relingY + boxH * 0.4) * 0.5, -railLenM * 0.46);
-          accentGroup.add(relingBar, rearPost);
+          accentGroup.add(relingBar, frontSocket, rearPost);
         }
 
         const accentWorld = accentLocal.clone().applyQuaternion(frontQuat).add(frontPos);
@@ -1266,6 +1560,12 @@ export function buildCabinetHardwareScene(
   // =========================================================================
   // 3. STATIONARY TIP-ON MAGNETIC PUSH LATCHES (MOUNTED ON CARCASS, NOT DOOR)
   // =========================================================================
+  const tipOnBodyMat = new THREE.MeshStandardMaterial({
+    color: '#7A838F',
+    metalness: 0.22,
+    roughness: 0.5,
+  });
+
   for (const door of visibleParts) {
     if (door.kind !== 'door' || door.handleStyle !== 'tip_on') continue;
     const doorPos = partBasePos.get(door.id);
@@ -1296,19 +1596,27 @@ export function buildCabinetHardwareScene(
     latchGroup.position.copy(latchWorld);
     latchGroup.quaternion.copy(doorQuat);
 
-    // Gray Blum Tip-On adapter housing + cylinder body
-    const body = new THREE.Mesh(
-      new THREE.BoxGeometry(0.015, 0.015, 0.056),
-      new THREE.MeshStandardMaterial({ color: '#7D8590', metalness: 0.25, roughness: 0.5 })
+    // Sculpted Blum Tip-On adapter mounting plate + cylindrical housing barrel + magnetic plunger tip
+    const adapterPlate = new THREE.Mesh(new THREE.BoxGeometry(0.017, 0.018, 0.056), tipOnBodyMat);
+    const barrel = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.0056, 0.0056, 0.052, 12).rotateX(Math.PI / 2),
+      tipOnBodyMat
     );
+    barrel.position.z = 0.004;
     // Movable magnetic plunger tip pointing +Z toward back of door
     const plunger = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.0046, 0.0046, 0.024, 12).rotateX(Math.PI / 2),
+      new THREE.CylinderGeometry(0.0044, 0.0044, 0.024, 12).rotateX(Math.PI / 2),
       brushedNickelMat
     );
+    const magHead = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.0052, 0.0048, 0.004, 12).rotateX(Math.PI / 2),
+      darkPolymerMat
+    );
+    magHead.position.z = 0.011;
+    plunger.add(magHead);
     const basePlungerZ = 0.022;
     plunger.position.z = basePlungerZ;
-    latchGroup.add(body, plunger);
+    latchGroup.add(adapterPlate, barrel, plunger);
 
     markDisposable(latchGroup);
     root.add(latchGroup);
@@ -1324,7 +1632,7 @@ export function buildCabinetHardwareScene(
   }
 
   // =========================================================================
-  // 4. METAL Ø5 mm SHELF SUPPORT PINS (PODPÓRKI PÓŁEK) UNDER INTERIOR SHELVES
+  // 4. METAL Ø5 mm L-SPOON SHELF SUPPORT PINS (PODPÓRKI PÓŁEK) UNDER INTERIOR SHELVES
   // =========================================================================
   const shelfPinPositions: THREE.Matrix4[] = [];
   const shelfPinQuat = new THREE.Quaternion();
@@ -1346,25 +1654,46 @@ export function buildCabinetHardwareScene(
     const sd = shelf.depth * MM_TO_M;
     const zInset = Math.min(0.042, sd * 0.22);
 
-    // 4 nickel shelf pins tucked right under the 4 left/right corners of the shelf
-    const corners: [number, number][] = [
-      [-sw / 2 + 0.005, sd / 2 - zInset],
-      [-sw / 2 + 0.005, -sd / 2 + zInset],
-      [sw / 2 - 0.005, sd / 2 - zInset],
-      [sw / 2 - 0.005, -sd / 2 + zInset],
+    // 4 nickel L-spoon shelf pins tucked right under the 4 left/right corners of the shelf
+    const corners: [number, number, number][] = [
+      [-sw / 2 + 0.005, sd / 2 - zInset, 1],
+      [-sw / 2 + 0.005, -sd / 2 + zInset, 1],
+      [sw / 2 - 0.005, sd / 2 - zInset, -1],
+      [sw / 2 - 0.005, -sd / 2 + zInset, -1],
     ];
-    for (const [cx, cz] of corners) {
+    for (const [cx, cz, dirX] of corners) {
       const worldPin = new THREE.Vector3(cx, -sh / 2 - 0.0035, cz)
         .applyQuaternion(shelfQuat)
         .add(shelfPos);
-      const mat4 = new THREE.Matrix4().compose(worldPin, shelfPinQuat.copy(shelfQuat), shelfPinScale);
+      shelfPinQuat.copy(shelfQuat);
+      if (dirX < 0) {
+        shelfPinQuat.multiply(_qA.setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.PI));
+      }
+      const mat4 = new THREE.Matrix4().compose(worldPin, shelfPinQuat, shelfPinScale);
       shelfPinPositions.push(mat4);
     }
   }
 
   if (shelfPinPositions.length > 0) {
-    // Instanced nickel-plated shelf support pins (single draw call for all shelves!)
-    const pinGeo = new THREE.BoxGeometry(0.011, 0.007, 0.014);
+    // Instanced sculpted L-spoon nickel shelf support pins (single draw call for all shelves!)
+    const pinShape = new THREE.Shape();
+    pinShape.moveTo(-0.006, 0.0035);
+    pinShape.lineTo(0.007, 0.0035);
+    pinShape.lineTo(0.007, 0.0005);
+    pinShape.lineTo(-0.0025, 0.0005);
+    pinShape.lineTo(-0.0025, -0.0065);
+    pinShape.lineTo(-0.006, -0.0065);
+    pinShape.closePath();
+    const pinGeo = new THREE.ExtrudeGeometry(pinShape, {
+      depth: 0.011,
+      bevelEnabled: true,
+      bevelThickness: 0.0006,
+      bevelSize: 0.0005,
+      bevelSegments: 1,
+    });
+    pinGeo.translate(0, 0, -0.0055);
+    pinGeo.computeVertexNormals();
+
     const pinInst = new THREE.InstancedMesh(pinGeo, brushedNickelMat, shelfPinPositions.length);
     pinInst.name = 'shelf_support_pins';
     for (let i = 0; i < shelfPinPositions.length; i++) {
@@ -1454,4 +1783,213 @@ export function buildCabinetHardwareScene(
   }
 
   return { root, update };
+}
+
+/**
+ * Adds authentic stamped perforated nail/bolt hole grids (Ø5 mm & Ø11 mm) and embossed 45°
+ * corner stiffening ribs (przetłoczenia wzmacniające) to galvanized/steel carpentry connectors:
+ * - L-brackets (Kątownik ciesielski / montażowy / budowlany)
+ * - U-brackets (Wieszak belki / Podstawa słupa kotwa U)
+ * - Flat perforated nail plates & T-plates (Płytka perforowana / Łącznik płaski T)
+ * Rendered via InstancedMesh (1-2 draw calls per bracket) with polygonOffset to guarantee zero Z-fighting.
+ */
+export function buildCarpentryConnectorDetailGroup(part: FurniturePart): THREE.Group | null {
+  const isMetal = part.materialId === 'steel_galv' || part.materialId === 'steel_black';
+  if (!isMetal) return null;
+
+  const isLBracket = /kątownik/i.test(part.name) && part.kind === 'custom';
+  const isUBracket = /(wieszak|podstawa słupa|kotwa u)/i.test(part.name) && part.kind === 'custom';
+  const isTPlate = /łącznik płaski t/i.test(part.name) && part.kind === 'custom';
+  const isFlatPlate = /płytka perforowana/i.test(part.name) && part.kind === 'panel';
+
+  if (!isLBracket && !isUBracket && !isTPlate && !isFlatPlate) {
+    return null;
+  }
+
+  const group = new THREE.Group();
+  group.name = 'carpentry_connector_details';
+
+  const w = Math.max(0.02, part.width * MM_TO_M);
+  const h = Math.max(0.02, part.height * MM_TO_M);
+  const d = Math.max(0.002, part.depth * MM_TO_M);
+  const hx = w / 2;
+  const hy = h / 2;
+  const hz = d / 2;
+
+  const holeDarkMat = new THREE.MeshStandardMaterial({
+    color: '#191D23',
+    metalness: 0.3,
+    roughness: 0.82,
+    polygonOffset: true,
+    polygonOffsetFactor: -2,
+    polygonOffsetUnits: -2,
+  });
+
+  const ribSteelMat = new THREE.MeshStandardMaterial({
+    color: part.materialId === 'steel_black' ? '#323842' : '#CDD5DF',
+    metalness: 0.92,
+    roughness: 0.22,
+  });
+
+  interface HoleTransform {
+    pos: THREE.Vector3;
+    rot: THREE.Euler;
+    scale: number;
+  }
+  const smallHoles: HoleTransform[] = [];
+  const bigHoles: HoleTransform[] = [];
+
+  if (isLBracket) {
+    const wallT = Math.min(0.0055, Math.max(0.003, Math.min(w, h) * 0.055));
+
+    // Stamped 45° triangular stiffening reinforcement rib (przetłoczenie wzmacniające) in the inner bend
+    const ribLen = Math.min(w, h) * 0.34;
+    const ribWidth = Math.min(d * 0.24, 0.015);
+    const ribShape = new THREE.Shape();
+    ribShape.moveTo(0, 0);
+    ribShape.lineTo(ribLen, 0);
+    ribShape.lineTo(0, ribLen);
+    ribShape.closePath();
+    const ribGeo = new THREE.ExtrudeGeometry(ribShape, {
+      depth: ribWidth,
+      bevelEnabled: true,
+      bevelThickness: 0.0012,
+      bevelSize: 0.001,
+      bevelSegments: 1,
+    });
+    ribGeo.translate(0, 0, -ribWidth / 2);
+    ribGeo.computeVertexNormals();
+    const ribMesh = new THREE.Mesh(ribGeo, ribSteelMat);
+    ribMesh.position.set(-hx + wallT - 0.0005, -hy + wallT - 0.0005, 0);
+    group.add(ribMesh);
+
+    // Perforated Ø5 mm nail holes & Ø11 mm bolt holes on vertical leg (outer -X & inner -hx+wallT faces)
+    const zCount = Math.max(2, Math.min(4, Math.round(d / 0.022)));
+    const legRows = Math.max(2, Math.min(4, Math.round((h - wallT) / 0.022)));
+    const rotFaceX = new THREE.Euler(0, 0, Math.PI / 2);
+    for (let r = 0; r < legRows; r++) {
+      const yFrac = (r + 0.85) / (legRows + 0.55);
+      const py = -hy + wallT + yFrac * (h - wallT - 0.008);
+      for (let c = 0; c < zCount; c++) {
+        const zFrac = zCount === 1 ? 0 : (c / (zCount - 1) - 0.5) * 0.72;
+        const pz = zFrac * d;
+        // Skip holes colliding with the central stiffening rib
+        if (Math.abs(pz) < ribWidth * 0.72 && py < -hy + wallT + ribLen * 0.82) continue;
+        const isBig = r === Math.floor(legRows / 2) && Math.abs(pz) < d * 0.16 && d >= 0.055;
+        const target = isBig ? bigHoles : smallHoles;
+        target.push({ pos: new THREE.Vector3(-hx - 0.0003, py, pz), rot: rotFaceX, scale: 1 });
+        target.push({ pos: new THREE.Vector3(-hx + wallT + 0.0003, py, pz), rot: rotFaceX, scale: 1 });
+      }
+    }
+
+    // Perforated Ø5 mm nail holes & Ø11 mm bolt holes on horizontal leg (outer -Y & inner -hy+wallT faces)
+    const rotFaceY = new THREE.Euler(0, 0, 0);
+    for (let r = 0; r < legRows; r++) {
+      const xFrac = (r + 0.85) / (legRows + 0.55);
+      const px = -hx + wallT + xFrac * (w - wallT - 0.008);
+      for (let c = 0; c < zCount; c++) {
+        const zFrac = zCount === 1 ? 0 : (c / (zCount - 1) - 0.5) * 0.72;
+        const pz = zFrac * d;
+        if (Math.abs(pz) < ribWidth * 0.72 && px < -hx + wallT + ribLen * 0.82) continue;
+        const isBig = r === Math.floor(legRows / 2) && Math.abs(pz) < d * 0.16 && d >= 0.055;
+        const target = isBig ? bigHoles : smallHoles;
+        target.push({ pos: new THREE.Vector3(px, -hy - 0.0003, pz), rot: rotFaceY, scale: 1 });
+        target.push({ pos: new THREE.Vector3(px, -hy + wallT + 0.0003, pz), rot: rotFaceY, scale: 1 });
+      }
+    }
+  } else if (isUBracket) {
+    const wallT = Math.min(0.0055, Math.max(0.0035, w * 0.05));
+    const rotFaceX = new THREE.Euler(0, 0, Math.PI / 2);
+    const rotFaceY = new THREE.Euler(0, 0, 0);
+
+    // Staggered nail & bolt holes on both left & right vertical U-flanges
+    const yRows = Math.max(3, Math.min(5, Math.round(h / 0.028)));
+    const zCols = Math.max(2, Math.min(3, Math.round(d / 0.032)));
+    for (const side of [-1, 1] as const) {
+      const outerX = side * (hx + 0.0003);
+      const innerX = side * (hx - wallT - 0.0003);
+      for (let r = 0; r < yRows; r++) {
+        const py = -hy + wallT + 0.016 + (r / Math.max(1, yRows - 1)) * Math.max(0.02, h - wallT - 0.032);
+        for (let c = 0; c < zCols; c++) {
+          const pz = zCols === 1 ? 0 : ((c / (zCols - 1)) - 0.5) * (d * 0.62);
+          const isBig = r === 1 && c === Math.floor(zCols / 2);
+          const target = isBig ? bigHoles : smallHoles;
+          target.push({ pos: new THREE.Vector3(outerX, py, pz), rot: rotFaceX, scale: 1 });
+          target.push({ pos: new THREE.Vector3(innerX, py, pz), rot: rotFaceX, scale: 1 });
+        }
+      }
+    }
+    // 2 anchor bolt holes in the bottom U-saddle base
+    for (const pz of [-d * 0.22, d * 0.22]) {
+      bigHoles.push({ pos: new THREE.Vector3(0, -hy - 0.0003, pz), rot: rotFaceY, scale: 1 });
+      bigHoles.push({ pos: new THREE.Vector3(0, -hy + wallT + 0.0003, pz), rot: rotFaceY, scale: 1 });
+    }
+  } else if (isTPlate) {
+    const rotFaceZ = new THREE.Euler(Math.PI / 2, 0, 0);
+    // Horizontal top crossbar holes
+    const topY = hy - h * 0.165;
+    for (const xFrac of [-0.38, -0.22, 0, 0.22, 0.38]) {
+      const px = xFrac * w;
+      for (const dy of [-0.009, 0.009]) {
+        const isBig = Math.abs(xFrac) < 0.01 && dy > 0;
+        const target = isBig ? bigHoles : smallHoles;
+        target.push({ pos: new THREE.Vector3(px, topY + dy, hz + 0.0003), rot: rotFaceZ, scale: 1 });
+        target.push({ pos: new THREE.Vector3(px, topY + dy, -hz - 0.0003), rot: rotFaceZ, scale: 1 });
+      }
+    }
+    // Vertical center stem holes
+    for (const yFrac of [-0.36, -0.18, 0.0]) {
+      const py = yFrac * h;
+      for (const dx of [-0.009, 0.009]) {
+        smallHoles.push({ pos: new THREE.Vector3(dx, py, hz + 0.0003), rot: rotFaceZ, scale: 1 });
+        smallHoles.push({ pos: new THREE.Vector3(dx, py, -hz - 0.0003), rot: rotFaceZ, scale: 1 });
+      }
+    }
+  } else if (isFlatPlate) {
+    const rotFaceZ = new THREE.Euler(Math.PI / 2, 0, 0);
+    const cols = Math.max(4, Math.min(8, Math.round(w / 0.026)));
+    const rows = Math.max(2, Math.min(4, Math.round(h / 0.024)));
+    for (let r = 0; r < rows; r++) {
+      const py = rows === 1 ? 0 : ((r / (rows - 1)) - 0.5) * (h * 0.66);
+      for (let c = 0; c < cols; c++) {
+        const px = cols === 1 ? 0 : ((c / (cols - 1)) - 0.5) * (w * 0.84);
+        const isBig = r === Math.floor(rows / 2) && (c === 1 || c === cols - 2);
+        const target = isBig ? bigHoles : smallHoles;
+        target.push({ pos: new THREE.Vector3(px, py, hz + 0.0003), rot: rotFaceZ, scale: 1 });
+        target.push({ pos: new THREE.Vector3(px, py, -hz - 0.0003), rot: rotFaceZ, scale: 1 });
+      }
+    }
+  }
+
+  const dummy = new THREE.Object3D();
+  if (smallHoles.length > 0) {
+    const smallGeo = new THREE.CylinderGeometry(0.0026, 0.0026, 0.0008, 10);
+    const inst = new THREE.InstancedMesh(smallGeo, holeDarkMat, smallHoles.length);
+    for (let i = 0; i < smallHoles.length; i++) {
+      dummy.position.copy(smallHoles[i].pos);
+      dummy.rotation.copy(smallHoles[i].rot);
+      dummy.scale.setScalar(smallHoles[i].scale);
+      dummy.updateMatrix();
+      inst.setMatrixAt(i, dummy.matrix);
+    }
+    inst.instanceMatrix.needsUpdate = true;
+    group.add(inst);
+  }
+
+  if (bigHoles.length > 0) {
+    const bigGeo = new THREE.CylinderGeometry(0.0052, 0.0052, 0.0009, 12);
+    const inst = new THREE.InstancedMesh(bigGeo, holeDarkMat, bigHoles.length);
+    for (let i = 0; i < bigHoles.length; i++) {
+      dummy.position.copy(bigHoles[i].pos);
+      dummy.rotation.copy(bigHoles[i].rot);
+      dummy.scale.setScalar(bigHoles[i].scale);
+      dummy.updateMatrix();
+      inst.setMatrixAt(i, dummy.matrix);
+    }
+    inst.instanceMatrix.needsUpdate = true;
+    group.add(inst);
+  }
+
+  markDisposable(group);
+  return group;
 }

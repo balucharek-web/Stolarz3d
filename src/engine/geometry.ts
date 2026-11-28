@@ -330,13 +330,18 @@ export function buildPartGeometry(part: FurniturePart): THREE.BufferGeometry {
     shape.lineTo(-d / 2, h / 2);
     shape.closePath();
 
+    const sideBevel = Math.min(0.0009, w * 0.04, h * 0.04);
+    const innerW = Math.max(0.01, w - sideBevel * 2);
     const geo = new THREE.ExtrudeGeometry(shape, {
-      depth: w,
-      bevelEnabled: false,
+      depth: innerW,
+      bevelEnabled: sideBevel > 0.0002,
+      bevelThickness: sideBevel,
+      bevelSize: sideBevel,
+      bevelSegments: 1,
       curveSegments: 8,
     });
     geo.rotateY(Math.PI / 2);
-    geo.translate(-w / 2, 0, 0);
+    geo.translate(-innerW / 2, 0, 0);
     geo.computeVertexNormals();
     applyWorldScaleUVs(geo, !!part.grainRotated, [w, h, d], undefined, part.id);
     assignFaceEdgeGroups(geo, [w, h, d]);
@@ -461,6 +466,111 @@ export function buildPartGeometry(part: FurniturePart): THREE.BufferGeometry {
     // Custom polygons are always extruded along Z: front/back = face (0), all perimeter cuts = edge (1)
     applyWorldScaleUVs(geo, !!part.grainRotated, [w, h, d], 'z', part.id);
     assignFaceEdgeGroups(geo, [w, h, d], 'z');
+    return geo;
+  }
+
+  // Angled miter cuts on timber/steel profiles (zaciosy ciesielskie / cięcie skośne końców -45°..+45°)
+  const cutStartDeg =
+    part.kind === 'profile' ? Math.max(-45, Math.min(45, part.beamCutStartDeg ?? 0)) : 0;
+  const cutEndDeg =
+    part.kind === 'profile' ? Math.max(-45, Math.min(45, part.beamCutEndDeg ?? 0)) : 0;
+
+  if (part.kind === 'profile' && (Math.abs(cutStartDeg) > 0.2 || Math.abs(cutEndDeg) > 0.2)) {
+    const bevel = Math.min(0.0014, w * 0.08, h * 0.08, d * 0.14);
+    const tanStart = Math.tan((cutStartDeg * Math.PI) / 180);
+    const tanEnd = Math.tan((cutEndDeg * Math.PI) / 180);
+
+    // Determine longest axis of the beam so cuts always slice the two ends
+    if (w >= h && w >= d) {
+      // Horizontal beam along X: start = left (-w/2), end = right (+w/2)
+      const innerW = Math.max(0.006, w - bevel * 2);
+      const innerH = Math.max(0.006, h - bevel * 2);
+      const innerD = Math.max(0.004, d - bevel * 2);
+      const maxShift = innerW * 0.42;
+      const dxStart = Math.max(-maxShift, Math.min(maxShift, (innerH * 0.5) * tanStart));
+      const dxEnd = Math.max(-maxShift, Math.min(maxShift, (innerH * 0.5) * tanEnd));
+
+      const shape = new THREE.Shape();
+      shape.moveTo(-innerW / 2 + Math.max(0, dxStart), -innerH / 2);
+      shape.lineTo(innerW / 2 - Math.max(0, dxEnd), -innerH / 2);
+      shape.lineTo(innerW / 2 - Math.max(0, -dxEnd), innerH / 2);
+      shape.lineTo(-innerW / 2 + Math.max(0, -dxStart), innerH / 2);
+      shape.closePath();
+
+      const geo = new THREE.ExtrudeGeometry(shape, {
+        depth: innerD,
+        bevelEnabled: bevel > 0.0002,
+        bevelThickness: bevel,
+        bevelSize: bevel,
+        bevelSegments: 2,
+        steps: 1,
+      });
+      geo.translate(0, 0, -innerD / 2);
+      geo.computeVertexNormals();
+      applyWorldScaleUVs(geo, !!part.grainRotated, [w, h, d], undefined, part.id, true);
+      assignFaceEdgeGroups(geo, [w, h, d], undefined, true);
+      return geo;
+    }
+
+    if (h >= w && h >= d) {
+      // Vertical post along Y: start = bottom (-h/2), end = top (+h/2)
+      const innerW = Math.max(0.006, w - bevel * 2);
+      const innerH = Math.max(0.006, h - bevel * 2);
+      const innerD = Math.max(0.004, d - bevel * 2);
+      const maxShift = innerH * 0.42;
+      const dyStart = Math.max(-maxShift, Math.min(maxShift, (innerW * 0.5) * tanStart));
+      const dyEnd = Math.max(-maxShift, Math.min(maxShift, (innerW * 0.5) * tanEnd));
+
+      const shape = new THREE.Shape();
+      shape.moveTo(-innerW / 2, -innerH / 2 + Math.max(0, dyStart));
+      shape.lineTo(innerW / 2, -innerH / 2 + Math.max(0, -dyStart));
+      shape.lineTo(innerW / 2, innerH / 2 - Math.max(0, -dyEnd));
+      shape.lineTo(-innerW / 2, innerH / 2 - Math.max(0, dyEnd));
+      shape.closePath();
+
+      const geo = new THREE.ExtrudeGeometry(shape, {
+        depth: innerD,
+        bevelEnabled: bevel > 0.0002,
+        bevelThickness: bevel,
+        bevelSize: bevel,
+        bevelSegments: 2,
+        steps: 1,
+      });
+      geo.translate(0, 0, -innerD / 2);
+      geo.computeVertexNormals();
+      applyWorldScaleUVs(geo, !!part.grainRotated, [w, h, d], undefined, part.id, true);
+      assignFaceEdgeGroups(geo, [w, h, d], undefined, true);
+      return geo;
+    }
+
+    // Horizontal beam along Z: start = back (-d/2), end = front (+d/2)
+    const innerD = Math.max(0.006, d - bevel * 2);
+    const innerH = Math.max(0.006, h - bevel * 2);
+    const innerW = Math.max(0.004, w - bevel * 2);
+    const maxShift = innerD * 0.42;
+    const dzStart = Math.max(-maxShift, Math.min(maxShift, (innerH * 0.5) * tanStart));
+    const dzEnd = Math.max(-maxShift, Math.min(maxShift, (innerH * 0.5) * tanEnd));
+
+    const shape = new THREE.Shape();
+    shape.moveTo(-innerD / 2 + Math.max(0, dzStart), -innerH / 2);
+    shape.lineTo(innerD / 2 - Math.max(0, dzEnd), -innerH / 2);
+    shape.lineTo(innerD / 2 - Math.max(0, -dzEnd), innerH / 2);
+    shape.lineTo(-innerD / 2 + Math.max(0, -dzStart), innerH / 2);
+    shape.closePath();
+
+    const geo = new THREE.ExtrudeGeometry(shape, {
+      depth: innerW,
+      bevelEnabled: bevel > 0.0002,
+      bevelThickness: bevel,
+      bevelSize: bevel,
+      bevelSegments: 2,
+      steps: 1,
+    });
+    geo.translate(0, 0, -innerW / 2);
+    geo.rotateY(-Math.PI / 2);
+    geo.computeVertexNormals();
+    applyWorldScaleUVs(geo, !!part.grainRotated, [w, h, d], undefined, part.id, true);
+    assignFaceEdgeGroups(geo, [w, h, d], undefined, true);
     return geo;
   }
 
@@ -666,7 +776,7 @@ export function buildDoorHandleGroup(part: FurniturePart): THREE.Group | null {
   const style = part.handleStyle ?? 'bar';
   const side = part.handleSide ?? 'none';
 
-  // Tip-On handleless: sleek exterior + thin magnetic strike plate flush on the back face
+  // Tip-On handleless: sleek exterior + beveled circular steel magnetic strike plate flush on the back face
   // (the actual cylindrical push-to-open latch body is mounted stationary on the cabinet carcass)
   if (style === 'tip_on') {
     const group = new THREE.Group();
@@ -675,14 +785,16 @@ export function buildDoorHandleGroup(part: FurniturePart): THREE.Group | null {
     const h = part.height * MM_TO_M;
     const d = part.depth * MM_TO_M;
     const strikeMat = new THREE.MeshStandardMaterial({
-      color: '#C8CFD8',
-      metalness: 0.9,
-      roughness: 0.22,
+      color: '#CDD4DD',
+      metalness: 0.92,
+      roughness: 0.2,
     });
-    const strikePlate = new THREE.Mesh(
-      new THREE.BoxGeometry(0.018, 0.014, 0.0016),
-      strikeMat
-    );
+    const screwDarkMat = new THREE.MeshStandardMaterial({
+      color: '#2A3038',
+      metalness: 0.45,
+      roughness: 0.6,
+    });
+
     const openSide =
       side !== 'none'
         ? side
@@ -693,8 +805,20 @@ export function buildDoorHandleGroup(part: FurniturePart): THREE.Group | null {
             : 'top';
     const xPos = openSide === 'left' ? -w / 2 + 0.024 : openSide === 'right' ? w / 2 - 0.024 : 0;
     const yPos = openSide === 'top' ? h / 2 - 0.024 : 0;
+
+    // Beveled Ø18 mm magnetic catch disc + recessed center countersunk screw
+    const discGeo = new THREE.CylinderGeometry(0.0085, 0.0095, 0.0018, 16);
+    discGeo.rotateX(Math.PI / 2);
+    const strikePlate = new THREE.Mesh(discGeo, strikeMat);
     strikePlate.position.set(xPos, yPos, -d / 2 - 0.0009);
-    group.add(strikePlate);
+
+    const centerScrew = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.0024, 0.0024, 0.0008, 10).rotateX(Math.PI / 2),
+      screwDarkMat
+    );
+    centerScrew.position.set(xPos, yPos, -d / 2 - 0.0019);
+
+    group.add(strikePlate, centerScrew);
     return group;
   }
 
@@ -711,40 +835,90 @@ export function buildDoorHandleGroup(part: FurniturePart): THREE.Group | null {
   const isHorizontal = side === 'top';
 
   if (style === 'gola_j') {
-    // Sleek full-edge brushed aluminum J-profile handle (listwa korytkowa Gola / krawędziowa)
+    // True extruded anodized brushed aluminum J-channel edge profile (listwa krawędziowa UKW/Gola)
     const aluMat = new THREE.MeshStandardMaterial({
-      color: '#C7CDD6',
-      metalness: 0.9,
-      roughness: 0.22,
+      color: '#CFD6DF',
+      metalness: 0.92,
+      roughness: 0.2,
     });
     const grooveMat = new THREE.MeshStandardMaterial({
-      color: '#1E2126',
-      metalness: 0.3,
-      roughness: 0.65,
+      color: '#1A1E24',
+      metalness: 0.25,
+      roughness: 0.72,
     });
+
+    // J-hook cross-section in XY: hugs board thickness along X (-d/2..+d/2), protrudes front catch lip
+    const lipT = 0.0026;
+    const rearD = d * 0.5 + 0.001;
+    const frontD = d * 0.5 + 0.011;
+    const jShape = new THREE.Shape();
+    jShape.moveTo(-rearD, 0.0015);
+    jShape.lineTo(frontD, 0.0015);
+    jShape.lineTo(frontD, -0.0145);
+    jShape.lineTo(frontD - 0.0045, -0.0145);
+    jShape.lineTo(frontD - 0.0045, -0.0095);
+    jShape.lineTo(frontD - lipT, -0.0095);
+    jShape.lineTo(frontD - lipT, -lipT);
+    jShape.lineTo(d * 0.5 + 0.0006, -lipT);
+    jShape.lineTo(d * 0.5 + 0.0006, -0.018);
+    jShape.lineTo(d * 0.5 - lipT, -0.018);
+    jShape.lineTo(d * 0.5 - lipT, -0.0012);
+    jShape.lineTo(-rearD, -0.0012);
+    jShape.closePath();
+
     if (isHorizontal) {
-      const stripLen = Math.max(0.08, w - 0.004);
-      const lip = new THREE.Mesh(new THREE.BoxGeometry(stripLen, 0.016, d + 0.008), aluMat);
-      lip.position.set(0, h / 2 - 0.008, 0.003);
+      const stripLen = Math.max(0.08, w - 0.003);
+      const jGeo = new THREE.ExtrudeGeometry(jShape, {
+        depth: stripLen,
+        bevelEnabled: true,
+        bevelThickness: 0.0005,
+        bevelSize: 0.0004,
+        bevelSegments: 1,
+      });
+      // X (depth) -> +Z, Y (down from top edge) -> +Y, Z (length) -> +X
+      jGeo.translate(0, 0, -stripLen / 2);
+      jGeo.rotateY(-Math.PI / 2);
+      jGeo.computeVertexNormals();
+      const lip = new THREE.Mesh(jGeo, aluMat);
+      lip.position.set(0, h / 2, 0);
+      lip.castShadow = true;
+
       const shadowGroove = new THREE.Mesh(
-        new THREE.BoxGeometry(stripLen - 0.004, 0.007, 0.004),
+        new THREE.BoxGeometry(stripLen - 0.004, 0.009, 0.0045),
         grooveMat
       );
-      shadowGroove.position.set(0, h / 2 - 0.015, d / 2 + 0.002);
+      shadowGroove.position.set(0, h / 2 - 0.007, d / 2 + 0.004);
       group.add(lip, shadowGroove);
     } else {
-      const stripLen = Math.max(0.12, h - 0.004);
-      const sx = side === 'left' ? -w / 2 + 0.008 : w / 2 - 0.008;
-      const lip = new THREE.Mesh(new THREE.BoxGeometry(0.016, stripLen, d + 0.008), aluMat);
-      lip.position.set(sx, 0, 0.003);
+      const stripLen = Math.max(0.12, h - 0.003);
+      const jGeo = new THREE.ExtrudeGeometry(jShape, {
+        depth: stripLen,
+        bevelEnabled: true,
+        bevelThickness: 0.0005,
+        bevelSize: 0.0004,
+        bevelSegments: 1,
+      });
+      jGeo.translate(0, 0, -stripLen / 2);
+      // Orient length along Y and edge lip along left or right X edge
+      jGeo.rotateX(Math.PI / 2);
+      if (side === 'left') {
+        jGeo.rotateZ(Math.PI / 2);
+      } else {
+        jGeo.rotateZ(-Math.PI / 2);
+      }
+      jGeo.computeVertexNormals();
+      const lip = new THREE.Mesh(jGeo, aluMat);
+      lip.position.set(side === 'left' ? -w / 2 : w / 2, 0, 0);
+      lip.castShadow = true;
+
       const shadowGroove = new THREE.Mesh(
-        new THREE.BoxGeometry(0.007, stripLen - 0.004, 0.004),
+        new THREE.BoxGeometry(0.009, stripLen - 0.004, 0.0045),
         grooveMat
       );
       shadowGroove.position.set(
-        side === 'left' ? -w / 2 + 0.016 : w / 2 - 0.016,
+        side === 'left' ? -w / 2 + 0.007 : w / 2 - 0.007,
         0,
-        d / 2 + 0.002
+        d / 2 + 0.004
       );
       group.add(lip, shadowGroove);
     }
@@ -752,67 +926,113 @@ export function buildDoorHandleGroup(part: FurniturePart): THREE.Group | null {
   }
 
   if (style === 'chamfer_45') {
-    // 45° beveled undercut finger-pull edge (frezowany podchwyt 45°)
+    // 45° CNC-milled finger-pull bevel (frezowany podchwyt 45°) with crisp shadow & highlight crease
     const bevelMat = new THREE.MeshStandardMaterial({
-      color: '#2E323A',
-      metalness: 0.15,
-      roughness: 0.55,
+      color: '#2B3038',
+      metalness: 0.14,
+      roughness: 0.52,
+    });
+    const creaseMat = new THREE.MeshStandardMaterial({
+      color: '#525A66',
+      metalness: 0.25,
+      roughness: 0.38,
     });
     if (isHorizontal) {
-      const stripLen = Math.max(0.08, w - 0.006);
-      const bevel = new THREE.Mesh(new THREE.BoxGeometry(stripLen, 0.018, 0.006), bevelMat);
+      const stripLen = Math.max(0.08, w - 0.004);
+      const bevel = new THREE.Mesh(new THREE.BoxGeometry(stripLen, 0.019, 0.0055), bevelMat);
       bevel.rotation.x = Math.PI / 4;
-      bevel.position.set(0, h / 2 - 0.009, d / 2 - 0.002);
-      group.add(bevel);
+      bevel.position.set(0, h / 2 - 0.0085, d / 2 - 0.0018);
+      const topCrease = new THREE.Mesh(new THREE.BoxGeometry(stripLen, 0.0018, 0.0022), creaseMat);
+      topCrease.position.set(0, h / 2 - 0.0012, d / 2 - 0.0005);
+      group.add(bevel, topCrease);
     } else {
-      const stripLen = Math.max(0.12, h - 0.006);
-      const bevel = new THREE.Mesh(new THREE.BoxGeometry(0.018, stripLen, 0.006), bevelMat);
+      const stripLen = Math.max(0.12, h - 0.004);
+      const bevel = new THREE.Mesh(new THREE.BoxGeometry(0.019, stripLen, 0.0055), bevelMat);
       bevel.rotation.y = side === 'left' ? -Math.PI / 4 : Math.PI / 4;
       bevel.position.set(
-        side === 'left' ? -w / 2 + 0.009 : w / 2 - 0.009,
+        side === 'left' ? -w / 2 + 0.0085 : w / 2 - 0.0085,
         0,
-        d / 2 - 0.002
+        d / 2 - 0.0018
       );
-      group.add(bevel);
+      const edgeCrease = new THREE.Mesh(new THREE.BoxGeometry(0.0018, stripLen, 0.0022), creaseMat);
+      edgeCrease.position.set(
+        side === 'left' ? -w / 2 + 0.0012 : w / 2 - 0.0012,
+        0,
+        d / 2 - 0.0005
+      );
+      group.add(bevel, edgeCrease);
     }
     return group;
   }
 
-  // Classic metallic bar handle ('bar')
+  // Architectural brushed/satin metallic bar handle ('bar') with chamfered end caps & flush mounting rosettes
   const handleMat = new THREE.MeshStandardMaterial({
-    color: '#2A2D33',
-    metalness: 0.85,
-    roughness: 0.28,
+    color: '#282C33',
+    metalness: 0.86,
+    roughness: 0.24,
+  });
+  const accentCollarMat = new THREE.MeshStandardMaterial({
+    color: '#A7B1BD',
+    metalness: 0.92,
+    roughness: 0.18,
   });
 
-  const barLength = Math.min(0.16, (isHorizontal ? w : h) * 0.42);
-  const standoffDepth = 0.024;
-  const barThickness = 0.009;
+  const barLength = Math.min(0.18, Math.max(0.11, (isHorizontal ? w : h) * 0.42));
+  const standoffDepth = 0.025;
+  const barRadius = 0.0052;
+  const endCapLen = 0.0045;
+  const coreLen = Math.max(0.06, barLength - endCapLen * 2);
 
-  const barGeo = isHorizontal
-    ? new THREE.BoxGeometry(barLength, barThickness, barThickness)
-    : new THREE.BoxGeometry(barThickness, barLength, barThickness);
-  const barMesh = new THREE.Mesh(barGeo, handleMat);
+  // Cylindrical grab rail (replaces flat rectangular bar for authentic specular reflections)
+  const railGeo = new THREE.CylinderGeometry(barRadius, barRadius, coreLen, 14);
+  if (isHorizontal) {
+    railGeo.rotateZ(Math.PI / 2);
+  }
+  const barMesh = new THREE.Mesh(railGeo, handleMat);
   barMesh.position.set(0, 0, standoffDepth);
   barMesh.castShadow = true;
   group.add(barMesh);
 
-  const legGeo = new THREE.CylinderGeometry(0.0038, 0.0038, standoffDepth, 10);
-  legGeo.rotateX(Math.PI / 2);
-
-  const offset = barLength * 0.36;
-  const leg1 = new THREE.Mesh(legGeo, handleMat);
-  const leg2 = new THREE.Mesh(legGeo, handleMat);
-  if (isHorizontal) {
-    leg1.position.set(-offset, 0, standoffDepth * 0.5);
-    leg2.position.set(offset, 0, standoffDepth * 0.5);
-  } else {
-    leg1.position.set(0, -offset, standoffDepth * 0.5);
-    leg2.position.set(0, offset, standoffDepth * 0.5);
+  // Chamfered end ferrules on both ends of the grab bar
+  const capGeo = new THREE.CylinderGeometry(barRadius * 0.72, barRadius, endCapLen, 14);
+  for (const dir of [-1, 1] as const) {
+    const cap = new THREE.Mesh(capGeo, handleMat);
+    if (isHorizontal) {
+      cap.rotation.z = dir === 1 ? -Math.PI / 2 : Math.PI / 2;
+      cap.position.set(dir * (coreLen / 2 + endCapLen / 2), 0, standoffDepth);
+    } else {
+      cap.rotation.z = dir === 1 ? 0 : Math.PI;
+      cap.position.set(0, dir * (coreLen / 2 + endCapLen / 2), standoffDepth);
+    }
+    cap.castShadow = true;
+    group.add(cap);
   }
-  leg1.castShadow = true;
-  leg2.castShadow = true;
-  group.add(leg1, leg2);
+
+  // Tapered standoff posts + flush circular mounting rosettes + subtle brushed-steel junction rings
+  const legGeo = new THREE.CylinderGeometry(0.0036, 0.0046, standoffDepth - 0.002, 12);
+  legGeo.rotateX(Math.PI / 2);
+  const rosetteGeo = new THREE.CylinderGeometry(0.0072, 0.0082, 0.0026, 14);
+  rosetteGeo.rotateX(Math.PI / 2);
+  const ringGeo = new THREE.CylinderGeometry(0.0055, 0.0055, 0.0018, 12);
+  ringGeo.rotateX(Math.PI / 2);
+
+  const offset = barLength * 0.34;
+  for (const s of [-1, 1] as const) {
+    const lx = isHorizontal ? s * offset : 0;
+    const ly = isHorizontal ? 0 : s * offset;
+
+    const rosette = new THREE.Mesh(rosetteGeo, handleMat);
+    rosette.position.set(lx, ly, 0.0013);
+
+    const leg = new THREE.Mesh(legGeo, handleMat);
+    leg.position.set(lx, ly, standoffDepth * 0.5 + 0.001);
+    leg.castShadow = true;
+
+    const ring = new THREE.Mesh(ringGeo, accentCollarMat);
+    ring.position.set(lx, ly, standoffDepth - barRadius - 0.0005);
+
+    group.add(rosette, leg, ring);
+  }
 
   const edgeInset = 0.042;
   if (side === 'left') {
@@ -1394,153 +1614,389 @@ export function buildFastenerGroup(
       : new THREE.Color('#000000');
 
   if (type === 'wood_4x45') {
+    // Yellow-zinc plated wood screw 4×45 mm (Spax / PZ2 countersunk with helical thread & drill tip)
     const headMat = new THREE.MeshStandardMaterial({
-      color: activeColor('#D4A84B'),
-      metalness: 0.85,
-      roughness: 0.26,
-      emissive: activeEmissive,
-    });
-    const slotMat = new THREE.MeshStandardMaterial({
-      color: '#3A2E14',
-      metalness: 0.4,
-      roughness: 0.7,
-    });
-
-    // Countersunk head slightly proud by 1.2mm for crisp visibility
-    const head = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.0055, 0.0022, 0.0038, 16),
-      headMat
-    );
-    head.position.y = -0.0005;
-    group.add(head);
-
-    // Cross recess (Phillips)
-    const slot1 = new THREE.Mesh(new THREE.BoxGeometry(0.006, 0.0008, 0.0014), slotMat);
-    slot1.position.y = 0.0016;
-    const slot2 = new THREE.Mesh(new THREE.BoxGeometry(0.0014, 0.0008, 0.006), slotMat);
-    slot2.position.y = 0.0016;
-    group.add(slot1, slot2);
-
-    // Shaft penetrating 45mm into the joint
-    const shaft = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.0021, 0.0014, 0.044, 10),
-      headMat
-    );
-    shaft.position.y = -0.023;
-    group.add(shaft);
-  } else if (type === 'confirmat_7x50') {
-    const mat = new THREE.MeshStandardMaterial({
-      color: activeColor('#D2D8E0'),
+      color: activeColor('#D9AE4E'),
       metalness: 0.88,
       roughness: 0.24,
       emissive: activeEmissive,
     });
-    const hexMat = new THREE.MeshStandardMaterial({
-      color: '#2B303A',
-      metalness: 0.5,
-      roughness: 0.6,
+    const threadMat = new THREE.MeshStandardMaterial({
+      color: activeColor('#B98E34'),
+      metalness: 0.85,
+      roughness: 0.32,
+      emissive: activeEmissive,
+    });
+    const slotMat = new THREE.MeshStandardMaterial({
+      color: '#2C220D',
+      metalness: 0.35,
+      roughness: 0.75,
     });
 
-    const head = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.0065, 0.0065, 0.0026, 18),
-      mat
+    // 45° conical countersunk head + thin machined top chamfer lip
+    const headCone = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.0046, 0.0020, 0.0032, 16),
+      headMat
     );
-    head.position.y = 0.0006;
-    group.add(head);
-
-    const hex = new THREE.Mesh(new THREE.CylinderGeometry(0.003, 0.003, 0.001, 6), hexMat);
-    hex.position.y = 0.0018;
-    group.add(hex);
-
-    const shaft = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.0034, 0.0031, 0.05, 12),
-      mat
+    headCone.position.y = -0.0004;
+    const headRim = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.0043, 0.0046, 0.0005, 16),
+      headMat
     );
-    shaft.position.y = -0.025;
-    group.add(shaft);
-  } else if (type === 'minifix_15') {
-    const zincMat = new THREE.MeshStandardMaterial({
-      color: activeColor('#AEB8C4'),
+    headRim.position.y = 0.0014;
+    group.add(headCone, headRim);
+
+    // PZ2 Pozidriv cross recess (primary cross + 45° secondary star ticks)
+    const slot1 = new THREE.Mesh(new THREE.BoxGeometry(0.0052, 0.0007, 0.0011), slotMat);
+    slot1.position.y = 0.00155;
+    const slot2 = new THREE.Mesh(new THREE.BoxGeometry(0.0011, 0.0007, 0.0052), slotMat);
+    slot2.position.y = 0.00155;
+    const pzTick1 = new THREE.Mesh(new THREE.BoxGeometry(0.0034, 0.0006, 0.0005), slotMat);
+    pzTick1.rotation.y = Math.PI / 4;
+    pzTick1.position.y = 0.00155;
+    const pzTick2 = new THREE.Mesh(new THREE.BoxGeometry(0.0034, 0.0006, 0.0005), slotMat);
+    pzTick2.rotation.y = -Math.PI / 4;
+    pzTick2.position.y = 0.00155;
+    group.add(slot1, slot2, pzTick1, pzTick2);
+
+    // Smooth upper clamping shank (12 mm) + lower threaded core (27 mm)
+    const upperNeck = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.0019, 0.0019, 0.012, 10),
+      headMat
+    );
+    upperNeck.position.y = -0.008;
+    const threadCore = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.0015, 0.0012, 0.027, 10),
+      headMat
+    );
+    threadCore.position.y = -0.0275;
+    // Sharp tapered drill point at tip (-41..-45 mm)
+    const drillTip = new THREE.Mesh(
+      new THREE.ConeGeometry(0.0013, 0.0045, 10),
+      headMat
+    );
+    drillTip.rotation.x = Math.PI;
+    drillTip.position.y = -0.043;
+    group.add(upperNeck, threadCore, drillTip);
+
+    // 10 pitched helical thread flights along lower shank (single instanced draw call)
+    const threadGeo = new THREE.TorusGeometry(0.00185, 0.00048, 6, 12);
+    threadGeo.rotateX(Math.PI / 2);
+    const threadCount = 10;
+    const threads = new THREE.InstancedMesh(threadGeo, threadMat, threadCount);
+    const dummy = new THREE.Object3D();
+    for (let i = 0; i < threadCount; i++) {
+      const frac = i / (threadCount - 1);
+      const yPos = -0.0155 - frac * 0.0245;
+      const taper = 1 - frac * 0.16;
+      dummy.position.set(0, yPos, 0);
+      dummy.rotation.set(0.16, 0, 0.08);
+      dummy.scale.set(taper, 1, taper);
+      dummy.updateMatrix();
+      threads.setMatrixAt(i, dummy.matrix);
+    }
+    threads.instanceMatrix.needsUpdate = true;
+    group.add(threads);
+  } else if (type === 'confirmat_7x50') {
+    // Zinc-plated furniture confirmat 7×50 mm (flanged countersunk head + 4 mm Allen hex socket + deep coarse threads)
+    const mat = new THREE.MeshStandardMaterial({
+      color: activeColor('#D4DBE3'),
       metalness: 0.9,
       roughness: 0.22,
       emissive: activeEmissive,
     });
-    const darkMat = new THREE.MeshStandardMaterial({
-      color: '#2B303A',
-      metalness: 0.5,
-      roughness: 0.6,
+    const threadMat = new THREE.MeshStandardMaterial({
+      color: activeColor('#B4BDC8'),
+      metalness: 0.88,
+      roughness: 0.3,
+      emissive: activeEmissive,
+    });
+    const hexMat = new THREE.MeshStandardMaterial({
+      color: '#232830',
+      metalness: 0.45,
+      roughness: 0.65,
     });
 
-    // Threaded dowel bolt anchored in host board & extending 34mm into mating board
-    const pin = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.0032, 0.0032, 0.042, 12),
-      zincMat
+    // Flat top wafer + countersunk under-cone
+    const headTop = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.0056, 0.0056, 0.0014, 18),
+      mat
     );
-    pin.position.y = -0.021;
-    group.add(pin);
+    headTop.position.y = 0.0007;
+    const headTaper = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.0056, 0.0035, 0.0024, 16),
+      mat
+    );
+    headTaper.position.y = -0.0012;
+    group.add(headTop, headTaper);
 
-    // Ø15 mm eccentric cam lock drum seated 34mm deep inside mating board
+    // Recessed 4 mm Allen hex socket
+    const hexSocket = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.0025, 0.0025, 0.0009, 6),
+      hexMat
+    );
+    hexSocket.position.y = 0.0014;
+    group.add(hexSocket);
+
+    // Thick Ø7 mm smooth guiding shoulder (10 mm) + Ø4.8 mm core shaft + blunt pilot tip
+    const shoulder = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.0034, 0.0034, 0.01, 12),
+      mat
+    );
+    shoulder.position.y = -0.0074;
+    const coreShaft = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.0024, 0.0022, 0.036, 12),
+      mat
+    );
+    coreShaft.position.y = -0.030;
+    const bluntTip = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.0022, 0.0014, 0.0035, 10),
+      mat
+    );
+    bluntTip.position.y = -0.0495;
+    group.add(shoulder, coreShaft, bluntTip);
+
+    // 11 deep coarse furniture thread rings (Ø7 mm outer crest)
+    const threadGeo = new THREE.TorusGeometry(0.0031, 0.00072, 6, 14);
+    threadGeo.rotateX(Math.PI / 2);
+    const threadCount = 11;
+    const threads = new THREE.InstancedMesh(threadGeo, threadMat, threadCount);
+    const dummy = new THREE.Object3D();
+    for (let i = 0; i < threadCount; i++) {
+      const frac = i / (threadCount - 1);
+      const yPos = -0.0145 - frac * 0.0325;
+      dummy.position.set(0, yPos, 0);
+      dummy.rotation.set(0.14, 0, 0.06);
+      dummy.scale.set(1, 1, 1);
+      dummy.updateMatrix();
+      threads.setMatrixAt(i, dummy.matrix);
+    }
+    threads.instanceMatrix.needsUpdate = true;
+    group.add(threads);
+  } else if (type === 'minifix_15') {
+    // Authentic Hettich / Häfele Minifix Ø15 mm eccentric cam lock + stepped steel dowel bolt
+    const zincMat = new THREE.MeshStandardMaterial({
+      color: activeColor('#B6C0CC'),
+      metalness: 0.91,
+      roughness: 0.22,
+      emissive: activeEmissive,
+    });
+    const steelPinMat = new THREE.MeshStandardMaterial({
+      color: activeColor('#D2D9E2'),
+      metalness: 0.92,
+      roughness: 0.18,
+      emissive: activeEmissive,
+    });
+    const darkMat = new THREE.MeshStandardMaterial({
+      color: '#252A33',
+      metalness: 0.45,
+      roughness: 0.65,
+    });
+
+    // Subtle flush entry collar ring marking the dowel axis on host face
+    const collar = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.0044, 0.0044, 0.0012, 14),
+      darkMat
+    );
+    collar.position.y = 0.0004;
+    group.add(collar);
+
+    // Stepped Minifix steel dowel bolt: threaded wood tip + flange stop + smooth neck + spherical capture head
+    const threadBase = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.0026, 0.0022, 0.011, 10),
+      steelPinMat
+    );
+    threadBase.position.y = -0.0055;
+    const stopFlange = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.0042, 0.0042, 0.002, 12),
+      steelPinMat
+    );
+    stopFlange.position.y = -0.0115;
+    const pinShaft = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.0024, 0.0024, 0.018, 12),
+      steelPinMat
+    );
+    pinShaft.position.y = -0.021;
+    const ballHead = new THREE.Mesh(
+      new THREE.SphereGeometry(0.0038, 10, 8),
+      steelPinMat
+    );
+    ballHead.position.y = -0.033;
+    group.add(threadBase, stopFlange, pinShaft, ballHead);
+
+    // 4 wood-entry thread rings on upper anchor section
+    const boltThreadGeo = new THREE.TorusGeometry(0.0028, 0.00048, 5, 10);
+    boltThreadGeo.rotateX(Math.PI / 2);
+    const boltThreads = new THREE.InstancedMesh(boltThreadGeo, zincMat, 4);
+    const dummy = new THREE.Object3D();
+    for (let i = 0; i < 4; i++) {
+      dummy.position.set(0, -0.0025 - i * 0.0023, 0);
+      dummy.rotation.set(0.12, 0, 0);
+      dummy.scale.set(1, 1, 1);
+      dummy.updateMatrix();
+      boltThreads.setMatrixAt(i, dummy.matrix);
+    }
+    boltThreads.instanceMatrix.needsUpdate = true;
+    group.add(boltThreads);
+
+    // Ø15 mm die-cast zinc eccentric cam lock drum seated 34 mm deep inside mating board
     const camDrum = new THREE.Mesh(
       new THREE.CylinderGeometry(0.0075, 0.0075, 0.012, 18),
       zincMat
     );
     camDrum.rotation.x = Math.PI / 2;
     camDrum.position.y = -0.034;
-    group.add(camDrum);
 
-    // Subtle flush entry collar marking the Minifix axis on host face
-    const collar = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.0046, 0.0046, 0.0014, 14),
-      darkMat
+    // Outer lip flange + dark PZ2 tightening cross-slot + directional arrow notch on cam face
+    const camRim = new THREE.Mesh(
+      new THREE.TorusGeometry(0.0066, 0.0006, 6, 18),
+      steelPinMat
     );
-    collar.position.y = 0.0005;
-    group.add(collar);
+    camRim.position.set(0, -0.034, 0.0061);
+    const camSlot1 = new THREE.Mesh(new THREE.BoxGeometry(0.0072, 0.0014, 0.0012), darkMat);
+    camSlot1.position.set(0, -0.034, 0.006);
+    const camSlot2 = new THREE.Mesh(new THREE.BoxGeometry(0.0014, 0.0072, 0.0012), darkMat);
+    camSlot2.position.set(0, -0.034, 0.006);
+    // Dark radial locking entry pocket on drum side
+    const camNotch = new THREE.Mesh(new THREE.BoxGeometry(0.0044, 0.004, 0.009), darkMat);
+    camNotch.position.set(0, -0.0272, 0);
+    group.add(camDrum, camRim, camSlot1, camSlot2, camNotch);
   } else if (type === 'bolt_m8') {
-    const mat = new THREE.MeshStandardMaterial({
-      color: activeColor('#5D6570'),
-      metalness: 0.86,
-      roughness: 0.3,
+    // Structural M8 DIN 933 hex bolt + DIN 125 washer + threaded shank + M8 Nyloc hex nut
+    const steelMat = new THREE.MeshStandardMaterial({
+      color: activeColor('#7A8491'),
+      metalness: 0.88,
+      roughness: 0.28,
       emissive: activeEmissive,
     });
+    const threadMat = new THREE.MeshStandardMaterial({
+      color: activeColor('#58616D'),
+      metalness: 0.84,
+      roughness: 0.36,
+      emissive: activeEmissive,
+    });
+    const nylocBlueMat = new THREE.MeshStandardMaterial({
+      color: '#2563EB',
+      metalness: 0.1,
+      roughness: 0.55,
+    });
 
-    // Washer
+    // Beveled DIN 125 flat washer flush on surface
     const washer = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.0095, 0.0095, 0.0016, 18),
-      mat
+      new THREE.CylinderGeometry(0.0094, 0.0098, 0.0016, 18),
+      steelMat
     );
     washer.position.y = 0.0008;
     group.add(washer);
 
-    // Hex bolt head
+    // Hex bolt head + circular forged boss crown on top
     const hexHead = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.0072, 0.0072, 0.0055, 6),
-      mat
+      new THREE.CylinderGeometry(0.0074, 0.0074, 0.0052, 6),
+      steelMat
     );
     hexHead.position.y = 0.0042;
-    group.add(hexHead);
+    const headCrown = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.0056, 0.0064, 0.0008, 12),
+      steelMat
+    );
+    headCrown.position.y = 0.0071;
+    group.add(hexHead, headCrown);
 
-    // M8 bolt shaft
+    // M8 bolt core shank (54 mm)
     const shaft = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.004, 0.004, 0.054, 12),
-      mat
+      new THREE.CylinderGeometry(0.0038, 0.0038, 0.054, 12),
+      steelMat
     );
     shaft.position.y = -0.027;
-    group.add(shaft);
+    const endChamfer = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.0038, 0.003, 0.0018, 12),
+      steelMat
+    );
+    endChamfer.position.y = -0.0548;
+    group.add(shaft, endChamfer);
+
+    // 12 fine metric M8 thread pitch rings along lower 32 mm
+    const threadGeo = new THREE.TorusGeometry(0.00385, 0.00048, 5, 12);
+    threadGeo.rotateX(Math.PI / 2);
+    const threadCount = 12;
+    const threads = new THREE.InstancedMesh(threadGeo, threadMat, threadCount);
+    const dummy = new THREE.Object3D();
+    for (let i = 0; i < threadCount; i++) {
+      dummy.position.set(0, -0.020 - i * 0.0028, 0);
+      dummy.rotation.set(0.09, 0, 0);
+      dummy.scale.set(1, 1, 1);
+      dummy.updateMatrix();
+      threads.setMatrixAt(i, dummy.matrix);
+    }
+    threads.instanceMatrix.needsUpdate = true;
+    group.add(threads);
+
+    // Mating rear washer + M8 hex nut + blue Nyloc locking collar near bottom end
+    const rearWasher = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.0094, 0.0094, 0.0014, 16),
+      steelMat
+    );
+    rearWasher.position.y = -0.0435;
+    const hexNut = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.0074, 0.0074, 0.0064, 6),
+      steelMat
+    );
+    hexNut.position.y = -0.0475;
+    const nylocRing = new THREE.Mesh(
+      new THREE.TorusGeometry(0.0044, 0.0009, 6, 14),
+      nylocBlueMat
+    );
+    nylocRing.rotation.x = Math.PI / 2;
+    nylocRing.position.y = -0.051;
+    group.add(rearWasher, hexNut, nylocRing);
   } else {
-    // Beechwood dowel 8x35
-    const mat = new THREE.MeshStandardMaterial({
-      color: activeColor('#C79B63'),
+    // Fluted beechwood dowel Ø8×35 mm with 45° chamfered ends and 8 longitudinal glue grooves
+    const woodMat = new THREE.MeshStandardMaterial({
+      color: activeColor('#CAA068'),
       roughness: 0.72,
       metalness: 0.02,
       emissive: activeEmissive,
     });
+    const grooveMat = new THREE.MeshStandardMaterial({
+      color: activeColor('#8C6335'),
+      roughness: 0.85,
+      metalness: 0.0,
+      emissive: activeEmissive,
+    });
 
+    // Main cylindrical body (31 mm) + top & bottom 45° chamfered cones (2 mm each)
     const body = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.0042, 0.0042, 0.036, 14),
-      mat
+      new THREE.CylinderGeometry(0.004, 0.004, 0.031, 16),
+      woodMat
     );
     body.position.y = -0.016;
-    group.add(body);
+    const topChamfer = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.0029, 0.004, 0.002, 16),
+      woodMat
+    );
+    topChamfer.position.y = 0.0005;
+    const botChamfer = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.004, 0.0029, 0.002, 16),
+      woodMat
+    );
+    botChamfer.position.y = -0.0325;
+    group.add(body, topChamfer, botChamfer);
+
+    // 8 longitudinal fluted glue grooves (single instanced draw call)
+    const fluteGeo = new THREE.BoxGeometry(0.00055, 0.0295, 0.00045);
+    const fluteCount = 8;
+    const flutes = new THREE.InstancedMesh(fluteGeo, grooveMat, fluteCount);
+    const dummy = new THREE.Object3D();
+    for (let i = 0; i < fluteCount; i++) {
+      const ang = (i / fluteCount) * Math.PI * 2;
+      dummy.position.set(Math.cos(ang) * 0.00395, -0.016, Math.sin(ang) * 0.00395);
+      dummy.rotation.set(0, -ang, 0);
+      dummy.scale.set(1, 1, 1);
+      dummy.updateMatrix();
+      flutes.setMatrixAt(i, dummy.matrix);
+    }
+    flutes.instanceMatrix.needsUpdate = true;
+    group.add(flutes);
   }
 
   if (isWarn) {

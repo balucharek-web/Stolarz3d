@@ -5,11 +5,13 @@ import {
   type RoomFloorFinish,
   type RoomOpening,
   type RoomOpeningType,
+  type RoomSlopedCeiling,
   type RoomStyle,
   type RoomVertex,
   type RoomWallFinish,
   type RoomWallObstacle,
   type RoomWallObstacleType,
+  type RoomWallSlope,
 } from '../types/furniture';
 
 export interface WallSegment {
@@ -51,7 +53,9 @@ export type RoomShapePresetId =
   | 'alcove'
   | 'l_shape'
   | 'u_shape'
-  | 'chamfered';
+  | 'chamfered'
+  | 'attic_single'
+  | 'attic_gable';
 
 export const WALL_FINISH_CATALOG: Record<
   RoomWallFinish,
@@ -656,6 +660,22 @@ export function syncRoomWithPolygon(room: RoomConfig): RoomConfig {
     (idx) => idx >= 0 && idx < segments.length
   );
 
+  const seenSlopeWalls = new Set<number>();
+  const wallSlopes: RoomWallSlope[] = (room.wallSlopes ?? [])
+    .filter((s) => {
+      if (s.wallIndex < 0 || s.wallIndex >= segments.length) return false;
+      if (seenSlopeWalls.has(s.wallIndex)) return false;
+      seenSlopeWalls.add(s.wallIndex);
+      return true;
+    })
+    .map((s) => ({
+      wallIndex: s.wallIndex,
+      kneeWallHeightMm: Math.round(
+        Math.max(200, Math.min(room.heightMm - 100, s.kneeWallHeightMm))
+      ),
+      slopeDepthMm: Math.round(Math.max(250, Math.min(8000, s.slopeDepthMm))),
+    }));
+
   return {
     ...room,
     floorPoints: pts,
@@ -666,6 +686,7 @@ export function syncRoomWithPolygon(room: RoomConfig): RoomConfig {
     hiddenWallIndices,
     openings,
     wallObstacles,
+    wallSlopes,
     style: getRoomStyle(room),
   };
 }
@@ -722,6 +743,8 @@ export function buildRoomPreset(
   floorPoints: RoomVertex[];
   openings: RoomOpening[];
   wallObstacles: RoomWallObstacle[];
+  slopedCeiling?: RoomSlopedCeiling;
+  wallSlopes?: RoomWallSlope[];
 } {
   const fb = computeFurnitureFootprintXZ(parts);
   const snap50 = (v: number) => Math.round(v / 50) * 50;
@@ -853,6 +876,108 @@ export function buildRoomPreset(
         },
       ],
       wallObstacles: [],
+    };
+  }
+
+  if (preset === 'attic_single') {
+    const w = snap50(Math.max(3600, furnW + 1400));
+    const d = snap50(Math.max(3000, furnD + 1800));
+    const x0 = snap50(cx - w / 2);
+    const x1 = x0 + w;
+    return {
+      floorPoints: [
+        { id: 'v_0', xMm: x0, zMm: backZ },
+        { id: 'v_1', xMm: x1, zMm: backZ },
+        { id: 'v_2', xMm: x1, zMm: backZ + d },
+        { id: 'v_3', xMm: x0, zMm: backZ + d },
+      ],
+      openings: [
+        {
+          id: 'op_door_attic1',
+          type: 'door_single',
+          label: 'Drzwi wejściowe',
+          wallIndex: 2,
+          offsetMm: 300,
+          widthMm: 900,
+          heightMm: Math.min(2050, heightMm - 200),
+          sillHeightMm: 0,
+          swingInward: true,
+          hingeSide: 'left',
+        },
+      ],
+      wallObstacles: [],
+      slopedCeiling: {
+        enabled: false,
+        side: 'right',
+        kneeWallHeightMm: 1200,
+        slopeWidthMm: 1600,
+      },
+      wallSlopes: [
+        {
+          wallIndex: 0,
+          kneeWallHeightMm: Math.min(1200, heightMm - 600),
+          slopeDepthMm: Math.min(1600, Math.round(d * 0.55)),
+        },
+      ],
+    };
+  }
+
+  if (preset === 'attic_gable') {
+    const w = snap50(Math.max(4000, furnW + 1600));
+    const d = snap50(Math.max(3200, furnD + 1800));
+    const x0 = snap50(cx - w / 2);
+    const x1 = x0 + w;
+    const slopeRun = snap50(Math.min(1600, w * 0.42));
+    return {
+      floorPoints: [
+        { id: 'v_0', xMm: x0, zMm: backZ },
+        { id: 'v_1', xMm: x1, zMm: backZ },
+        { id: 'v_2', xMm: x1, zMm: backZ + d },
+        { id: 'v_3', xMm: x0, zMm: backZ + d },
+      ],
+      openings: [
+        {
+          id: 'op_win_gable',
+          type: 'window',
+          label: 'Okno szczytowe',
+          wallIndex: 0,
+          offsetMm: Math.max(300, Math.round((w - 1100) / 2)),
+          widthMm: Math.min(1100, w - 600),
+          heightMm: Math.min(1300, heightMm - 1050),
+          sillHeightMm: 880,
+        },
+        {
+          id: 'op_door_gable',
+          type: 'door_single',
+          label: 'Drzwi wejściowe',
+          wallIndex: 2,
+          offsetMm: Math.max(300, Math.round((w - 900) / 2)),
+          widthMm: 900,
+          heightMm: Math.min(2050, heightMm - 200),
+          sillHeightMm: 0,
+          swingInward: true,
+          hingeSide: 'left',
+        },
+      ],
+      wallObstacles: [],
+      slopedCeiling: {
+        enabled: false,
+        side: 'right',
+        kneeWallHeightMm: 1150,
+        slopeWidthMm: slopeRun,
+      },
+      wallSlopes: [
+        {
+          wallIndex: 1,
+          kneeWallHeightMm: Math.min(1150, heightMm - 600),
+          slopeDepthMm: slopeRun,
+        },
+        {
+          wallIndex: 3,
+          kneeWallHeightMm: Math.min(1150, heightMm - 600),
+          slopeDepthMm: slopeRun,
+        },
+      ],
     };
   }
 
@@ -1001,12 +1126,26 @@ export function splitWallSegment(
     idx > wallIndex ? idx + 1 : idx
   );
 
+  // Preserve wall slopes on both split halves so roof geometry stays continuous
+  const nextSlopes: RoomWallSlope[] = [];
+  for (const s of room.wallSlopes ?? []) {
+    if (s.wallIndex > wallIndex) {
+      nextSlopes.push({ ...s, wallIndex: s.wallIndex + 1 });
+    } else if (s.wallIndex === wallIndex) {
+      nextSlopes.push({ ...s, wallIndex });
+      nextSlopes.push({ ...s, wallIndex: wallIndex + 1 });
+    } else {
+      nextSlopes.push(s);
+    }
+  }
+
   return syncRoomWithPolygon({
     ...room,
     floorPoints: nextPts,
     openings: nextOpenings,
     wallObstacles: nextObstacles,
     hiddenWallIndices: nextHidden,
+    wallSlopes: nextSlopes,
   });
 }
 
@@ -1042,11 +1181,581 @@ export function deleteRoomVertex(room: RoomConfig, vertexIndex: number): RoomCon
     .map(remapWall)
     .filter((w): w is number => w !== null);
 
+  const nextSlopes = (room.wallSlopes ?? [])
+    .map((s) => {
+      const nw = remapWall(s.wallIndex);
+      return nw === null ? null : { ...s, wallIndex: nw };
+    })
+    .filter((s): s is RoomWallSlope => s !== null);
+
   return syncRoomWithPolygon({
     ...room,
     floorPoints: nextPts,
     openings: nextOpenings,
     wallObstacles: nextObstacles,
     hiddenWallIndices: nextHidden,
+    wallSlopes: nextSlopes,
   });
 }
+
+/**
+ * Pushes or pulls wall `wallIndex` parallel to itself along its outward normal (`deltaOutwardMm`).
+ * Positive moves wall outward (enlarges room), negative moves wall inward (shrinks room).
+ */
+export function moveWallSegmentParallel(
+  room: RoomConfig,
+  wallIndex: number,
+  deltaOutwardMm: number
+): RoomConfig {
+  const pts = getRoomPolygonPoints(room);
+  const segs = computeWallSegments(pts);
+  const seg = segs[wallIndex];
+  if (!seg || Math.abs(deltaOutwardMm) < 1) return room;
+
+  const n = pts.length;
+  const i0 = wallIndex;
+  const i1 = (wallIndex + 1) % n;
+  const nextPts = pts.map((v, idx) => {
+    if (idx === i0 || idx === i1) {
+      return {
+        ...v,
+        xMm: Math.round(v.xMm + seg.outNx * deltaOutwardMm),
+        zMm: Math.round(v.zMm + seg.outNz * deltaOutwardMm),
+      };
+    }
+    return { ...v };
+  });
+
+  if (computeRoomAreaM2(nextPts) < 0.25) return room;
+  return syncRoomWithPolygon({ ...room, floorPoints: nextPts });
+}
+
+/**
+ * 1-click Bay Window / Alcove / Recess builder:
+ * Splits the middle section of wall `wallIndex` into a rectangular projection (positive `depthMm`)
+ * or recess/pillar indentation (negative `depthMm`).
+ */
+export function extrudeWallNotch(
+  room: RoomConfig,
+  wallIndex: number,
+  depthMm = 600,
+  widthFraction = 0.45
+): RoomConfig {
+  const pts = getRoomPolygonPoints(room);
+  const segs = computeWallSegments(pts);
+  const seg = segs[wallIndex];
+  if (!seg || pts.length > 20 || seg.lengthMm < 900) return room;
+
+  const frac = Math.max(0.25, Math.min(0.7, widthFraction));
+  const notchW = Math.max(400, Math.round((seg.lengthMm * frac) / 50) * 50);
+  const uStart = Math.round((seg.lengthMm - notchW) / 2 / 50) * 50;
+  const uEnd = uStart + notchW;
+
+  const mkId = (suffix: string) =>
+    `v_${Date.now()}_${suffix}_${Math.random().toString(36).slice(2, 5)}`;
+
+  const pA: RoomVertex = {
+    id: mkId('a'),
+    xMm: Math.round(seg.start.xMm + seg.tx * uStart),
+    zMm: Math.round(seg.start.zMm + seg.tz * uStart),
+  };
+  const pB: RoomVertex = {
+    id: mkId('b'),
+    xMm: Math.round(pA.xMm + seg.outNx * depthMm),
+    zMm: Math.round(pA.zMm + seg.outNz * depthMm),
+  };
+  const pC: RoomVertex = {
+    id: mkId('c'),
+    xMm: Math.round(seg.start.xMm + seg.tx * uEnd + seg.outNx * depthMm),
+    zMm: Math.round(seg.start.zMm + seg.tz * uEnd + seg.outNz * depthMm),
+  };
+  const pD: RoomVertex = {
+    id: mkId('d'),
+    xMm: Math.round(seg.start.xMm + seg.tx * uEnd),
+    zMm: Math.round(seg.start.zMm + seg.tz * uEnd),
+  };
+
+  const nextPts = [
+    ...pts.slice(0, wallIndex + 1),
+    pA,
+    pB,
+    pC,
+    pD,
+    ...pts.slice(wallIndex + 1),
+  ];
+
+  if (computeRoomAreaM2(nextPts) < 0.3) return room;
+
+  // Remap indices: inserting 4 vertices adds 4 wall segments after wallIndex
+  const shiftAfter = (w: number) => (w > wallIndex ? w + 4 : w);
+
+  const nextOpenings = (room.openings ?? []).map((o) => {
+    if (o.wallIndex !== wallIndex) return { ...o, wallIndex: shiftAfter(o.wallIndex) };
+    const center = o.offsetMm + o.widthMm / 2;
+    if (center < uStart) return o;
+    if (center > uEnd) {
+      return {
+        ...o,
+        wallIndex: wallIndex + 4,
+        offsetMm: Math.max(0, Math.round(o.offsetMm - uEnd)),
+      };
+    }
+    return {
+      ...o,
+      wallIndex: wallIndex + 2,
+      offsetMm: Math.max(0, Math.round(o.offsetMm - uStart)),
+    };
+  });
+
+  const nextObstacles = (room.wallObstacles ?? []).map((o) => {
+    if (o.wallIndex !== wallIndex) return { ...o, wallIndex: shiftAfter(o.wallIndex) };
+    const center = o.offsetMm + o.widthMm / 2;
+    if (center < uStart) return o;
+    if (center > uEnd) {
+      return {
+        ...o,
+        wallIndex: wallIndex + 4,
+        offsetMm: Math.max(0, Math.round(o.offsetMm - uEnd)),
+      };
+    }
+    return {
+      ...o,
+      wallIndex: wallIndex + 2,
+      offsetMm: Math.max(0, Math.round(o.offsetMm - uStart)),
+    };
+  });
+
+  const nextHidden = (room.hiddenWallIndices ?? []).map(shiftAfter);
+  const nextSlopes = (room.wallSlopes ?? []).map((s) => ({
+    ...s,
+    wallIndex: shiftAfter(s.wallIndex),
+  }));
+
+  return syncRoomWithPolygon({
+    ...room,
+    floorPoints: nextPts,
+    openings: nextOpenings,
+    wallObstacles: nextObstacles,
+    hiddenWallIndices: nextHidden,
+    wallSlopes: nextSlopes,
+  });
+}
+
+// ============================================================================
+// TRUE POLYGON-CLIPPED ROOF SLOPES, WALL TOP PROFILES & MITERED CORNER GEOMETRY
+// ============================================================================
+
+export interface ResolvedRoomSlope {
+  id: string;
+  /** Attached polygon wall index, or null for legacy global bounding-box fallback */
+  wallIndex: number | null;
+  label: string;
+  originX: number;
+  originZ: number;
+  /** Unit inward normal from the knee wall into the room */
+  inNx: number;
+  inNz: number;
+  kneeWallHeightMm: number;
+  slopeDepthMm: number;
+  ceilingHeightMm: number;
+  /** Roof pitch angle in degrees */
+  angleDeg: number;
+  /** True if synthesized from legacy room.slopedCeiling */
+  isLegacy: boolean;
+}
+
+export interface Point2DMm {
+  xMm: number;
+  zMm: number;
+}
+
+/**
+ * Resolves all active roof slopes for a room into oriented 3D half-planes.
+ * Uses `room.wallSlopes` when present, falling back seamlessly to legacy `room.slopedCeiling`.
+ */
+export function getEffectiveRoomWallSlopes(
+  room: RoomConfig,
+  precomputedSegments?: WallSegment[]
+): ResolvedRoomSlope[] {
+  const pts = getRoomPolygonPoints(room);
+  const segments = precomputedSegments ?? computeWallSegments(pts);
+  const bounds = computeRoomBoundsXZ(pts);
+  const ceilingH = Math.max(1200, room.heightMm);
+  const result: ResolvedRoomSlope[] = [];
+
+  if (room.wallSlopes && room.wallSlopes.length > 0) {
+    for (const ws of room.wallSlopes) {
+      const seg = segments[ws.wallIndex];
+      if (!seg) continue;
+      const kneeH = Math.max(200, Math.min(ceilingH - 80, ws.kneeWallHeightMm));
+      const depth = Math.max(200, ws.slopeDepthMm);
+      const angleDeg = Number(
+        ((Math.atan2(ceilingH - kneeH, depth) * 180) / Math.PI).toFixed(1)
+      );
+      result.push({
+        id: `slope_w${ws.wallIndex}`,
+        wallIndex: ws.wallIndex,
+        label: `Skos (${seg.label})`,
+        originX: seg.start.xMm,
+        originZ: seg.start.zMm,
+        inNx: seg.inNx,
+        inNz: seg.inNz,
+        kneeWallHeightMm: kneeH,
+        slopeDepthMm: depth,
+        ceilingHeightMm: ceilingH,
+        angleDeg,
+        isLegacy: false,
+      });
+    }
+    return result;
+  }
+
+  // Backward compatibility: map legacy left/right slopedCeiling onto the room's bounding edge
+  if (room.slopedCeiling?.enabled) {
+    const isRight = room.slopedCeiling.side === 'right';
+    const kneeH = Math.max(200, Math.min(ceilingH - 80, room.slopedCeiling.kneeWallHeightMm));
+    const depth = Math.max(200, Math.min(bounds.widthMm, room.slopedCeiling.slopeWidthMm));
+    const angleDeg = Number(
+      ((Math.atan2(ceilingH - kneeH, depth) * 180) / Math.PI).toFixed(1)
+    );
+    // Find best matching polygon wall index on that side (for direct 3D selection & migration)
+    let matchedWallIndex: number | null = null;
+    let bestScore = -Infinity;
+    for (const seg of segments) {
+      const dirDot = isRight ? -seg.inNx : seg.inNx;
+      if (dirDot > 0.85) {
+        const edgeDist = isRight
+          ? Math.abs(seg.midX - bounds.maxX)
+          : Math.abs(seg.midX - bounds.minX);
+        const score = seg.lengthMm - edgeDist * 3;
+        if (score > bestScore) {
+          bestScore = score;
+          matchedWallIndex = seg.index;
+        }
+      }
+    }
+    result.push({
+      id: `slope_legacy_${room.slopedCeiling.side}`,
+      wallIndex: matchedWallIndex,
+      label: isRight ? 'Skos (prawa strona)' : 'Skos (lewa strona)',
+      originX: isRight ? bounds.maxX : bounds.minX,
+      originZ: bounds.minZ,
+      inNx: isRight ? -1 : 1,
+      inNz: 0,
+      kneeWallHeightMm: kneeH,
+      slopeDepthMm: depth,
+      ceilingHeightMm: ceilingH,
+      angleDeg,
+      isLegacy: true,
+    });
+  }
+
+  return result;
+}
+
+/**
+ * Evaluates a single roof slope plane's height at `(xMm, zMm)`.
+ * Returns `ceilingHeightMm` beyond `slopeDepthMm`, `kneeWallHeightMm` behind the knee wall,
+ * and exact linear interpolation in between.
+ */
+export function evaluateSingleSlopeHeightMm(
+  xMm: number,
+  zMm: number,
+  slope: ResolvedRoomSlope
+): number {
+  const dIn = (xMm - slope.originX) * slope.inNx + (zMm - slope.originZ) * slope.inNz;
+  if (dIn <= 0) return slope.kneeWallHeightMm;
+  if (dIn >= slope.slopeDepthMm) return slope.ceilingHeightMm;
+  const t = dIn / slope.slopeDepthMm;
+  return slope.kneeWallHeightMm + t * (slope.ceilingHeightMm - slope.kneeWallHeightMm);
+}
+
+/**
+ * Exact ceiling height at ANY world `(xMm, zMm)` point inside the room,
+ * taking all active wall roof slopes into account.
+ */
+export function getRoomCeilingHeightAtXZ(
+  xMm: number,
+  zMm: number,
+  room: RoomConfig,
+  precomputedSlopes?: ResolvedRoomSlope[]
+): number {
+  const slopes = precomputedSlopes ?? getEffectiveRoomWallSlopes(room);
+  let h = room.heightMm;
+  for (const s of slopes) {
+    const sh = evaluateSingleSlopeHeightMm(xMm, zMm, s);
+    if (sh < h) h = sh;
+  }
+  return h;
+}
+
+/**
+ * Returns the exact clipped top polyline `[{ uMm, yMm }]` along wall segment `seg`
+ * (`uMm` from `0` to `seg.lengthMm`) so gable walls form crisp pentagons/trapezoids
+ * and knee walls stop cleanly beneath every roof slope!
+ */
+export function getWallTopProfileMm(
+  seg: WallSegment,
+  room: RoomConfig,
+  precomputedSlopes?: ResolvedRoomSlope[]
+): Array<{ uMm: number; yMm: number }> {
+  const slopes = precomputedSlopes ?? getEffectiveRoomWallSlopes(room);
+  const len = seg.lengthMm;
+  if (slopes.length === 0) {
+    return [
+      { uMm: 0, yMm: room.heightMm },
+      { uMm: len, yMm: room.heightMm },
+    ];
+  }
+
+  const uSamples: number[] = [0, len];
+
+  // Collect exact parameter `u` where each slope crosses dIn = 0 or dIn = slopeDepthMm
+  const slopeLines: Array<{
+    uMin: number;
+    uMax: number;
+    m: number; // dh/du
+    b: number; // h(0)
+  }> = [];
+
+  for (const s of slopes) {
+    const d0 = (seg.start.xMm - s.originX) * s.inNx + (seg.start.zMm - s.originZ) * s.inNz;
+    const rate = seg.tx * s.inNx + seg.tz * s.inNz;
+    const risePerMm = (s.ceilingHeightMm - s.kneeWallHeightMm) / s.slopeDepthMm;
+    slopeLines.push({
+      uMin: 0,
+      uMax: len,
+      m: rate * risePerMm,
+      b: s.kneeWallHeightMm + d0 * risePerMm,
+    });
+    if (Math.abs(rate) > 1e-6) {
+      for (const targetD of [0, s.slopeDepthMm]) {
+        const uHit = (targetD - d0) / rate;
+        if (uHit > 1 && uHit < len - 1) {
+          uSamples.push(uHit);
+        }
+      }
+    }
+  }
+
+  // Also collect intersections between pairs of competing slopes along this wall
+  for (let i = 0; i < slopeLines.length; i++) {
+    for (let j = i + 1; j < slopeLines.length; j++) {
+      const dm = slopeLines[i].m - slopeLines[j].m;
+      if (Math.abs(dm) > 1e-7) {
+        const uHit = (slopeLines[j].b - slopeLines[i].b) / dm;
+        if (uHit > 1 && uHit < len - 1) {
+          uSamples.push(uHit);
+        }
+      }
+    }
+  }
+
+  uSamples.sort((a, b) => a - b);
+  const uniqueU: number[] = [];
+  for (const u of uSamples) {
+    if (uniqueU.length === 0 || u - uniqueU[uniqueU.length - 1] > 1.5) {
+      uniqueU.push(u);
+    }
+  }
+  if (uniqueU[uniqueU.length - 1] < len - 0.5) uniqueU.push(len);
+
+  const rawProfile = uniqueU.map((uMm) => {
+    const xMm = seg.start.xMm + seg.tx * uMm;
+    const zMm = seg.start.zMm + seg.tz * uMm;
+    return {
+      uMm,
+      yMm: getRoomCeilingHeightAtXZ(xMm, zMm, room, slopes),
+    };
+  });
+
+  // Remove redundant collinear interior vertices
+  const simplified: Array<{ uMm: number; yMm: number }> = [rawProfile[0]];
+  for (let i = 1; i < rawProfile.length - 1; i++) {
+    const prev = simplified[simplified.length - 1];
+    const cur = rawProfile[i];
+    const next = rawProfile[i + 1];
+    const t = (cur.uMm - prev.uMm) / Math.max(1e-6, next.uMm - prev.uMm);
+    const interpY = prev.yMm + t * (next.yMm - prev.yMm);
+    if (Math.abs(cur.yMm - interpY) > 1.0) {
+      simplified.push(cur);
+    }
+  }
+  simplified.push(rawProfile[rawProfile.length - 1]);
+  return simplified;
+}
+
+/**
+ * Sutherland-Hodgman 2D polygon clipper against half-plane `a * x + b * z <= c`.
+ */
+export function clipPolygonHalfPlane2D(
+  poly: Point2DMm[],
+  a: number,
+  b: number,
+  c: number
+): Point2DMm[] {
+  if (poly.length < 3) return [];
+  const out: Point2DMm[] = [];
+  const EPS = 1e-4;
+  const evalPt = (p: Point2DMm) => a * p.xMm + b * p.zMm - c;
+
+  for (let i = 0; i < poly.length; i++) {
+    const curr = poly[i];
+    const prev = poly[(i + poly.length - 1) % poly.length];
+    const currVal = evalPt(curr);
+    const prevVal = evalPt(prev);
+    const currIn = currVal <= EPS;
+    const prevIn = prevVal <= EPS;
+
+    if (currIn !== prevIn) {
+      const denom = prevVal - currVal;
+      const t = Math.abs(denom) > 1e-9 ? prevVal / denom : 0;
+      const ix = prev.xMm + t * (curr.xMm - prev.xMm);
+      const iz = prev.zMm + t * (curr.zMm - prev.zMm);
+      out.push({ xMm: ix, zMm: iz });
+    }
+    if (currIn) {
+      out.push(curr);
+    }
+  }
+
+  // Deduplicate near-identical consecutive points
+  const clean: Point2DMm[] = [];
+  for (const pt of out) {
+    const last = clean[clean.length - 1];
+    if (!last || Math.hypot(pt.xMm - last.xMm, pt.zMm - last.zMm) > 0.5) {
+      clean.push(pt);
+    }
+  }
+  if (
+    clean.length >= 2 &&
+    Math.hypot(clean[0].xMm - clean[clean.length - 1].xMm, clean[0].zMm - clean[clean.length - 1].zMm) < 0.5
+  ) {
+    clean.pop();
+  }
+  return clean.length >= 3 ? clean : [];
+}
+
+/**
+ * Computes the exact 2D floor projection polygon for each active roof slope,
+ * clipped strictly to the room's polygon AND strictly to where that slope is the lowest surface.
+ */
+export function computeSlopeSurfacePolygons2D(
+  room: RoomConfig,
+  precomputedSlopes?: ResolvedRoomSlope[]
+): Array<{ slope: ResolvedRoomSlope; polygon: Point2DMm[] }> {
+  const pts = getRoomPolygonPoints(room).map((v) => ({ xMm: v.xMm, zMm: v.zMm }));
+  const slopes = precomputedSlopes ?? getEffectiveRoomWallSlopes(room);
+  if (slopes.length === 0 || pts.length < 3) return [];
+
+  const linearPlane = (s: ResolvedRoomSlope) => {
+    const k = (s.ceilingHeightMm - s.kneeWallHeightMm) / s.slopeDepthMm;
+    const originDot = s.originX * s.inNx + s.originZ * s.inNz;
+    return {
+      A: k * s.inNx,
+      B: k * s.inNz,
+      C: s.kneeWallHeightMm - k * originDot,
+      originDot,
+    };
+  };
+
+  const planes = slopes.map(linearPlane);
+  const results: Array<{ slope: ResolvedRoomSlope; polygon: Point2DMm[] }> = [];
+
+  for (let i = 0; i < slopes.length; i++) {
+    const si = slopes[i];
+    const pi = planes[i];
+    let poly: Point2DMm[] = pts;
+
+    // 1. Keep region where dIn <= slopeDepthMm
+    poly = clipPolygonHalfPlane2D(poly, si.inNx, si.inNz, pi.originDot + si.slopeDepthMm);
+    if (poly.length < 3) continue;
+
+    // 2. Keep region where dIn >= -2 mm (never bleed behind the knee wall into negative territory)
+    poly = clipPolygonHalfPlane2D(poly, -si.inNx, -si.inNz, -pi.originDot + 2);
+    if (poly.length < 3) continue;
+
+    // 3. Clip against any competing slope j so two slopes meet sharply at the ridge/valley
+    for (let j = 0; j < slopes.length; j++) {
+      if (i === j) continue;
+      const pj = planes[j];
+      const da = pi.A - pj.A;
+      const db = pi.B - pj.B;
+      const dc = pj.C - pi.C;
+      if (Math.hypot(da, db) > 1e-6) {
+        poly = clipPolygonHalfPlane2D(poly, da, db, dc);
+        if (poly.length < 3) break;
+      }
+    }
+
+    if (poly.length >= 3) {
+      results.push({ slope: si, polygon: poly });
+    }
+  }
+
+  return results;
+}
+
+/**
+ * Computes the exact 2D polygon of the flat ceiling plateau (area beyond all roof slopes).
+ */
+export function computeFlatCeilingPolygon2D(
+  room: RoomConfig,
+  precomputedSlopes?: ResolvedRoomSlope[]
+): Point2DMm[] {
+  let poly: Point2DMm[] = getRoomPolygonPoints(room).map((v) => ({ xMm: v.xMm, zMm: v.zMm }));
+  const slopes = precomputedSlopes ?? getEffectiveRoomWallSlopes(room);
+  for (const s of slopes) {
+    const originDot = s.originX * s.inNx + s.originZ * s.inNz;
+    // Keep dIn >= slopeDepthMm  <=>  -inNx * x - inNz * z <= -(originDot + slopeDepthMm)
+    poly = clipPolygonHalfPlane2D(poly, -s.inNx, -s.inNz, -(originDot + s.slopeDepthMm));
+    if (poly.length < 3) return [];
+  }
+  return poly;
+}
+
+/**
+ * Computes clean mitered outer corner points (in world mm) for every vertex of the room polygon.
+ * Eliminates both 90° outer corner notches and 270° inner L-corner double-wall overlaps!
+ */
+export function computeMiteredWallOuterCorners(
+  segments: WallSegment[],
+  wallThicknessMm: number
+): Point2DMm[] {
+  const n = segments.length;
+  if (n < 3) return [];
+  const t = Math.max(40, wallThicknessMm);
+  const maxMiter = t * 2.2;
+  const out: Point2DMm[] = [];
+
+  for (let i = 0; i < n; i++) {
+    const prev = segments[(i - 1 + n) % n];
+    const curr = segments[i];
+    const vx = curr.start.xMm;
+    const vz = curr.start.zMm;
+
+    const dot = prev.outNx * curr.outNx + prev.outNz * curr.outNz;
+    const denom = 1 + dot;
+
+    if (denom > 0.15) {
+      let ox = ((prev.outNx + curr.outNx) * t) / denom;
+      let oz = ((prev.outNz + curr.outNz) * t) / denom;
+      const len = Math.hypot(ox, oz);
+      if (len > maxMiter) {
+        const s = maxMiter / len;
+        ox *= s;
+        oz *= s;
+      }
+      out.push({ xMm: vx + ox, zMm: vz + oz });
+    } else {
+      // Degenerate ~180° hairpin: simple average normal
+      const nx = (prev.outNx + curr.outNx) * 0.5 || curr.outNx;
+      const nz = (prev.outNz + curr.outNz) * 0.5 || curr.outNz;
+      const nLen = Math.hypot(nx, nz) || 1;
+      out.push({ xMm: vx + (nx / nLen) * t, zMm: vz + (nz / nLen) * t });
+    }
+  }
+
+  return out;
+}
+
