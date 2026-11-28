@@ -7,30 +7,27 @@ import {
   initializeFirestore,
   type Firestore,
 } from 'firebase/firestore';
+import firebaseConfig from '../firebase-applet-config.json';
 
-export const FIREBASE_PROJECT_ID = 'stolarz3d';
-
-const firebaseConfig = {
-  apiKey: 'AIzaSyAVfc-ZdsSIy95_8QXn41h0odsRfnXe3-Y',
-  authDomain: 'stolarz3d.firebaseapp.com',
-  projectId: 'stolarz3d',
-  storageBucket: 'stolarz3d.firebasestorage.app',
-  messagingSenderId: '625088495109',
-  appId: '1:625088495109:web:7265cc191a9f504b70e66c',
-  measurementId: 'G-XQT2X422XF',
-};
+export const FIREBASE_PROJECT_ID = firebaseConfig.projectId;
+export const FIRESTORE_DATABASE_ID = firebaseConfig.firestoreDatabaseId || '(default)';
 
 export const app = initializeApp(firebaseConfig);
 
 function createFirestoreInstance(): Firestore {
+  const dbId = firebaseConfig.firestoreDatabaseId || undefined;
   try {
-    // Force HTTP long-polling so mobile carriers, proxies, and sandboxed iframes
-    // never stall or drop into offline mode on WebChannel streaming errors.
-    return initializeFirestore(app, {
-      experimentalForceLongPolling: true,
-    });
+    // Auto-detect long-polling for mobile carriers, proxies, and sandboxed iframes
+    // while explicitly targeting the provisioned named Firestore database.
+    return initializeFirestore(
+      app,
+      {
+        experimentalAutoDetectLongPolling: true,
+      },
+      dbId
+    );
   } catch {
-    return getFirestore(app);
+    return dbId ? getFirestore(app, dbId) : getFirestore(app);
   }
 }
 

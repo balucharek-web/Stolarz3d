@@ -121,6 +121,8 @@ interface BottomDockProps {
   onOpenInspector: () => void;
   onEditParametricCabinet?: () => void;
   onRotateSelected90?: () => void;
+  onRotateAxis?: (axis: 'x' | 'y' | 'z', deltaDeg: number) => void;
+  onQuickOrientation?: (preset: 'upright' | 'flat_x' | 'flat_z') => void;
   onDuplicateSelected?: () => void;
   onDropSelectedToFloor?: () => void;
   onDeleteSelected?: () => void;
@@ -206,6 +208,8 @@ export const BottomDock: React.FC<BottomDockProps> = ({
   onOpenInspector,
   onEditParametricCabinet,
   onRotateSelected90,
+  onRotateAxis,
+  onQuickOrientation,
   onDuplicateSelected,
   onDropSelectedToFloor,
   onDeleteSelected,
@@ -249,6 +253,7 @@ export const BottomDock: React.FC<BottomDockProps> = ({
       activeGroupEditLabel ||
       tool === 'screw' ||
       tool === 'resize' ||
+      tool === 'rotate' ||
       tool === 'measure'
   );
 
@@ -376,12 +381,13 @@ export const BottomDock: React.FC<BottomDockProps> = ({
           MOBILE-FIRST THUMB DOCK & 3-TAB SHEET (< md)
       ===================================================================== */}
       <div className="md:hidden fixed inset-x-0 bottom-0 z-30 pointer-events-none">
-        {/* Contextual Selection / Group-Drill Bar above mobile nav */}
+        {/* Contextual Selection / Group-Drill / Rotate Bar above mobile nav */}
         {!mobileMenuOpen &&
           (selectedPartName ||
             selectedFastenerLabel ||
             activeGroupEditLabel ||
             tool === 'screw' ||
+            tool === 'rotate' ||
             tool === 'measure') && (
             <div className="studio-glass animate-studio-pop mx-2.5 mb-2 pointer-events-auto flex items-center justify-between gap-1.5 rounded-2xl px-2.5 py-1.5 text-zinc-100">
               {selectedFastenerLabel ? (
@@ -416,6 +422,67 @@ export const BottomDock: React.FC<BottomDockProps> = ({
                     </button>
                   )}
                 </>
+              ) : tool === 'rotate' && !selectedPartName ? (
+                <span className="text-xs font-medium text-amber-300 truncate pl-1 py-1.5">
+                  Obrót 3D: tapnij szafkę lub kantówkę, aby ją obrócić
+                </span>
+              ) : tool === 'rotate' && selectedPartName && onRotateAxis ? (
+                <div className="w-full space-y-1.5 py-0.5">
+                  <div className="flex items-center justify-between gap-1.5">
+                    <span className="text-[11px] font-semibold text-amber-300 truncate pl-0.5">
+                      Obrót: {selectedCabinetName || (selectedCount > 1 ? `Grupa (${selectedCount})` : selectedPartName)}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={onToggleNudgePad}
+                      className={`flex h-7 items-center gap-1 rounded-lg border px-2 text-[11px] font-semibold shrink-0 ${
+                        nudgePadOpen
+                          ? 'border-amber-400/60 bg-amber-500/20 text-amber-200'
+                          : 'border-white/[0.12] bg-white/[0.06] text-zinc-100'
+                      }`}
+                    >
+                      <Gamepad2 className="h-3.5 w-3.5 text-amber-400" />
+                      <span>Więcej / Dosuń</span>
+                    </button>
+                  </div>
+                  <div className="flex items-center gap-1 overflow-x-auto cad-scroll">
+                    {([-90, -45, 45, 90] as const).map((deg) => (
+                      <button
+                        key={deg}
+                        type="button"
+                        onClick={() => onRotateAxis('y', deg)}
+                        className="flex min-h-[36px] flex-1 min-w-[48px] items-center justify-center rounded-xl border border-white/[0.1] bg-white/[0.06] px-2 text-xs font-semibold font-mono-num text-zinc-100 active:bg-amber-500 active:text-zinc-950"
+                      >
+                        {deg > 0 ? `+${deg}°` : `${deg}°`}
+                      </button>
+                    ))}
+                    {!selectedCabinetName && onQuickOrientation && (
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => onQuickOrientation('upright')}
+                          className="flex min-h-[36px] items-center justify-center rounded-xl border border-sky-400/30 bg-sky-500/12 px-2.5 text-[11px] font-semibold text-sky-200 active:bg-sky-500 active:text-zinc-950 whitespace-nowrap"
+                        >
+                          Pion
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => onQuickOrientation('flat_x')}
+                          className="flex min-h-[36px] items-center justify-center rounded-xl border border-sky-400/30 bg-sky-500/12 px-2.5 text-[11px] font-semibold text-sky-200 active:bg-sky-500 active:text-zinc-950 whitespace-nowrap"
+                        >
+                          Poz. ↔
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => onQuickOrientation('flat_z')}
+                          className="flex min-h-[36px] items-center justify-center rounded-xl border border-sky-400/30 bg-sky-500/12 px-2.5 text-[11px] font-semibold text-sky-200 active:bg-sky-500 active:text-zinc-950 whitespace-nowrap"
+                        >
+                          Poz. ↕
+                        </button>
+                      </>
+                    )}
+                  </div>
+                </div>
               ) : tool === 'screw' ? (
                 <>
                   <select
@@ -1182,6 +1249,61 @@ export const BottomDock: React.FC<BottomDockProps> = ({
                   <span className="truncate">
                     Rozciągnij: kliknij szafkę lub płytę w 3D, aby rozciągnąć jej wymiary uchwytami
                   </span>
+                </div>
+              ) : tool === 'rotate' && !selectedPartName ? (
+                <div className="flex items-center gap-2 min-w-0 text-amber-300">
+                  <RotateCw className="h-3.5 w-3.5 shrink-0" />
+                  <span className="truncate">
+                    Obrót 3D: kliknij szafkę lub element (np. kantówkę), aby go obrócić
+                  </span>
+                </div>
+              ) : tool === 'rotate' && selectedPartName && onRotateAxis ? (
+                <div className="flex items-center gap-1.5 min-w-0 flex-wrap">
+                  <RotateCw className="h-3.5 w-3.5 text-amber-400 shrink-0" />
+                  <span className="truncate font-semibold text-white max-w-[160px]">
+                    {selectedCabinetName || (selectedCount > 1 ? `Grupa (${selectedCount})` : selectedPartName)}
+                  </span>
+                  <div className="flex items-center gap-1 ml-1">
+                    {([-90, -45, -15, 15, 45, 90] as const).map((deg) => (
+                      <button
+                        key={deg}
+                        type="button"
+                        onClick={() => onRotateAxis('y', deg)}
+                        className="h-7 rounded-lg border border-white/[0.09] bg-white/[0.05] px-2 text-[11px] font-semibold font-mono-num text-zinc-100 hover:bg-amber-500/20 hover:border-amber-400/50 hover:text-amber-200 cursor-pointer transition-colors"
+                        title={`Obróć w poziomie (Y) o ${deg > 0 ? `+${deg}` : deg}°`}
+                      >
+                        {deg > 0 ? `+${deg}°` : `${deg}°`}
+                      </button>
+                    ))}
+                  </div>
+                  {!selectedCabinetName && onQuickOrientation && (
+                    <div className="flex items-center gap-1 pl-1.5 ml-0.5 border-l border-white/[0.1]">
+                      <button
+                        type="button"
+                        onClick={() => onQuickOrientation('upright')}
+                        className="h-7 rounded-lg border border-sky-400/30 bg-sky-500/12 px-2 text-[11px] font-semibold text-sky-200 hover:bg-sky-500/25 cursor-pointer transition-colors"
+                        title="Postaw element pionowo (0°)"
+                      >
+                        Pion 0°
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => onQuickOrientation('flat_x')}
+                        className="h-7 rounded-lg border border-sky-400/30 bg-sky-500/12 px-2 text-[11px] font-semibold text-sky-200 hover:bg-sky-500/25 cursor-pointer transition-colors"
+                        title="Połóż element poziomo wzdłuż osi X"
+                      >
+                        Poziom ↔
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => onQuickOrientation('flat_z')}
+                        className="h-7 rounded-lg border border-sky-400/30 bg-sky-500/12 px-2 text-[11px] font-semibold text-sky-200 hover:bg-sky-500/25 cursor-pointer transition-colors"
+                        title="Połóż element poziomo wzdłuż osi Z"
+                      >
+                        Poziom ↕
+                      </button>
+                    </div>
+                  )}
                 </div>
               ) : selectedCabinetName ? (
                 <div className="flex items-center gap-2 min-w-0">

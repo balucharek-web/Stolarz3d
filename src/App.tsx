@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import * as THREE from 'three';
 import {
   AlertTriangle,
   CheckSquare,
@@ -112,7 +113,11 @@ import {
   type SelectionScope,
   type UiMode,
 } from './components/BottomDock';
-import { PrecisionNudgePad } from './components/PrecisionNudgePad';
+import {
+  PrecisionNudgePad,
+  type QuickOrientationPreset,
+  type SnapNeighborDir,
+} from './components/PrecisionNudgePad';
 import { InspectorDrawer } from './components/InspectorDrawer';
 import { AddPartDrawer } from './components/AddPartDrawer';
 import { CabinetBuilderModal } from './components/CabinetBuilderModal';
@@ -1277,6 +1282,46 @@ export default function App() {
     [commitProject, selectedPartIds]
   );
 
+  // Atomic batch 3D transform (whole cabinet / multi-selection rigid-body rotation & translation)
+  const handleBatchTransformParts = useCallback(
+    (
+      updates: Array<{
+        id: string;
+        position: [number, number, number];
+        rotation: [number, number, number];
+      }>
+    ) => {
+      if (updates.length === 0) return;
+      commitProject((prev) => {
+        const updateMap = new Map(updates.map((u) => [u.id, u]));
+        const changedIds = new Set<string>();
+        const nextParts = prev.parts.map((p) => {
+          const u = updateMap.get(p.id);
+          if (!u || p.locked) return p;
+          changedIds.add(p.id);
+          return {
+            ...p,
+            position: u.position,
+            rotation: u.rotation,
+          };
+        });
+        if (changedIds.size === 0) return prev;
+        const synced = syncFastenersWithParts(
+          prev.parts,
+          nextParts,
+          prev.fasteners,
+          changedIds
+        );
+        return {
+          ...prev,
+          parts: nextParts,
+          fasteners: synced.fasteners,
+        };
+      });
+    },
+    [commitProject]
+  );
+
   // Alt + Drag instant clone-and-place
   const handleCloneTransformPart = useCallback(
     (
@@ -1828,67 +1873,344 @@ export default function App() {
     [selectedPartId, project.parts, handleTransformPart, showToast]
   );
 
-  // Group-aware 90-degree Y rotation around shared XZ center
-  const handleRotate90Y = useCallback(
-    (partId: string) => {
+  // Group-aware 3-axis quaternion rotation around shared 3D center (works for whole cabinets AND single kantówki!)
+  const handleRotateSelectedAxis = useCallback(
+    (axis: 'x' | 'y' | 'z', deltaDeg: number, explicitPartId?: string) => {
+      const anchorId = explicitPartId ?? selectedPartId;
+      if (!anchorId) return;
       const ids =
-        selectedPartIds.length > 1 && selectedPartIds.includes(partId)
+        selectedPartIds.length > 1 && selectedPartIds.includes(anchorId)
           ? selectedPartIds
-          : [partId];
+          : [anchorId];
       const targets = project.parts.filter((p) => ids.includes(p.id) && !p.locked);
       if (targets.length === 0) {
         showToast('Element jest zablokowany — odblokuj, aby obrócić');
         return;
       }
-      if (targets.length === 1) {
-        const target = targets[0];
-        const nextY = (target.rotation[1] + 90) % 360;
-        handleUpdatePart(target.id, {
-          rotation: [target.rotation[0], nextY, target.rotation[2]],
-        });
-        showToast('Obrócono element o 90°');
-        return;
-      }
-      // Compute shared XZ center across all selected group members
+
+      const axisVec =
+        axis === 'x'
+          ? new THREE.Vector3(1, 0, 0)
+          : axis === 'y'
+            ? new THREE.Vector3(0, 1, 0)
+            : new THREE.Vector3(0, 0, 1);
+      const qDelta = new THREE.Quaternion().setFromAxisAngle(
+        axisVec,
+        THREE.MathUtils.degToRad(deltaDeg)
+      );
+
       let minX = Infinity;
       let maxX = -Infinity;
+      let minY = Infinity;
+      let maxY = -Infinity;
       let minZ = Infinity;
       let maxZ = -Infinity;
       for (const p of targets) {
         const b = getPartWorldBox(p);
         minX = Math.min(minX, b.minX);
         maxX = Math.max(maxX, b.maxX);
+        minY = Math.min(minY, b.minY);
+        maxY = Math.max(maxY, b.maxY);
         minZ = Math.min(minZ, b.minZ);
         maxZ = Math.max(maxZ, b.maxZ);
       }
-      const cx = (minX + maxX) / 2;
-      const cz = (minZ + maxZ) / 2;
-      const idSet = new Set(targets.map((p) => p.id));
+      const center = new THREE.Vector3(
+        (minX + maxX) / 2,
+        (minY + maxY) / 2,
+        (minZ + maxZ) / 2
+      );
 
-      commitProject((prev) => {
-        const nextParts = prev.parts.map((p) => {
-          if (!idSet.has(p.id)) return p;
-          const relX = p.position[0] - cx;
-          const relZ = p.position[2] - cz;
-          // Three.js +90° around Y: x' = z, z' = -x
-          const nextX = Math.round((cx + relZ) * 10) / 10;
-          const nextZ = Math.round((cz - relX) * 10) / 10;
-          return {
-            ...p,
-            position: [nextX, p.position[1], nextZ] as [number, number, number],
-            rotation: [p.rotation[0], (p.rotation[1] + 90) % 360, p.rotation[2]] as [
-              number,
-              number,
-              number,
-            ],
-          };
-        });
-        const synced = syncFastenersWithParts(prev.parts, nextParts, prev.fasteners, idSet);
-        return { ...prev, parts: nextParts, fasteners: synced.fasteners };
+      const normalizeDeg = (rad: number) => {
+        let deg = THREE.MathUtils.radToDeg(rad);
+        deg = ((deg % 360) + 360) % 360;
+        if (deg > 180) deg -= 360;
+        const r = Math.round(deg * 10) / 10;
+        return Math.abs(r - Math.round(r)) < 0.08 ? Math.round(r) : r;
+      };
+
+      const rawUpdates = targets.map((p) => {
+        const rel = new THREE.Vector3(
+          p.position[0] - center.x,
+          p.position[1] - center.y,
+          p.position[2] - center.z
+        ).applyQuaternion(qDelta);
+
+        const qCurr = new THREE.Quaternion().setFromEuler(
+          new THREE.Euler(
+            THREE.MathUtils.degToRad(p.rotation[0]),
+            THREE.MathUtils.degToRad(p.rotation[1]),
+            THREE.MathUtils.degToRad(p.rotation[2]),
+            'XYZ'
+          )
+        );
+        const qNext = qDelta.clone().multiply(qCurr);
+        const eNext = new THREE.Euler().setFromQuaternion(qNext, 'XYZ');
+
+        return {
+          id: p.id,
+          position: [
+            Math.round((center.x + rel.x) * 10) / 10,
+            Math.round((center.y + rel.y) * 10) / 10,
+            Math.round((center.z + rel.z) * 10) / 10,
+          ] as [number, number, number],
+          rotation: [
+            normalizeDeg(eNext.x),
+            normalizeDeg(eNext.y),
+            normalizeDeg(eNext.z),
+          ] as [number, number, number],
+        };
       });
-      showToast(`Obrócono grupę (${targets.length} elem.) o 90°`);
+
+      // Floor safety: lift cleanly if tilting/rotating pushes any corner below Y = 0
+      let minAfterY = Infinity;
+      for (const u of rawUpdates) {
+        const orig = targets.find((t) => t.id === u.id);
+        if (!orig) continue;
+        const box = getPartWorldBox({ ...orig, position: u.position, rotation: u.rotation });
+        minAfterY = Math.min(minAfterY, box.minY);
+      }
+      const floorLift = Number.isFinite(minAfterY) && minAfterY < 0 ? -minAfterY : 0;
+      const finalUpdates =
+        floorLift > 0
+          ? rawUpdates.map((u) => ({
+              ...u,
+              position: [
+                u.position[0],
+                Math.round((u.position[1] + floorLift) * 10) / 10,
+                u.position[2],
+              ] as [number, number, number],
+            }))
+          : rawUpdates;
+
+      handleBatchTransformParts(finalUpdates);
+      const signStr = deltaDeg > 0 ? `+${deltaDeg}°` : `${deltaDeg}°`;
+      const axisUpper = axis.toUpperCase();
+      showToast(
+        targets.length > 1
+          ? `Obrócono całość (${targets.length} elem.) o ${signStr} (${axisUpper})`
+          : `Obrócono element o ${signStr} (${axisUpper})`
+      );
     },
-    [project.parts, selectedPartIds, handleUpdatePart, commitProject, showToast]
+    [selectedPartId, selectedPartIds, project.parts, handleBatchTransformParts, showToast]
+  );
+
+  // Group-aware 90-degree Y rotation around shared XZ center
+  const handleRotate90Y = useCallback(
+    (partId: string) => {
+      handleRotateSelectedAxis('y', 90, partId);
+    },
+    [handleRotateSelectedAxis]
+  );
+
+  // 1-tap orientation presets for kantówki / beams / boards (Pion 0°, Poziom X ↔, Poziom Z ↕)
+  const handleQuickOrientation = useCallback(
+    (preset: QuickOrientationPreset) => {
+      if (!selectedPartId) return;
+      const ids =
+        selectedPartIds.length > 1 && selectedPartIds.includes(selectedPartId)
+          ? selectedPartIds
+          : [selectedPartId];
+      const targets = project.parts.filter((p) => ids.includes(p.id) && !p.locked);
+      if (targets.length === 0) {
+        showToast('Element jest zablokowany — odblokuj, aby zmienić ułożenie');
+        return;
+      }
+
+      const targetRot: [number, number, number] =
+        preset === 'upright'
+          ? [0, 0, 0]
+          : preset === 'flat_x'
+            ? [0, 0, 90]
+            : [90, 0, 0];
+
+      const updates = targets.map((p) => {
+        const beforeBox = getPartWorldBox(p);
+        const afterBox = getPartWorldBox({ ...p, rotation: targetRot });
+        // Keep the bottom resting cleanly at the same height (or floor if negative)
+        const liftY =
+          beforeBox.minY <= 2
+            ? -afterBox.minY
+            : afterBox.minY < 0
+              ? -afterBox.minY
+              : 0;
+        return {
+          id: p.id,
+          position: [
+            p.position[0],
+            Math.round((p.position[1] + liftY) * 10) / 10,
+            p.position[2],
+          ] as [number, number, number],
+          rotation: targetRot,
+        };
+      });
+
+      handleBatchTransformParts(updates);
+      showToast(
+        preset === 'upright'
+          ? 'Ustawiono pionowo (0°)'
+          : preset === 'flat_x'
+            ? 'Położono poziomo wzdłuż osi X (↔)'
+            : 'Położono poziomo wzdłuż osi Z (↕)'
+      );
+    },
+    [selectedPartId, selectedPartIds, project.parts, handleBatchTransformParts, showToast]
+  );
+
+  // 1-tap Magnetic Flush Snap ("Dosuń na styk" — 0 mm gap to nearest element or room wall!)
+  const handleSnapSelectedToNeighbor = useCallback(
+    (dir: SnapNeighborDir) => {
+      if (!selectedPartId) return;
+      const ids =
+        selectedPartIds.length > 1 && selectedPartIds.includes(selectedPartId)
+          ? selectedPartIds
+          : [selectedPartId];
+      const targets = project.parts.filter((p) => ids.includes(p.id) && !p.locked);
+      if (targets.length === 0) {
+        showToast('Element jest zablokowany — odblokuj, aby dosunąć');
+        return;
+      }
+      const targetIdSet = new Set(targets.map((p) => p.id));
+
+      let selMinX = Infinity;
+      let selMaxX = -Infinity;
+      let selMinY = Infinity;
+      let selMaxY = -Infinity;
+      let selMinZ = Infinity;
+      let selMaxZ = -Infinity;
+      for (const p of targets) {
+        const b = getPartWorldBox(p);
+        selMinX = Math.min(selMinX, b.minX);
+        selMaxX = Math.max(selMaxX, b.maxX);
+        selMinY = Math.min(selMinY, b.minY);
+        selMaxY = Math.max(selMaxY, b.maxY);
+        selMinZ = Math.min(selMinZ, b.minZ);
+        selMaxZ = Math.max(selMaxZ, b.maxZ);
+      }
+
+      const others = project.parts
+        .filter((p) => !targetIdSet.has(p.id) && !p.hidden)
+        .map((p) => ({ part: p, box: getPartWorldBox(p) }));
+
+      const overlap1D = (a1: number, a2: number, b1: number, b2: number, tol = 25) =>
+        Math.min(a2, b2) - Math.max(a1, b1) > -tol;
+
+      let bestDelta: number | null = null;
+      let bestDist = Infinity;
+      let bestLabel = '';
+
+      const considerCandidate = (delta: number, label: string, aligned: boolean) => {
+        const dist = Math.abs(delta);
+        if (dist < 0.2) return; // already flush
+        // Strongly prefer neighbors that overlap in perpendicular axes
+        const weightedDist = aligned ? dist : dist + 10000;
+        if (weightedDist < bestDist) {
+          bestDist = weightedDist;
+          bestDelta = delta;
+          bestLabel = label;
+        }
+      };
+
+      const room = project.room;
+      const roomHalfW = room?.enabled ? room.widthMm / 2 : 0;
+      const roomBackZ = room?.enabled ? -room.depthMm / 2 : 0;
+      const roomFrontZ = room?.enabled ? room.depthMm / 2 : 0;
+
+      if (dir === 'left') {
+        for (const { part, box } of others) {
+          if (box.maxX <= selMinX + 2) {
+            const aligned =
+              overlap1D(selMinY, selMaxY, box.minY, box.maxY) &&
+              overlap1D(selMinZ, selMaxZ, box.minZ, box.maxZ);
+            considerCandidate(box.maxX - selMinX, part.name, aligned);
+          }
+        }
+        if (room?.enabled && -roomHalfW <= selMinX + 2) {
+          considerCandidate(-roomHalfW - selMinX, 'ściany lewej', true);
+        }
+      } else if (dir === 'right') {
+        for (const { part, box } of others) {
+          if (box.minX >= selMaxX - 2) {
+            const aligned =
+              overlap1D(selMinY, selMaxY, box.minY, box.maxY) &&
+              overlap1D(selMinZ, selMaxZ, box.minZ, box.maxZ);
+            considerCandidate(box.minX - selMaxX, part.name, aligned);
+          }
+        }
+        if (room?.enabled && roomHalfW >= selMaxX - 2) {
+          considerCandidate(roomHalfW - selMaxX, 'ściany prawej', true);
+        }
+      } else if (dir === 'back') {
+        for (const { part, box } of others) {
+          if (box.maxZ <= selMinZ + 2) {
+            const aligned =
+              overlap1D(selMinX, selMaxX, box.minX, box.maxX) &&
+              overlap1D(selMinY, selMaxY, box.minY, box.maxY);
+            considerCandidate(box.maxZ - selMinZ, part.name, aligned);
+          }
+        }
+        if (room?.enabled && roomBackZ <= selMinZ + 2) {
+          considerCandidate(roomBackZ - selMinZ, 'ściany tylnej', true);
+        }
+      } else if (dir === 'front') {
+        for (const { part, box } of others) {
+          if (box.minZ >= selMaxZ - 2) {
+            const aligned =
+              overlap1D(selMinX, selMaxX, box.minX, box.maxX) &&
+              overlap1D(selMinY, selMaxY, box.minY, box.maxY);
+            considerCandidate(box.minZ - selMaxZ, part.name, aligned);
+          }
+        }
+        if (room?.enabled && roomFrontZ >= selMaxZ - 2) {
+          considerCandidate(roomFrontZ - selMaxZ, 'przodu pokoju', false);
+        }
+      } else if (dir === 'down') {
+        for (const { part, box } of others) {
+          if (box.maxY <= selMinY + 2) {
+            const aligned =
+              overlap1D(selMinX, selMaxX, box.minX, box.maxX) &&
+              overlap1D(selMinZ, selMaxZ, box.minZ, box.maxZ);
+            considerCandidate(box.maxY - selMinY, part.name, aligned);
+          }
+        }
+        if (selMinY > 0.2) {
+          considerCandidate(-selMinY, 'podłogi (Y = 0)', true);
+        }
+      } else if (dir === 'up') {
+        for (const { part, box } of others) {
+          if (box.minY >= selMaxY - 2) {
+            const aligned =
+              overlap1D(selMinX, selMaxX, box.minX, box.maxX) &&
+              overlap1D(selMinZ, selMaxZ, box.minZ, box.maxZ);
+            considerCandidate(box.minY - selMaxY, part.name, aligned);
+          }
+        }
+        if (room?.enabled && room.heightMm >= selMaxY - 2) {
+          considerCandidate(room.heightMm - selMaxY, 'sufitu', true);
+        }
+      }
+
+      if (bestDelta === null) {
+        showToast('Brak elementu w tym kierunku — element już przylega lub brak przeszkody');
+        return;
+      }
+
+      const dx = dir === 'left' || dir === 'right' ? bestDelta : 0;
+      const dy = dir === 'down' || dir === 'up' ? bestDelta : 0;
+      const dz = dir === 'back' || dir === 'front' ? bestDelta : 0;
+
+      const updates = targets.map((p) => ({
+        id: p.id,
+        position: [
+          Math.round((p.position[0] + dx) * 10) / 10,
+          Math.round((p.position[1] + dy) * 10) / 10,
+          Math.round((p.position[2] + dz) * 10) / 10,
+        ] as [number, number, number],
+        rotation: p.rotation,
+      }));
+      handleBatchTransformParts(updates);
+      showToast(`Dosunięto na styk do: ${bestLabel}`);
+    },
+    [selectedPartId, selectedPartIds, project.parts, project.room, handleBatchTransformParts, showToast]
   );
 
   const handleDropToFloor = useCallback(
@@ -3073,9 +3395,11 @@ export default function App() {
           fastenerAuditMap={fastenerAuditMap}
           clearances={selectedClearances}
           jointZones={jointZones}
+          isParametricCabinetSelected={Boolean(selectedSingleCabinet)}
           onSelectPart={handleSelectPart}
           onSelectFastener={handleSelectFastener}
           onTransformPart={handleTransformPart}
+          onBatchTransformParts={handleBatchTransformParts}
           onCloneTransformPart={handleCloneTransformPart}
           onResizePart={handleResizePart}
           onAddMeasurement={handleAddMeasurement}
@@ -3089,13 +3413,19 @@ export default function App() {
         />
       </main>
 
-      {/* Floating Thumb-Friendly Precision Nudge Pad (Mobile & Desktop) */}
+      {/* Floating Thumb-Friendly Precision Nudge, Flush-Snap & 3-Axis Rotate Pad (Mobile & Desktop) */}
       <PrecisionNudgePad
         open={nudgePadOpen && Boolean(selectedPart) && !anyModalOpen && !inspectorOpen}
-        label={selectedPart?.name ?? ''}
+        defaultTab={tool === 'rotate' ? 'rotate' : 'move'}
+        label={selectedSingleCabinet?.config.name ?? selectedPart?.name ?? ''}
         selectedCount={selectedPartIds.length}
+        isCabinet={Boolean(selectedSingleCabinet)}
         locked={Boolean(selectedPart?.locked)}
+        currentRotation={selectedPart?.rotation ?? [0, 0, 0]}
         onNudge={handleNudgeSelected}
+        onSnapToNeighbor={handleSnapSelectedToNeighbor}
+        onRotateAxis={(axis, deg) => handleRotateSelectedAxis(axis, deg)}
+        onQuickOrientation={handleQuickOrientation}
         onRotate90={() => {
           if (selectedPartId) handleRotate90Y(selectedPartId);
         }}
@@ -3274,6 +3604,8 @@ export default function App() {
         onRotateSelected90={() => {
           if (selectedPartId) handleRotate90Y(selectedPartId);
         }}
+        onRotateAxis={(axis, deg) => handleRotateSelectedAxis(axis, deg)}
+        onQuickOrientation={handleQuickOrientation}
         onDuplicateSelected={() => {
           if (selectedPartId) handleDuplicatePart(selectedPartId);
         }}

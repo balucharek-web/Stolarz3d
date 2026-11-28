@@ -88,12 +88,20 @@ interface Viewport3DProps {
   fastenerAuditMap: Map<string, FastenerAudit>;
   clearances: ClearanceGuide[];
   jointZones: JointZone[];
+  isParametricCabinetSelected?: boolean;
   onSelectPart: (id: string | null, additive?: boolean) => void;
   onSelectFastener: (id: string | null) => void;
   onTransformPart: (
     id: string,
     position: [number, number, number],
     rotation: [number, number, number]
+  ) => void;
+  onBatchTransformParts?: (
+    updates: Array<{
+      id: string;
+      position: [number, number, number];
+      rotation: [number, number, number];
+    }>
   ) => void;
   onCloneTransformPart: (
     id: string,
@@ -429,6 +437,10 @@ export const Viewport3D = forwardRef<Viewport3DHandle, Viewport3DProps>(
       y: number;
       label: string;
     } | null>(null);
+    const [rotateHud, setRotateHud] = useState<{
+      title: string;
+      angles: string;
+    } | null>(null);
     const [activeClearanceEdit, setActiveClearanceEdit] = useState<{
       x: number;
       y: number;
@@ -453,6 +465,8 @@ export const Viewport3D = forwardRef<Viewport3DHandle, Viewport3DProps>(
       camera: THREE.PerspectiveCamera;
       orbit: OrbitControls;
       transform: TransformControls;
+      groupPivotProxy: THREE.Group;
+      activeGizmoMemberIds: Set<string>;
       materials: MaterialLibrary;
       partsRoot: THREE.Group;
       roomRoot: THREE.Group;
@@ -831,13 +845,19 @@ export const Viewport3D = forwardRef<Viewport3DHandle, Viewport3DProps>(
 
       // TransformControls for interactive Move / Rotate gizmo (larger touch handles on phones)
       const transform = new TransformControls(camera, renderer.domElement);
-      transform.setSize(isTouchDevice ? 1.28 : 0.88);
+      transform.setSize(isTouchDevice ? 1.32 : 0.94);
       const transformHelper = (
         transform as unknown as { getHelper?: () => THREE.Object3D }
       ).getHelper
         ? (transform as unknown as { getHelper: () => THREE.Object3D }).getHelper()
         : (transform as unknown as THREE.Object3D);
       scene.add(transformHelper);
+
+      // Shared pivot proxy so rotating or moving a whole cabinet/group transforms ALL panels as one rigid body
+      const groupPivotProxy = new THREE.Group();
+      groupPivotProxy.name = 'group_pivot_proxy';
+      scene.add(groupPivotProxy);
+      const activeGizmoMemberIds = new Set<string>();
 
       const materials = new MaterialLibrary(renderer, isSoftwareGl, () => {
         runtimeRef.current?.requestRender();
@@ -901,8 +921,11 @@ export const Viewport3D = forwardRef<Viewport3DHandle, Viewport3DProps>(
           const baseQ = partBaseQuat.get(id);
           const dir = partExplodeDir.get(id);
           if (!base || !baseQ || !dir) return;
-          // Do not override actively dragged gizmo object
-          if (runtimeRef.current?.isDraggingGizmo && transform.object === node) {
+          // Do not override actively dragged gizmo object (or any member of an actively dragged cabinet/group)
+          if (
+            runtimeRef.current?.isDraggingGizmo &&
+            (transform.object === node || activeGizmoMemberIds.has(id))
+          ) {
             return;
           }
           _vec3A.copy(base).addScaledVector(dir, expAmt * 0.28);
@@ -1271,6 +1294,8 @@ export const Viewport3D = forwardRef<Viewport3DHandle, Viewport3DProps>(
         camera,
         orbit,
         transform,
+        groupPivotProxy,
+        activeGizmoMemberIds,
         materials,
         partsRoot,
         roomRoot,
@@ -1346,32 +1371,223 @@ export const Viewport3D = forwardRef<Viewport3DHandle, Viewport3DProps>(
         ];
       };
 
+      const normalizeCleanDeg = (rad: number): number => {
+        let deg = THREE.MathUtils.radToDeg(rad);
+        deg = ((deg % 360) + 360) % 360;
+        if (deg > 180) deg -= 360;
+        const rounded = Math.round(deg * 10) / 10;
+        return Math.abs(rounded - Math.round(rounded)) < 0.08 ? Math.round(rounded) : rounded;
+      };
+
+      const formatSignedDeg = (deg: number): string => {
+        const r = Math.round(deg);
+        return `${r > 0 ? '+' : ''}${r}°`;
+      };
+
+      let groupDragStart: {
+        pivotStartPos: THREE.Vector3;
+        pivotStartQuatInv: THREE.Quaternion;
+        members: Array<{
+          id: string;
+          node: THREE.Group;
+          startPos: THREE.Vector3;
+          startQuat: THREE.Quaternion;
+        }>;
+      } | null = null;
+      const _groupDeltaPos = new THREE.Vector3();
+      const _groupDeltaQuat = new THREE.Quaternion();
+      const _groupRelPos = new THREE.Vector3();
+      const _groupTempEuler = new THREE.Euler(0, 0, 0, 'XYZ');
+
+      const syncGroupMembersFromProxy = () => {
+        if (!groupDragStart) return;
+        _groupDeltaPos.copy(groupPivotProxy.position).sub(groupDragStart.pivotStartPos);
+        _groupDeltaQuat.copy(groupPivotProxy.quaternion).multiply(groupDragStart.pivotStartQuatInv);
+        for (const m of groupDragStart.members) {
+          _groupRelPos.copy(m.startPos).sub(groupDragStart.pivotStartPos);
+          _groupRelPos.applyQuaternion(_groupDeltaQuat);
+          m.node.position
+            .copy(groupDragStart.pivotStartPos)
+            .add(_groupRelPos)
+            .add(_groupDeltaPos);
+          m.node.quaternion.copy(_groupDeltaQuat).multiply(m.startQuat);
+          m.node.rotation.setFromQuaternion(m.node.quaternion, 'XYZ');
+        }
+      };
+
       transform.addEventListener('dragging-changed', (ev) => {
         const dragging = Boolean((ev as { value?: unknown }).value);
         if (runtimeRef.current) {
           runtimeRef.current.isDraggingGizmo = dragging;
         }
         orbit.enabled = !dragging;
-        if (!dragging && transform.object) {
-          const partId = transform.object.userData.partId as string | undefined;
-          if (partId) {
-            const rawPosMm: [number, number, number] = [
-              transform.object.position.x * M_TO_MM,
-              transform.object.position.y * M_TO_MM,
-              transform.object.position.z * M_TO_MM,
-            ];
-            const pos = computeSnappedTransformPos(partId, rawPosMm);
-            const rot: [number, number, number] = [
-              Math.round(THREE.MathUtils.radToDeg(transform.object.rotation.x)),
-              Math.round(THREE.MathUtils.radToDeg(transform.object.rotation.y)),
-              Math.round(THREE.MathUtils.radToDeg(transform.object.rotation.z)),
-            ];
-            propsRef.current.onTransformPart(partId, pos, rot);
+
+        if (dragging && transform.object === groupPivotProxy) {
+          const memberIds = (groupPivotProxy.userData.memberIds as string[] | undefined) ?? [];
+          const members: Array<{
+            id: string;
+            node: THREE.Group;
+            startPos: THREE.Vector3;
+            startQuat: THREE.Quaternion;
+          }> = [];
+          for (const id of memberIds) {
+            const node = partNodes.get(id);
+            if (node) {
+              members.push({
+                id,
+                node,
+                startPos: node.position.clone(),
+                startQuat: node.quaternion.clone(),
+              });
+            }
+          }
+          groupDragStart = {
+            pivotStartPos: groupPivotProxy.position.clone(),
+            pivotStartQuatInv: groupPivotProxy.quaternion.clone().invert(),
+            members,
+          };
+        }
+
+        if (!dragging) {
+          setRotateHud(null);
+          if (transform.object === groupPivotProxy && groupDragStart) {
+            syncGroupMembersFromProxy();
+            const isTranslate = transform.mode === 'translate';
+            const snap = propsRef.current.snapMm;
+            const snapDelta = (vMm: number) =>
+              snap > 0 ? Math.round(vMm / snap) * snap : Math.round(vMm);
+            let snappedDxMm = _groupDeltaPos.x * M_TO_MM;
+            let snappedDyMm = _groupDeltaPos.y * M_TO_MM;
+            let snappedDzMm = _groupDeltaPos.z * M_TO_MM;
+            if (isTranslate) {
+              snappedDxMm = snapDelta(snappedDxMm);
+              snappedDyMm = snapDelta(snappedDyMm);
+              snappedDzMm = snapDelta(snappedDzMm);
+            }
+
+            const rawUpdates = groupDragStart.members.map((m) => {
+              const orig = propsRef.current.parts.find((p) => p.id === m.id);
+              const posMm: [number, number, number] = isTranslate && orig
+                ? [
+                    Math.round((orig.position[0] + snappedDxMm) * 10) / 10,
+                    Math.round((orig.position[1] + snappedDyMm) * 10) / 10,
+                    Math.round((orig.position[2] + snappedDzMm) * 10) / 10,
+                  ]
+                : [
+                    Math.round(m.node.position.x * M_TO_MM * 10) / 10,
+                    Math.round(m.node.position.y * M_TO_MM * 10) / 10,
+                    Math.round(m.node.position.z * M_TO_MM * 10) / 10,
+                  ];
+              _groupTempEuler.setFromQuaternion(m.node.quaternion, 'XYZ');
+              const rotDeg: [number, number, number] = isTranslate && orig
+                ? orig.rotation
+                : [
+                    normalizeCleanDeg(_groupTempEuler.x),
+                    normalizeCleanDeg(_groupTempEuler.y),
+                    normalizeCleanDeg(_groupTempEuler.z),
+                  ];
+              return { id: m.id, position: posMm, rotation: rotDeg };
+            });
+
+            // Floor safety: prevent any rotated/moved cabinet or group from sinking below Y = 0
+            let minGroupY = Infinity;
+            for (const u of rawUpdates) {
+              const orig = propsRef.current.parts.find((p) => p.id === u.id);
+              if (!orig) continue;
+              const box = getPartWorldBox({
+                ...orig,
+                position: u.position,
+                rotation: u.rotation,
+              });
+              minGroupY = Math.min(minGroupY, box.minY);
+            }
+            const floorLift = Number.isFinite(minGroupY) && minGroupY < 0 ? -minGroupY : 0;
+            const finalUpdates =
+              floorLift > 0
+                ? rawUpdates.map((u) => ({
+                    ...u,
+                    position: [
+                      u.position[0],
+                      Math.round((u.position[1] + floorLift) * 10) / 10,
+                      u.position[2],
+                    ] as [number, number, number],
+                  }))
+                : rawUpdates;
+
+            groupDragStart = null;
+            if (propsRef.current.onBatchTransformParts) {
+              propsRef.current.onBatchTransformParts(finalUpdates);
+            } else if (finalUpdates.length > 0) {
+              const first = finalUpdates[0];
+              propsRef.current.onTransformPart(first.id, first.position, first.rotation);
+            }
+          } else if (transform.object) {
+            const partId = transform.object.userData.partId as string | undefined;
+            if (partId) {
+              const rawPosMm: [number, number, number] = [
+                transform.object.position.x * M_TO_MM,
+                transform.object.position.y * M_TO_MM,
+                transform.object.position.z * M_TO_MM,
+              ];
+              const rot: [number, number, number] = [
+                normalizeCleanDeg(transform.object.rotation.x),
+                normalizeCleanDeg(transform.object.rotation.y),
+                normalizeCleanDeg(transform.object.rotation.z),
+              ];
+              let pos = computeSnappedTransformPos(partId, rawPosMm);
+              const orig = propsRef.current.parts.find((p) => p.id === partId);
+              if (orig) {
+                const box = getPartWorldBox({ ...orig, position: pos, rotation: rot });
+                if (box.minY < 0) {
+                  pos = [pos[0], Math.round((pos[1] - box.minY) * 10) / 10, pos[2]];
+                }
+              }
+              propsRef.current.onTransformPart(partId, pos, rot);
+            }
           }
         }
         requestRender();
       });
+
       transform.addEventListener('change', () => {
+        if (runtimeRef.current?.isDraggingGizmo && transform.object === groupPivotProxy && groupDragStart) {
+          syncGroupMembersFromProxy();
+          if (transform.mode === 'rotate') {
+            _groupTempEuler.setFromQuaternion(_groupDeltaQuat, 'XYZ');
+            const dx = THREE.MathUtils.radToDeg(_groupTempEuler.x);
+            const dy = THREE.MathUtils.radToDeg(_groupTempEuler.y);
+            const dz = THREE.MathUtils.radToDeg(_groupTempEuler.z);
+            const parts: string[] = [];
+            if (Math.abs(dy) >= 0.5 || (Math.abs(dx) < 0.5 && Math.abs(dz) < 0.5)) {
+              parts.push(`Y: ${formatSignedDeg(dy)}`);
+            }
+            if (Math.abs(dx) >= 0.5) parts.push(`X: ${formatSignedDeg(dx)}`);
+            if (Math.abs(dz) >= 0.5) parts.push(`Z: ${formatSignedDeg(dz)}`);
+            setRotateHud({
+              title: propsRef.current.isParametricCabinetSelected
+                ? 'Obrót całej szafki'
+                : `Obrót grupy (${groupDragStart.members.length} elem.)`,
+              angles: parts.join(' · '),
+            });
+          }
+          requestRender();
+          return;
+        }
+
+        if (
+          runtimeRef.current?.isDraggingGizmo &&
+          transform.object &&
+          transform.mode === 'rotate'
+        ) {
+          const rx = Math.round(normalizeCleanDeg(transform.object.rotation.x));
+          const ry = Math.round(normalizeCleanDeg(transform.object.rotation.y));
+          const rz = Math.round(normalizeCleanDeg(transform.object.rotation.z));
+          setRotateHud({
+            title: 'Obrót elementu',
+            angles: `X: ${rx}° · Y: ${ry}° · Z: ${rz}°`,
+          });
+        }
+
         if (
           !applyingMagneticSnap &&
           runtimeRef.current?.isDraggingGizmo &&
@@ -3026,26 +3242,72 @@ export const Viewport3D = forwardRef<Viewport3DHandle, Viewport3DProps>(
         }
       }
 
-      // Attach TransformControls gizmo if Move or Rotate tool is active on a selected unlocked part
+      // Attach TransformControls gizmo: use shared groupPivotProxy for cabinets/multi-selection
+      // so rotating or moving transforms the ENTIRE cabinet/group as one rigid body!
+      rt.activeGizmoMemberIds.clear();
       if (
         props.selectedPartId &&
         (props.tool === 'move' || props.tool === 'rotate') &&
         props.explodedAmount < 0.01
       ) {
-        const selPartObj = props.parts.find((p) => p.id === props.selectedPartId);
-        const selectedNode =
-          selPartObj && !selPartObj.locked && !selPartObj.hidden
-            ? rt.partNodes.get(props.selectedPartId)
-            : undefined;
-        if (selectedNode) {
-          rt.transform.setMode(props.tool === 'move' ? 'translate' : 'rotate');
-          rt.transform.setTranslationSnap(
-            !props.magneticSnap && props.snapMm > 0 ? props.snapMm * MM_TO_M : null
+        const activeIds =
+          props.selectedPartIds.length > 0 && props.selectedPartIds.includes(props.selectedPartId)
+            ? props.selectedPartIds
+            : [props.selectedPartId];
+        const unlockedParts = props.parts.filter(
+          (p) => activeIds.includes(p.id) && !p.locked && !p.hidden && rt.partNodes.has(p.id)
+        );
+
+        const isRotateMode = props.tool === 'rotate';
+        rt.transform.setMode(isRotateMode ? 'rotate' : 'translate');
+        rt.transform.setTranslationSnap(
+          !props.magneticSnap && props.snapMm > 0 ? props.snapMm * MM_TO_M : null
+        );
+        rt.transform.setRotationSnap(
+          props.snapMm > 0 ? THREE.MathUtils.degToRad(15) : null
+        );
+
+        // On parametric cabinets in Rotate mode, keep only the clean green Y (horizontal) ring active
+        // so users NEVER accidentally tip an entire kitchen cabinet onto its side on touchscreens!
+        const lockToHorizontalY = Boolean(isRotateMode && props.isParametricCabinetSelected);
+        rt.transform.showX = !lockToHorizontalY;
+        rt.transform.showY = true;
+        rt.transform.showZ = !lockToHorizontalY;
+
+        if (unlockedParts.length > 1) {
+          let minX = Infinity;
+          let maxX = -Infinity;
+          let minY = Infinity;
+          let maxY = -Infinity;
+          let minZ = Infinity;
+          let maxZ = -Infinity;
+          for (const p of unlockedParts) {
+            const b = getPartWorldBox(p);
+            minX = Math.min(minX, b.minX);
+            maxX = Math.max(maxX, b.maxX);
+            minY = Math.min(minY, b.minY);
+            maxY = Math.max(maxY, b.maxY);
+            minZ = Math.min(minZ, b.minZ);
+            maxZ = Math.max(maxZ, b.maxZ);
+            rt.activeGizmoMemberIds.add(p.id);
+          }
+          rt.groupPivotProxy.position.set(
+            ((minX + maxX) / 2) * MM_TO_M,
+            ((minY + maxY) / 2) * MM_TO_M,
+            ((minZ + maxZ) / 2) * MM_TO_M
           );
-          rt.transform.setRotationSnap(
-            props.snapMm > 0 ? THREE.MathUtils.degToRad(15) : null
-          );
-          rt.transform.attach(selectedNode);
+          rt.groupPivotProxy.quaternion.identity();
+          rt.groupPivotProxy.rotation.set(0, 0, 0);
+          rt.groupPivotProxy.scale.set(1, 1, 1);
+          rt.groupPivotProxy.userData.isGroupPivot = true;
+          rt.groupPivotProxy.userData.memberIds = unlockedParts.map((p) => p.id);
+          rt.transform.attach(rt.groupPivotProxy);
+        } else if (unlockedParts.length === 1) {
+          const singleNode = rt.partNodes.get(unlockedParts[0].id);
+          if (singleNode) {
+            rt.activeGizmoMemberIds.add(unlockedParts[0].id);
+            rt.transform.attach(singleNode);
+          }
         }
       }
 
@@ -3077,11 +3339,19 @@ export const Viewport3D = forwardRef<Viewport3DHandle, Viewport3DProps>(
       props.fastenerAuditMap,
       props.clearances,
       props.jointZones,
+      props.isParametricCabinetSelected,
     ]);
 
     return (
       <div className="relative w-full h-full overflow-hidden">
         <div ref={mountRef} className="w-full h-full canvas-touch-lock" />
+        {/* Live 3D Rotation Degree HUD */}
+        {rotateHud && (
+          <div className="pointer-events-none absolute top-16 left-1/2 -translate-x-1/2 z-20 flex items-center gap-2 rounded-xl border border-amber-400/60 bg-[#101216]/95 px-3.5 py-1.5 text-xs shadow-2xl whitespace-nowrap">
+            <span className="font-medium text-zinc-300">{rotateHud.title}</span>
+            <span className="font-mono-num font-bold text-amber-300">{rotateHud.angles}</span>
+          </div>
+        )}
         {/* Live 3D Face Resize HUD near cursor */}
         {resizeHud && (
           <div
