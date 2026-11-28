@@ -10,6 +10,7 @@ import {
   ArrowDownToLine,
   Boxes,
   Camera,
+  CheckSquare,
   ChevronDown,
   ChevronUp,
   Copy,
@@ -54,6 +55,7 @@ import {
   ScrewType,
   StudioLighting,
 } from '../types/furniture';
+import type { CarpentryJoinMode } from '../engine/carpentry';
 
 export type UiMode = 'simple' | 'expert';
 export type SelectionScope = 'group' | 'part';
@@ -73,6 +75,8 @@ interface BottomDockProps {
   onEnterSinglePartEdit: () => void;
   nudgePadOpen: boolean;
   onToggleNudgePad: () => void;
+  multiSelectMode?: boolean;
+  onToggleMultiSelectMode?: () => void;
   tool: EditorTool;
   onChangeTool: (tool: EditorTool) => void;
   activeScrewType: ScrewType;
@@ -115,6 +119,7 @@ interface BottomDockProps {
   latestMeasurementLabel?: string | null;
   selectedFastenerLabel: string | null;
   onAlignSelected: (mode: AlignMode) => void;
+  onJoinSelected?: (mode: CarpentryJoinMode) => void;
   onDistributeSelected: (axis: 'x' | 'y' | 'z') => void;
   onGroupSelected: () => void;
   onUngroupSelected: () => void;
@@ -160,6 +165,8 @@ export const BottomDock: React.FC<BottomDockProps> = ({
   onEnterSinglePartEdit,
   nudgePadOpen,
   onToggleNudgePad,
+  multiSelectMode = false,
+  onToggleMultiSelectMode,
   tool,
   onChangeTool,
   activeScrewType,
@@ -202,6 +209,7 @@ export const BottomDock: React.FC<BottomDockProps> = ({
   latestMeasurementLabel = null,
   selectedFastenerLabel,
   onAlignSelected,
+  onJoinSelected,
   onDistributeSelected,
   onGroupSelected,
   onUngroupSelected,
@@ -300,6 +308,36 @@ export const BottomDock: React.FC<BottomDockProps> = ({
             </button>
           );
         })}
+
+        {onToggleMultiSelectMode && (
+          <button
+            type="button"
+            onClick={onToggleMultiSelectMode}
+            aria-label="Zaznacz wiele elementów (Shift + klik)"
+            className={`group relative flex h-10 w-10 flex-col items-center justify-center rounded-xl transition-all cursor-pointer ${
+              multiSelectMode
+                ? 'bg-sky-500 text-zinc-950 shadow-[0_2px_12px_rgba(14,165,233,0.4)]'
+                : 'text-zinc-300 hover:bg-white/[0.08] hover:text-white'
+            }`}
+          >
+            <CheckSquare className="h-4 w-4" />
+            <span className="text-[8px] font-semibold leading-none mt-0.5">Wiele</span>
+            {selectedCount > 1 && (
+              <span className="absolute -top-1 -right-1 flex h-4 min-w-[16px] items-center justify-center rounded-full bg-amber-500 px-1 text-[9px] font-bold text-zinc-950 font-mono-num shadow">
+                {selectedCount}
+              </span>
+            )}
+            <span
+              role="tooltip"
+              className="pointer-events-none absolute left-[calc(100%+10px)] top-1/2 -translate-y-1/2 -translate-x-1 opacity-0 group-hover:opacity-100 group-hover:translate-x-0 transition-all duration-150 flex items-center gap-1.5 rounded-lg border border-white/[0.1] bg-[#101216]/95 px-2.5 py-1 text-[11px] font-medium text-zinc-100 shadow-xl whitespace-nowrap"
+            >
+              <span>Zaznacz wiele (łącz elementy)</span>
+              <kbd className="rounded bg-white/[0.08] px-1 py-0.5 text-[10px] font-mono-num text-zinc-400">
+                Shift+Klik
+              </kbd>
+            </span>
+          </button>
+        )}
 
         {isExpert && (
           <>
@@ -530,6 +568,90 @@ export const BottomDock: React.FC<BottomDockProps> = ({
                     <span>Wyjdź z edycji</span>
                   </button>
                 </>
+              ) : selectedCount >= 2 && !selectedCabinetName && !selectedInGroup && onJoinSelected ? (
+                <div className="w-full space-y-1.5 py-0.5">
+                  <div className="flex items-center justify-between gap-1.5">
+                    <span className="text-[11px] font-semibold text-amber-300 truncate pl-0.5 font-mono-num">
+                      Połącz ({selectedCount} elem.)
+                    </span>
+                    <div className="flex items-center gap-1 shrink-0">
+                      <button
+                        type="button"
+                        onClick={onGroupSelected}
+                        className="flex h-7 items-center gap-1 rounded-lg border border-sky-400/40 bg-sky-500/15 px-2 text-[11px] font-semibold text-sky-200 active:bg-sky-500/30"
+                      >
+                        <Group className="h-3.5 w-3.5" />
+                        <span>Grupuj</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={onToggleNudgePad}
+                        aria-label="Pad precyzji"
+                        className={`flex h-7 w-7 items-center justify-center rounded-lg border ${
+                          nudgePadOpen
+                            ? 'border-amber-400/60 bg-amber-500/20 text-amber-300'
+                            : 'border-white/[0.1] bg-white/[0.05] text-zinc-200'
+                        }`}
+                      >
+                        <Gamepad2 className="h-3.5 w-3.5" />
+                      </button>
+                      {onDeleteSelected && (
+                        <button
+                          type="button"
+                          onClick={onDeleteSelected}
+                          aria-label="Usuń zaznaczone"
+                          className="flex h-7 w-7 items-center justify-center rounded-lg border border-red-500/25 bg-red-500/10 text-red-300 active:bg-red-500/25"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-1 overflow-x-auto cad-scroll">
+                    <button
+                      type="button"
+                      onClick={() => onJoinSelected('corner_l')}
+                      className="flex min-h-[36px] items-center justify-center rounded-xl border border-amber-400/45 bg-amber-500/18 px-2.5 text-[11px] font-semibold text-amber-200 active:bg-amber-500 active:text-zinc-950 whitespace-nowrap shrink-0"
+                    >
+                      Narożnik 90°
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => onJoinSelected('stack_top')}
+                      className="flex min-h-[36px] items-center justify-center rounded-xl border border-white/[0.1] bg-white/[0.06] px-2.5 text-[11px] font-semibold text-zinc-100 active:bg-amber-500 active:text-zinc-950 whitespace-nowrap shrink-0"
+                    >
+                      Na górze
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => onJoinSelected('t_joint')}
+                      className="flex min-h-[36px] items-center justify-center rounded-xl border border-white/[0.1] bg-white/[0.06] px-2.5 text-[11px] font-semibold text-zinc-100 active:bg-amber-500 active:text-zinc-950 whitespace-nowrap shrink-0"
+                    >
+                      Środek T
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => onJoinSelected('side_by_side')}
+                      className="flex min-h-[36px] items-center justify-center rounded-xl border border-sky-400/35 bg-sky-500/12 px-2.5 text-[11px] font-semibold text-sky-200 active:bg-sky-500 active:text-zinc-950 whitespace-nowrap shrink-0"
+                    >
+                      Obok siebie
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => onJoinSelected('in_line')}
+                      className="flex min-h-[36px] items-center justify-center rounded-xl border border-sky-400/35 bg-sky-500/12 px-2.5 text-[11px] font-semibold text-sky-200 active:bg-sky-500 active:text-zinc-950 whitespace-nowrap shrink-0"
+                    >
+                      W linii
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => onAlignSelected('front')}
+                      className="flex min-h-[36px] items-center justify-center rounded-xl border border-white/[0.08] bg-white/[0.05] px-2.5 text-[11px] font-medium text-zinc-200 active:bg-white/[0.14] whitespace-nowrap shrink-0"
+                    >
+                      Lico
+                    </button>
+                  </div>
+                </div>
               ) : (
                 <>
                   <div className="min-w-0 flex-1 pl-1">
@@ -555,6 +677,16 @@ export const BottomDock: React.FC<BottomDockProps> = ({
                         className="text-[11px] font-medium text-sky-300"
                       >
                         Edytuj pojedynczą płytę
+                      </button>
+                    ) : !selectedCabinetName && onToggleMultiSelectMode ? (
+                      <button
+                        type="button"
+                        onClick={onToggleMultiSelectMode}
+                        className="text-[11px] font-medium text-sky-300"
+                      >
+                        {multiSelectMode
+                          ? 'Tapnij 2. element, aby połączyć...'
+                          : '+ Zaznacz 2. element (połącz)'}
                       </button>
                     ) : null}
                   </div>
@@ -1320,7 +1452,7 @@ export const BottomDock: React.FC<BottomDockProps> = ({
                   <span className="font-semibold text-amber-300 whitespace-nowrap mr-1 font-mono-num">
                     {selectedInGroup ? `Grupa (${selectedCount})` : `${selectedCount} elem.`}
                   </span>
-                  {selectedInGroup && (
+                  {selectedInGroup ? (
                     <button
                       type="button"
                       onClick={onEnterSinglePartEdit}
@@ -1329,7 +1461,51 @@ export const BottomDock: React.FC<BottomDockProps> = ({
                     >
                       Edytuj pojedynczą płytę
                     </button>
-                  )}
+                  ) : onJoinSelected ? (
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => onJoinSelected('corner_l')}
+                        title="Połącz 2 elementy pod kątem prostym (narożnik L, 90°, styk 0 mm)"
+                        className="h-7 rounded-lg border border-amber-400/45 bg-amber-500/18 px-2 text-[11px] font-semibold text-amber-200 hover:bg-amber-500/30 cursor-pointer whitespace-nowrap transition-colors"
+                      >
+                        Narożnik 90°
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => onJoinSelected('stack_top')}
+                        title="Połóż 2. element idealnie na górze 1. elementu (belka na słupku)"
+                        className="h-7 rounded-lg border border-white/[0.1] bg-white/[0.05] px-2 text-[11px] font-medium text-zinc-100 hover:bg-amber-500/20 hover:border-amber-400/45 hover:text-amber-200 cursor-pointer whitespace-nowrap transition-colors"
+                      >
+                        Na górze
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => onJoinSelected('t_joint')}
+                        title="Połącz 2. element pod kątem 90° do środka 1. elementu (łączenie T)"
+                        className="h-7 rounded-lg border border-white/[0.1] bg-white/[0.05] px-2 text-[11px] font-medium text-zinc-100 hover:bg-amber-500/20 hover:border-amber-400/45 hover:text-amber-200 cursor-pointer whitespace-nowrap transition-colors"
+                      >
+                        Środek T
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => onJoinSelected('side_by_side')}
+                        title="Ustaw zaznaczone elementy obok siebie w jednej linii (styk 0 mm)"
+                        className="h-7 rounded-lg border border-sky-400/35 bg-sky-500/12 px-2 text-[11px] font-semibold text-sky-200 hover:bg-sky-500/25 cursor-pointer whitespace-nowrap transition-colors"
+                      >
+                        Obok siebie
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => onJoinSelected('in_line')}
+                        title="Złącz 2 elementy czoło do czoła w jednej osi (przedłużenie)"
+                        className="h-7 rounded-lg border border-sky-400/35 bg-sky-500/12 px-2 text-[11px] font-semibold text-sky-200 hover:bg-sky-500/25 cursor-pointer whitespace-nowrap transition-colors"
+                      >
+                        W linii
+                      </button>
+                      <div className="mx-0.5 h-4 w-px bg-white/[0.1] shrink-0" aria-hidden="true" />
+                    </>
+                  ) : null}
                   <button
                     type="button"
                     onClick={() => onAlignSelected('left')}
@@ -1421,6 +1597,22 @@ export const BottomDock: React.FC<BottomDockProps> = ({
                       className="rounded-lg border border-sky-400/35 bg-sky-500/12 px-2 py-0.5 text-[11px] font-medium text-sky-200 hover:bg-sky-500/20 cursor-pointer whitespace-nowrap"
                     >
                       Zaznacz całą szafkę
+                    </button>
+                  ) : onToggleMultiSelectMode ? (
+                    <button
+                      type="button"
+                      onClick={onToggleMultiSelectMode}
+                      title="Włącz zaznaczanie wielu elementów (lub przytrzymaj Shift + klik), aby połączyć ze sobą 2 elementy"
+                      className={`flex items-center gap-1 rounded-lg border px-2 py-0.5 text-[11px] font-medium cursor-pointer whitespace-nowrap transition-colors ${
+                        multiSelectMode
+                          ? 'border-sky-400/60 bg-sky-500/25 text-sky-200'
+                          : 'border-white/[0.1] bg-white/[0.04] text-zinc-300 hover:bg-white/[0.1] hover:text-white'
+                      }`}
+                    >
+                      <CheckSquare className="h-3 w-3 text-sky-400" />
+                      <span>
+                        {multiSelectMode ? 'Kliknij 2. element...' : '+ Zaznacz 2. (połącz)'}
+                      </span>
                     </button>
                   ) : null}
                 </div>

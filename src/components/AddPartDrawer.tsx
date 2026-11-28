@@ -1,30 +1,41 @@
 import React, { useMemo, useState } from 'react';
 import {
   Armchair,
+  ArrowLeftRight,
+  ArrowUpDown,
   Bath,
   BedDouble,
   BedSingle,
   Box,
+  Columns3,
   CookingPot,
+  DoorOpen,
   Droplets,
   Flame,
+  Hammer,
   Layers,
   LayoutPanelTop,
   Monitor,
+  PanelTop,
   PenTool,
   Plus,
   Refrigerator,
+  Ruler,
   Search,
   Settings2,
+  Shield,
   Shirt,
   ShowerHead,
   Sofa,
   Sparkles,
+  SquareStack,
   Thermometer,
+  Triangle,
   Tv,
   Utensils,
   WashingMachine,
   Wind,
+  Wrench,
   X,
 } from 'lucide-react';
 import {
@@ -36,9 +47,19 @@ import {
   MATERIAL_CATALOG,
   MaterialCategory,
   MaterialId,
+  MaterialMeta,
   getMaterialMeta,
 } from '../types/furniture';
 import { getMaterialSwatchDataUrl } from '../engine/materials';
+import {
+  CatalogItemBadgeTone,
+  MaterialCatalogParams,
+  MaterialPresetItem,
+  buildGlobalPresetSearchIndex,
+  getDefaultParamsForMaterial,
+  getMaterialFamilyConfig,
+  getSectionsForMaterial,
+} from '../data/materialCatalogPresets';
 
 interface AddPartDrawerProps {
   open: boolean;
@@ -52,228 +73,24 @@ interface AddPartDrawerProps {
 }
 
 type CatalogTab = 'boards' | ApplianceCategory;
+type MaterialFilterTab = 'all' | MaterialCategory;
 
-interface PresetBlueprint {
-  id: string;
-  label: string;
-  dims: string;
-  desc: string;
-  tags: string[];
-  build: (materialId: MaterialId) => Omit<FurniturePart, 'id'>;
-}
-
-const PRESETS: PresetBlueprint[] = [
-  {
-    id: 'shelf_horiz',
-    label: 'Półka / płyta pozioma',
-    dims: '800 × grub. × 450 mm',
-    desc: 'Płyta pozioma, podłoga, wieniec',
-    tags: ['półka', 'płyta', 'deska', 'wieniec', 'podłoga'],
-    build: (materialId) => {
-      const t = Math.min(120, Math.max(4, getMaterialMeta(materialId).defaultThicknessMm));
-      return {
-        name: 'Płyta pozioma',
-        kind: 'panel',
-        materialId,
-        width: 800,
-        height: t,
-        depth: 450,
-        position: [0, 600, 0],
-        rotation: [0, 0, 0],
-      };
-    },
-  },
-  {
-    id: 'wall_vert',
-    label: 'Bok / ściana pionowa',
-    dims: 'grub. × 1200 × 450 mm',
-    desc: 'Ściana boczna, przegroda, ocieplenie',
-    tags: ['bok', 'przegroda', 'ściana', 'płyta', 'styropian', 'ocieplenie'],
-    build: (materialId) => {
-      const t = Math.min(150, Math.max(4, getMaterialMeta(materialId).defaultThicknessMm));
-      return {
-        name: 'Ściana boczna',
-        kind: 'panel',
-        materialId,
-        width: t,
-        height: 1200,
-        depth: 450,
-        position: [400, 600, 0],
-        rotation: [0, 0, 0],
-        grainRotated: true,
-      };
-    },
-  },
-  {
-    id: 'timber_beam',
-    label: 'Kantówka / belka drewniana',
-    dims: '50 × 1000 × 50 mm',
-    desc: 'Szkielet budy, altany, pergoli (rozkrój mb)',
-    tags: ['kantówka', 'belka', 'drewno', 'słupek', 'krawędziak', 'buda', 'c24'],
-    build: (materialId) => {
-      const meta = getMaterialMeta(materialId);
-      const useSelected = Boolean(meta.barLengthMm && meta.category !== 'Stal i szkło');
-      const finalMat = useSelected ? materialId : 'pine_timber';
-      const sec = useSelected ? Math.max(20, Math.min(180, meta.defaultThicknessMm)) : 50;
-      return {
-        name: `Kantówka ${sec}×${sec}`,
-        kind: 'profile',
-        materialId: finalMat,
-        width: sec,
-        height: 1000,
-        depth: sec,
-        position: [0, 500, 0],
-        rotation: [0, 0, 0],
-      };
-    },
-  },
-  {
-    id: 'wood_batten',
-    label: 'Łata / listwa montażowa',
-    dims: '40 × 1000 × 25 mm',
-    desc: 'Łata dachowa, legar lub ramiak (mb)',
-    tags: ['łata', 'listwa', 'legar', 'drewno', 'buda', 'dach'],
-    build: (materialId) => {
-      const meta = getMaterialMeta(materialId);
-      const finalMat =
-        meta.category === 'Budowa i ogród' ? materialId : 'pine_timber';
-      return {
-        name: 'Łata drewniana 40×25',
-        kind: 'profile',
-        materialId: finalMat,
-        width: 40,
-        height: 1000,
-        depth: 25,
-        position: [0, 500, 0],
-        rotation: [0, 0, 0],
-      };
-    },
-  },
-  {
-    id: 'insulation_slab',
-    label: 'Płyta izolacyjna (styropian / wełna)',
-    dims: '1000 × 500 × 50 mm',
-    desc: 'Ocieplenie ścian i dachu budy / domku',
-    tags: ['styropian', 'eps', 'wełna', 'ocieplenie', 'izolacja', 'buda'],
-    build: (materialId) => {
-      const meta = getMaterialMeta(materialId);
-      const finalMat =
-        meta.category === 'Izolacja i dach' && materialId !== 'roof_shingle'
-          ? materialId
-          : 'styrofoam_eps';
-      const finalMeta = getMaterialMeta(finalMat);
-      return {
-        name: finalMeta.shortName,
-        kind: 'panel',
-        materialId: finalMat,
-        width: 1000,
-        height: 500,
-        depth: Math.max(20, Math.min(200, finalMeta.defaultThicknessMm)),
-        position: [0, 300, 0],
-        rotation: [0, 0, 0],
-      };
-    },
-  },
-  {
-    id: 'sloped_panel',
-    label: 'Płyta ze skosem (trapez / dach)',
-    dims: '900 × 800 × grub. mm',
-    desc: 'Ścięcie dachowe, szczyt budy / poddasza',
-    tags: ['skos', 'trapez', 'poddasze', 'płyta', 'dach', 'buda'],
-    build: (materialId) => {
-      const t = Math.min(120, Math.max(4, getMaterialMeta(materialId).defaultThicknessMm));
-      return {
-        name: 'Płyta ze skosem',
-        kind: 'sloped',
-        materialId,
-        width: 900,
-        height: 800,
-        depth: t,
-        position: [0, 400, 0],
-        rotation: [0, 0, 0],
-        slopeTopLeft: 0,
-        slopeTopRight: 320,
-      };
-    },
-  },
-  {
-    id: 'kitchen_door',
-    label: 'Front szafki z uchwytem',
-    dims: '596 × 714 × 18 mm',
-    desc: 'Drzwiczki z okleiną ABS i uchwytem',
-    tags: ['front', 'drzwi', 'drzwiczki', 'szafka'],
-    build: (materialId) => ({
-      name: 'Front meblowy',
-      kind: 'door',
-      materialId,
-      width: 596,
-      height: 714,
-      depth: 18,
-      position: [0, 460, 280],
-      rotation: [0, 0, 0],
-      handleSide: 'right',
-      grainRotated: true,
-      edgeBanding: { thicknessMm: 0.8, top: true, bottom: true, left: true, right: true },
-    }),
-  },
-  {
-    id: 'kitchen_countertop',
-    label: 'Blat kuchenny 38 mm',
-    dims: '1200 × 38 × 600 mm',
-    desc: 'Zaokrąglony nosek frontowy',
-    tags: ['blat', 'roboczy', 'kuchnia', 'biurko'],
-    build: (materialId) => ({
-      name: 'Blat kuchenny 38 mm',
-      kind: 'countertop',
-      materialId: materialId === 'osb3' ? 'concrete_top' : materialId,
-      width: 1200,
-      height: 38,
-      depth: 600,
-      position: [0, 840, 0],
-      rotation: [0, 0, 0],
-    }),
-  },
-  {
-    id: 'gusset_triangle',
-    label: 'Zastrzał / trójkąt wzmacniający',
-    dims: '300 × 300 × 18 mm',
-    desc: 'Narożne usztywnienie skośne',
-    tags: ['zastrzał', 'trójkąt', 'wzmocnienie'],
-    build: (materialId) => ({
-      name: 'Zastrzał skośny',
-      kind: 'sloped',
-      materialId,
-      width: 300,
-      height: 300,
-      depth: 18,
-      position: [0, 500, 0],
-      rotation: [0, 0, 0],
-      slopeBottomRight: 270,
-    }),
-  },
-  {
-    id: 'steel_post',
-    label: 'Profil stalowy / słupek loft',
-    dims: '40 × 1600 × 40 mm',
-    desc: 'Profil stalowy 40×40 mm (rozkrój mb)',
-    tags: ['profil', 'stal', 'słupek', 'noga', 'loft'],
-    build: (materialId) => {
-      const meta = getMaterialMeta(materialId);
-      const finalMat =
-        meta.barLengthMm !== undefined ? materialId : 'steel_black';
-      return {
-        name: 'Profil nośny',
-        kind: 'profile',
-        materialId: finalMat,
-        width: 40,
-        height: 1600,
-        depth: 40,
-        position: [0, 800, 0],
-        rotation: [0, 0, 0],
-      };
-    },
-  },
+const MATERIAL_FILTER_TABS: Array<{ id: MaterialFilterTab; label: string }> = [
+  { id: 'all', label: 'Wszystkie' },
+  { id: 'Budowa i ogród', label: 'Budowa / Kantówki' },
+  { id: 'Izolacja i dach', label: 'Izolacja i dach' },
+  { id: 'Płyty konstrukcyjne', label: 'OSB / Sklejka' },
+  { id: 'Płyty meblowe', label: 'Płyty i blaty' },
+  { id: 'Stal i szkło', label: 'Stal / Szkło' },
 ];
+
+function matchesMaterialFilter(mat: MaterialMeta, filter: MaterialFilterTab): boolean {
+  if (filter === 'all') return true;
+  if (filter === 'Płyty meblowe') {
+    return mat.category === 'Płyty meblowe' || mat.category === 'Blaty';
+  }
+  return mat.category === filter;
+}
 
 const ROOM_TABS: Array<{
   id: CatalogTab;
@@ -284,9 +101,9 @@ const ROOM_TABS: Array<{
 }> = [
   {
     id: 'boards',
-    label: 'Płyty i formatki',
-    shortLabel: 'Płyty',
-    subtitle: 'Elementy stolarskie, fronty, blaty i profile do rozkroju',
+    label: 'Materiały i konstrukcje',
+    shortLabel: 'Materiały',
+    subtitle: 'Płyty, OSB, styropian, kantówki C24, złącza ciesielskie i profile',
     icon: Layers,
   },
   {
@@ -369,6 +186,53 @@ function getApplianceIcon(model: ApplianceModel): React.ComponentType<{ classNam
   }
 }
 
+function getPresetIcon(
+  iconKind: MaterialPresetItem['iconKind']
+): React.ComponentType<{ className?: string }> {
+  switch (iconKind) {
+    case 'sheet':
+      return SquareStack;
+    case 'panel_vert':
+      return Columns3;
+    case 'beam':
+      return Hammer;
+    case 'plank':
+      return Ruler;
+    case 'insulation':
+      return Shield;
+    case 'roof':
+      return Layers;
+    case 'slope':
+      return Triangle;
+    case 'door':
+      return DoorOpen;
+    case 'countertop':
+      return PanelTop;
+    case 'bracket':
+      return Wrench;
+    case 'profile':
+      return Box;
+    case 'glass':
+      return Sparkles;
+    default:
+      return Layers;
+  }
+}
+
+function getBadgeToneClasses(tone?: CatalogItemBadgeTone): string {
+  switch (tone) {
+    case 'amber':
+      return 'border-amber-500/35 bg-amber-500/12 text-amber-300';
+    case 'sky':
+      return 'border-sky-500/35 bg-sky-500/12 text-sky-300';
+    case 'emerald':
+      return 'border-emerald-500/35 bg-emerald-500/12 text-emerald-300';
+    case 'zinc':
+    default:
+      return 'border-zinc-700/80 bg-zinc-800/80 text-zinc-300';
+  }
+}
+
 export const AddPartDrawer: React.FC<AddPartDrawerProps> = ({
   open,
   materialsVersion,
@@ -382,12 +246,22 @@ export const AddPartDrawer: React.FC<AddPartDrawerProps> = ({
   const [activeTab, setActiveTab] = useState<CatalogTab>('boards');
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [selectedMaterial, setSelectedMaterial] = useState<MaterialId>('osb3');
-  const [matCategoryFilter, setMatCategoryFilter] = useState<'all' | MaterialCategory>('all');
+  const [matCategoryFilter, setMatCategoryFilter] = useState<MaterialFilterTab>('all');
+  const [catalogParams, setCatalogParams] = useState<MaterialCatalogParams>(() =>
+    getDefaultParamsForMaterial(getMaterialMeta('osb3'))
+  );
+
+  const selectedMeta = useMemo(() => {
+    void materialsVersion;
+    return getMaterialMeta(selectedMaterial);
+  }, [selectedMaterial, materialsVersion]);
+
+  const familyConfig = useMemo(() => getMaterialFamilyConfig(selectedMeta), [selectedMeta]);
+  const materialSections = useMemo(() => getSectionsForMaterial(selectedMeta), [selectedMeta]);
 
   const filteredMaterials = useMemo(() => {
     void materialsVersion;
-    if (matCategoryFilter === 'all') return MATERIAL_CATALOG;
-    return MATERIAL_CATALOG.filter((m) => m.category === matCategoryFilter);
+    return MATERIAL_CATALOG.filter((m) => matchesMaterialFilter(m, matCategoryFilter));
   }, [matCategoryFilter, materialsVersion]);
 
   const swatches = useMemo(() => {
@@ -399,9 +273,14 @@ export const AddPartDrawer: React.FC<AddPartDrawerProps> = ({
     return map;
   }, [customTextures, materialsVersion]);
 
+  const globalPresetIndex = useMemo(() => {
+    void materialsVersion;
+    return buildGlobalPresetSearchIndex();
+  }, [materialsVersion]);
+
   const countsByTab = useMemo(() => {
     const counts: Record<CatalogTab, number> = {
-      boards: PRESETS.length,
+      boards: globalPresetIndex.length,
       kitchen: 0,
       bathroom: 0,
       wardrobe: 0,
@@ -411,25 +290,26 @@ export const AddPartDrawer: React.FC<AddPartDrawerProps> = ({
       counts[item.category] = (counts[item.category] ?? 0) + 1;
     }
     return counts;
-  }, []);
+  }, [globalPresetIndex.length]);
 
   const normalizedQuery = searchQuery.trim().toLowerCase();
   const isSearching = normalizedQuery.length > 0;
 
-  const filteredPresets = useMemo(() => {
-    if (!isSearching) return PRESETS;
-    return PRESETS.filter((p) => {
-      const haystack = `${p.label} ${p.desc} ${p.dims} ${p.tags.join(' ')}`.toLowerCase();
-      return haystack.includes(normalizedQuery);
-    });
-  }, [isSearching, normalizedQuery]);
+  const filteredSearchPresets = useMemo(() => {
+    if (!isSearching) return [];
+    const tokens = normalizedQuery.split(/\s+/).filter(Boolean);
+    return globalPresetIndex.filter((entry) =>
+      tokens.every((token) => entry.haystack.includes(token))
+    );
+  }, [globalPresetIndex, isSearching, normalizedQuery]);
 
   const filteredAppliances = useMemo(() => {
     if (isSearching) {
+      const tokens = normalizedQuery.split(/\s+/).filter(Boolean);
       return APPLIANCE_CATALOG.filter((item) => {
         const haystack =
           `${item.name} ${item.desc} ${item.mountHint} ${item.category} ${(item.tags ?? []).join(' ')}`.toLowerCase();
-        return haystack.includes(normalizedQuery);
+        return tokens.every((token) => haystack.includes(token));
       });
     }
     if (activeTab === 'boards') return [];
@@ -439,6 +319,19 @@ export const AddPartDrawer: React.FC<AddPartDrawerProps> = ({
   if (!open) return null;
 
   const activeTabMeta = ROOM_TABS.find((t) => t.id === activeTab) ?? ROOM_TABS[0];
+
+  const handleSelectMaterial = (matId: MaterialId) => {
+    setSelectedMaterial(matId);
+    setCatalogParams(getDefaultParamsForMaterial(getMaterialMeta(matId)));
+  };
+
+  const handleSelectCategoryFilter = (cat: MaterialFilterTab) => {
+    setMatCategoryFilter(cat);
+    const matching = MATERIAL_CATALOG.filter((m) => matchesMaterialFilter(m, cat));
+    if (matching.length > 0 && !matching.some((m) => m.id === selectedMaterial)) {
+      handleSelectMaterial(matching[0].id);
+    }
+  };
 
   const handleInsertAppliance = (item: ApplianceMeta) => {
     onAddPart({
@@ -456,6 +349,11 @@ export const AddPartDrawer: React.FC<AddPartDrawerProps> = ({
     onClose();
   };
 
+  const totalCurrentSectionItems = materialSections.reduce(
+    (sum, section) => sum + section.items.length,
+    0
+  );
+
   return (
     <div
       onClick={(e) => {
@@ -463,11 +361,12 @@ export const AddPartDrawer: React.FC<AddPartDrawerProps> = ({
       }}
       className="fixed inset-0 z-50 flex items-end md:items-center justify-center bg-black/60 backdrop-blur-[3px] p-0 md:p-4"
     >
-      <div className="studio-sheet animate-studio-sheet w-full md:max-w-4xl rounded-t-3xl md:rounded-3xl text-zinc-100 flex flex-col max-h-[92dvh] md:max-h-[86dvh] overflow-hidden">
+      <div className="studio-sheet animate-studio-sheet w-full md:max-w-5xl rounded-t-3xl md:rounded-3xl text-zinc-100 flex flex-col max-h-[92dvh] md:max-h-[88dvh] overflow-hidden">
         <div className="md:hidden flex justify-center pt-2.5 pb-0.5 shrink-0">
           <div className="h-1 w-10 rounded-full bg-white/20" />
         </div>
-        {/* Top Modal Header + Search Input */}
+
+        {/* Top Modal Header + Global Search */}
         <div className="flex flex-col gap-3 border-b border-white/[0.08] px-4 sm:px-5 py-3.5 shrink-0">
           <div className="flex items-center justify-between gap-3">
             <div className="min-w-0">
@@ -475,7 +374,7 @@ export const AddPartDrawer: React.FC<AddPartDrawerProps> = ({
                 Biblioteka elementów i urządzeń 3D
               </h2>
               <p className="text-xs text-zinc-400 truncate">
-                Wybierz pomieszczenie lub formatkę — każdy obiekt ma realne wymiary w mm
+                Wybierz materiał, dobierz grubość lub długość i wstaw gotowy element w mm
               </p>
             </div>
             <button
@@ -488,14 +387,14 @@ export const AddPartDrawer: React.FC<AddPartDrawerProps> = ({
             </button>
           </div>
 
-          {/* Live Global Search across all rooms & boards */}
+          {/* Live Global Search across all materials, connectors, & rooms */}
           <div className="relative">
             <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-500" />
             <input
               type="text"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Szukaj w całym katalogu: pralka, geberit, lodówka, wanna, sofa, TV, półka..."
+              placeholder="Szukaj w katalogu: OSB, styropian, kantówka, kątownik, kotwa, krokiew, blat, pralka..."
               className="h-10 w-full rounded-xl border border-white/[0.09] bg-white/[0.05] pl-9 pr-9 text-xs sm:text-sm text-zinc-100 placeholder:text-zinc-500 focus:border-amber-500 focus:outline-none"
             />
             {searchQuery && (
@@ -540,13 +439,13 @@ export const AddPartDrawer: React.FC<AddPartDrawerProps> = ({
           </div>
         </div>
 
-        {/* Main Split Body: Desktop Sidebar Rail + Scrollable Content Grid */}
+        {/* Main Split Body: Desktop Sidebar Rail + Scrollable Content */}
         <div className="flex flex-1 min-h-0 overflow-hidden">
           {/* Desktop Left Category Rail (>= md) */}
           <aside className="hidden md:flex w-56 shrink-0 flex-col justify-between border-r border-zinc-800 bg-[#111215] p-3 overflow-y-auto cad-scroll">
             <div className="space-y-1">
               <div className="px-2.5 pb-1.5 text-[11px] font-medium text-zinc-500">
-                Pomieszczenia i płyty
+                Katalog i pomieszczenia
               </div>
               {ROOM_TABS.map((tab) => {
                 const Icon = tab.icon;
@@ -624,7 +523,7 @@ export const AddPartDrawer: React.FC<AddPartDrawerProps> = ({
 
           {/* Right Main Scrollable Catalog Panel */}
           <div className="cad-scroll flex-1 overflow-y-auto px-4 sm:px-5 py-4 space-y-5">
-            {/* Search Results Mode */}
+            {/* ==================== SEARCH RESULTS MODE ==================== */}
             {isSearching ? (
               <div className="space-y-5">
                 <div className="flex items-center justify-between border-b border-zinc-800/80 pb-2">
@@ -632,21 +531,73 @@ export const AddPartDrawer: React.FC<AddPartDrawerProps> = ({
                     Wyniki dla „{searchQuery.trim()}”
                   </div>
                   <div className="text-xs font-mono-num text-zinc-400">
-                    {filteredPresets.length + filteredAppliances.length} poz.
+                    {filteredSearchPresets.length + filteredAppliances.length} poz.
                   </div>
                 </div>
 
-                {filteredPresets.length === 0 && filteredAppliances.length === 0 ? (
+                {filteredSearchPresets.length === 0 && filteredAppliances.length === 0 ? (
                   <div className="rounded-xl border border-zinc-800 bg-zinc-900/50 px-4 py-8 text-center">
                     <p className="text-sm font-medium text-zinc-300">
-                      Brak pasujących urządzeń ani płyt
+                      Brak pasujących elementów ani urządzeń
                     </p>
                     <p className="mt-1 text-xs text-zinc-500">
-                      Spróbuj np. „pralka”, „wanna”, „lodówka”, „geberit”, „sofa”, „TV” lub „półka”
+                      Spróbuj np. „OSB”, „styropian”, „wełna”, „kantówka 80”, „kątownik”, „kotwa”, „krokiew”, „blat” lub „pralka”
                     </p>
                   </div>
                 ) : (
                   <>
+                    {filteredSearchPresets.length > 0 && (
+                      <div className="space-y-2.5">
+                        <h3 className="text-xs font-semibold text-zinc-300">
+                          Materiały, formatki, kantówki i złącza ({filteredSearchPresets.length})
+                        </h3>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                          {filteredSearchPresets.map((entry) => {
+                            const Icon = getPresetIcon(entry.item.iconKind);
+                            return (
+                              <button
+                                key={entry.key}
+                                type="button"
+                                onClick={() => {
+                                  onAddPart(entry.item.build(entry.materialId, entry.params));
+                                  onClose();
+                                }}
+                                className="group flex items-start gap-3 rounded-xl border border-zinc-800 bg-zinc-900/75 p-3 text-left hover:border-amber-500/70 hover:bg-zinc-900 transition-colors cursor-pointer min-h-[72px]"
+                              >
+                                <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-zinc-800/90 text-zinc-300 group-hover:bg-amber-500/15 group-hover:text-amber-300 transition-colors shrink-0">
+                                  <Icon className="h-4 w-4" />
+                                </div>
+                                <div className="min-w-0 flex-1">
+                                  <div className="flex items-start justify-between gap-2">
+                                    <span className="text-xs font-semibold text-zinc-100 group-hover:text-amber-300 transition-colors leading-snug">
+                                      {entry.item.label}
+                                    </span>
+                                    <div className="flex h-6 w-6 items-center justify-center rounded-md bg-zinc-800 text-zinc-400 group-hover:bg-amber-500 group-hover:text-zinc-950 transition-colors shrink-0">
+                                      <Plus className="h-3.5 w-3.5" />
+                                    </div>
+                                  </div>
+                                  <p className="mt-0.5 text-[11px] text-zinc-400 leading-snug line-clamp-1">
+                                    {entry.item.desc}
+                                  </p>
+                                  <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-[11px]">
+                                    <span className="font-mono-num text-zinc-200">
+                                      {entry.dimsText}
+                                    </span>
+                                    <span className="text-zinc-600" aria-hidden="true">
+                                      ·
+                                    </span>
+                                    <span className="text-amber-300/90 font-medium">
+                                      {entry.materialShortName}
+                                    </span>
+                                  </div>
+                                </div>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
+
                     {filteredAppliances.length > 0 && (
                       <div className="space-y-2.5">
                         <h3 className="text-xs font-semibold text-zinc-300">
@@ -695,48 +646,13 @@ export const AddPartDrawer: React.FC<AddPartDrawerProps> = ({
                         </div>
                       </div>
                     )}
-
-                    {filteredPresets.length > 0 && (
-                      <div className="space-y-2.5">
-                        <h3 className="text-xs font-semibold text-zinc-300">
-                          Płyty i formatki stolarskie ({filteredPresets.length})
-                        </h3>
-                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                          {filteredPresets.map((preset) => (
-                            <button
-                              key={preset.id}
-                              type="button"
-                              onClick={() => {
-                                onAddPart(preset.build(selectedMaterial));
-                                onClose();
-                              }}
-                              className="group flex items-center justify-between gap-3 rounded-xl border border-zinc-800 bg-zinc-900/75 px-3.5 py-3 text-left hover:border-amber-500/70 hover:bg-zinc-900 transition-colors cursor-pointer min-h-[64px]"
-                            >
-                              <div className="min-w-0">
-                                <div className="text-xs font-semibold text-zinc-100 group-hover:text-amber-300 transition-colors">
-                                  {preset.label}
-                                </div>
-                                <div className="mt-0.5 text-[11px] text-zinc-400 truncate">
-                                  <span className="font-mono-num text-zinc-300">{preset.dims}</span>
-                                  {' · '}
-                                  {preset.desc}
-                                </div>
-                              </div>
-                              <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-zinc-800 text-zinc-300 group-hover:bg-amber-500 group-hover:text-zinc-950 transition-colors shrink-0">
-                                <Plus className="h-4 w-4" />
-                              </div>
-                            </button>
-                          ))}
-                        </div>
-                      </div>
-                    )}
                   </>
                 )}
               </div>
             ) : activeTab === 'boards' ? (
-              /* ==================== TAB: PŁYTY I FORMATKI ==================== */
-              <div className="space-y-5">
-                {/* Mobile quick launchers (hidden on md+ because they sit in the left rail) */}
+              /* ==================== TAB: MATERIAŁY I KONSTRUKCJE ==================== */
+              <div className="space-y-4">
+                {/* Mobile quick launchers */}
                 <div className="md:hidden grid grid-cols-2 gap-2">
                   <button
                     type="button"
@@ -772,44 +688,41 @@ export const AddPartDrawer: React.FC<AddPartDrawerProps> = ({
                   </button>
                 </div>
 
-                {/* Step 1: Material Picker with Category Filter */}
-                <div className="space-y-2">
+                {/* Step 1: Material Category & Swatch Selector */}
+                <div className="space-y-2.5">
                   <div className="flex items-center justify-between gap-2">
-                    <h3 className="text-xs font-semibold text-zinc-200">
-                      Domyślny materiał elementu
-                    </h3>
+                    <div className="flex items-center gap-2 min-w-0">
+                      <span className="flex h-5 w-5 items-center justify-center rounded-md bg-amber-500/15 text-[11px] font-bold text-amber-300 shrink-0">
+                        1
+                      </span>
+                      <h3 className="text-xs font-semibold text-zinc-100 truncate">
+                        Wybierz grupę i materiał
+                      </h3>
+                    </div>
                     <button
                       type="button"
                       onClick={() => {
                         onClose();
                         onOpenMaterialsManager();
                       }}
-                      className="flex items-center gap-1 rounded-md px-2 py-1 text-[11px] font-medium text-amber-400 hover:bg-amber-500/15 transition-colors cursor-pointer"
+                      className="flex items-center gap-1 rounded-lg px-2 py-1 text-[11px] font-medium text-amber-400 hover:bg-amber-500/15 transition-colors cursor-pointer shrink-0"
                     >
                       <Settings2 className="h-3 w-3" />
                       <span>Dodaj własny / Cennik</span>
                     </button>
                   </div>
 
-                  <div className="flex items-center gap-1 overflow-x-auto cad-scroll pb-0.5">
-                    {(
-                      [
-                        { id: 'all', label: 'Wszystkie' },
-                        { id: 'Budowa i ogród', label: 'Budowa / Kantówki' },
-                        { id: 'Izolacja i dach', label: 'Izolacja i dach' },
-                        { id: 'Płyty konstrukcyjne', label: 'OSB / Sklejka' },
-                        { id: 'Płyty meblowe', label: 'Płyty meblowe' },
-                        { id: 'Stal i szkło', label: 'Stal / Szkło' },
-                      ] as const
-                    ).map((cat) => (
+                  {/* Category filter tabs */}
+                  <div className="flex items-center gap-1.5 overflow-x-auto cad-scroll pb-0.5">
+                    {MATERIAL_FILTER_TABS.map((cat) => (
                       <button
                         key={cat.id}
                         type="button"
-                        onClick={() => setMatCategoryFilter(cat.id)}
-                        className={`rounded-lg px-2.5 py-1 text-[11px] font-medium whitespace-nowrap shrink-0 cursor-pointer transition-colors ${
+                        onClick={() => handleSelectCategoryFilter(cat.id)}
+                        className={`rounded-lg px-2.5 py-1.5 text-[11px] font-medium whitespace-nowrap shrink-0 cursor-pointer transition-colors ${
                           matCategoryFilter === cat.id
-                            ? 'bg-amber-500 text-zinc-950 font-semibold'
-                            : 'border border-zinc-800 bg-zinc-900/80 text-zinc-400 hover:text-zinc-200'
+                            ? 'bg-amber-500 text-zinc-950 font-semibold shadow-sm'
+                            : 'border border-zinc-800 bg-zinc-900/80 text-zinc-400 hover:text-zinc-200 hover:border-zinc-700'
                         }`}
                       >
                         {cat.label}
@@ -817,6 +730,7 @@ export const AddPartDrawer: React.FC<AddPartDrawerProps> = ({
                     ))}
                   </div>
 
+                  {/* Swatch tiles */}
                   <div className="grid grid-cols-3 sm:grid-cols-6 gap-1.5">
                     {filteredMaterials.map((mat) => {
                       const active = selectedMaterial === mat.id;
@@ -824,11 +738,11 @@ export const AddPartDrawer: React.FC<AddPartDrawerProps> = ({
                         <button
                           key={mat.id}
                           type="button"
-                          onClick={() => setSelectedMaterial(mat.id)}
-                          className={`flex flex-col items-center gap-1 rounded-xl border p-2 text-center transition-colors cursor-pointer ${
+                          onClick={() => handleSelectMaterial(mat.id)}
+                          className={`flex flex-col items-center gap-1 rounded-xl border p-2 text-center transition-all cursor-pointer ${
                             active
-                              ? 'border-amber-500 bg-amber-500/15 text-white'
-                              : 'border-zinc-800 bg-zinc-900/80 text-zinc-300 hover:border-zinc-700'
+                              ? 'border-amber-500 bg-amber-500/15 text-white shadow-[0_0_0_1px_rgba(245,158,11,0.35)]'
+                              : 'border-zinc-800 bg-zinc-900/75 text-zinc-300 hover:border-zinc-700 hover:bg-zinc-900'
                           }`}
                         >
                           <img
@@ -846,38 +760,240 @@ export const AddPartDrawer: React.FC<AddPartDrawerProps> = ({
                   </div>
                 </div>
 
-                {/* Step 2: Board Shape Presets */}
-                <div className="space-y-2">
-                  <h3 className="text-xs font-semibold text-zinc-200">
-                    Wybierz formatkę lub element konstrukcyjny
-                  </h3>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                    {PRESETS.map((preset) => (
-                      <button
-                        key={preset.id}
-                        type="button"
-                        onClick={() => {
-                          onAddPart(preset.build(selectedMaterial));
-                          onClose();
-                        }}
-                        className="group flex items-center justify-between gap-3 rounded-xl border border-zinc-800 bg-zinc-900/75 px-3.5 py-3 text-left hover:border-amber-500/70 hover:bg-zinc-900 transition-colors cursor-pointer min-h-[64px]"
-                      >
-                        <div className="min-w-0">
-                          <div className="text-xs font-semibold text-zinc-100 group-hover:text-amber-300 transition-colors">
-                            {preset.label}
-                          </div>
-                          <div className="mt-0.5 text-[11px] text-zinc-400 truncate">
-                            <span className="font-mono-num text-zinc-300">{preset.dims}</span>
-                            {' · '}
-                            {preset.desc}
-                          </div>
+                {/* Step 2: Live Material-Specific Parameter Configurator */}
+                <div className="rounded-2xl border border-amber-500/25 bg-zinc-900/85 p-3.5 space-y-3">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="flex items-center gap-2.5 min-w-0">
+                      <img
+                        src={swatches[selectedMeta.id]}
+                        alt={selectedMeta.name}
+                        referrerPolicy="no-referrer"
+                        className="h-9 w-9 rounded-xl object-cover border border-white/15 shrink-0"
+                      />
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs sm:text-sm font-semibold text-white truncate">
+                            {familyConfig.title}
+                          </span>
                         </div>
-                        <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-zinc-800 text-zinc-300 group-hover:bg-amber-500 group-hover:text-zinc-950 transition-colors shrink-0">
-                          <Plus className="h-4 w-4" />
-                        </div>
-                      </button>
-                    ))}
+                        <p className="text-[11px] text-zinc-400 leading-snug">
+                          {familyConfig.subtitle}
+                        </p>
+                      </div>
+                    </div>
+                    <div className="hidden sm:flex flex-col items-end shrink-0 text-right">
+                      <span className="text-[11px] font-mono-num text-amber-300 font-semibold">
+                        {selectedMeta.pricePerLinearMPln
+                          ? `${selectedMeta.pricePerLinearMPln} zł/mb`
+                          : `${selectedMeta.pricePerM2Pln} zł/m²`}
+                      </span>
+                      <span className="text-[10px] font-mono-num text-zinc-500">
+                        {totalCurrentSectionItems} gotowych poz.
+                      </span>
+                    </div>
                   </div>
+
+                  {/* Interactive Chips: Thickness / Length / Depth / Orientation */}
+                  <div className="flex flex-col gap-2.5 pt-1 border-t border-white/[0.06]">
+                    {familyConfig.thicknessOptions && familyConfig.thicknessLabel && (
+                      <div className="flex flex-col sm:flex-row sm:items-center gap-1.5 sm:gap-3">
+                        <span className="text-[11px] font-medium text-zinc-400 shrink-0 sm:w-32">
+                          {familyConfig.thicknessLabel}:
+                        </span>
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          {familyConfig.thicknessOptions.map((mm) => {
+                            const active = catalogParams.thicknessMm === mm;
+                            return (
+                              <button
+                                key={mm}
+                                type="button"
+                                onClick={() =>
+                                  setCatalogParams((prev) => ({ ...prev, thicknessMm: mm }))
+                                }
+                                className={`min-h-[30px] rounded-lg px-2.5 py-1 text-[11px] font-mono-num font-semibold transition-colors cursor-pointer ${
+                                  active
+                                    ? 'bg-amber-500 text-zinc-950 shadow-sm'
+                                    : 'border border-zinc-700/80 bg-zinc-950/60 text-zinc-300 hover:border-amber-500/50 hover:text-white'
+                                }`}
+                              >
+                                {mm} mm
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
+
+                    {familyConfig.lengthOptions && familyConfig.lengthLabel && (
+                      <div className="flex flex-col sm:flex-row sm:items-center gap-1.5 sm:gap-3">
+                        <span className="text-[11px] font-medium text-zinc-400 shrink-0 sm:w-32">
+                          {familyConfig.lengthLabel}:
+                        </span>
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          {familyConfig.lengthOptions.map((mm) => {
+                            const active = catalogParams.lengthMm === mm;
+                            return (
+                              <button
+                                key={mm}
+                                type="button"
+                                onClick={() =>
+                                  setCatalogParams((prev) => ({ ...prev, lengthMm: mm }))
+                                }
+                                className={`min-h-[30px] rounded-lg px-2.5 py-1 text-[11px] font-mono-num font-semibold transition-colors cursor-pointer ${
+                                  active
+                                    ? 'bg-amber-500 text-zinc-950 shadow-sm'
+                                    : 'border border-zinc-700/80 bg-zinc-950/60 text-zinc-300 hover:border-amber-500/50 hover:text-white'
+                                }`}
+                              >
+                                {mm >= 1000 && mm % 1000 === 0
+                                  ? `${mm / 1000} m (${mm})`
+                                  : `${mm} mm`}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
+
+                    {familyConfig.depthOptions && familyConfig.depthLabel && (
+                      <div className="flex flex-col sm:flex-row sm:items-center gap-1.5 sm:gap-3">
+                        <span className="text-[11px] font-medium text-zinc-400 shrink-0 sm:w-32">
+                          {familyConfig.depthLabel}:
+                        </span>
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          {familyConfig.depthOptions.map((mm) => {
+                            const active = catalogParams.depthMm === mm;
+                            return (
+                              <button
+                                key={mm}
+                                type="button"
+                                onClick={() =>
+                                  setCatalogParams((prev) => ({ ...prev, depthMm: mm }))
+                                }
+                                className={`min-h-[30px] rounded-lg px-2.5 py-1 text-[11px] font-mono-num font-semibold transition-colors cursor-pointer ${
+                                  active
+                                    ? 'bg-amber-500 text-zinc-950 shadow-sm'
+                                    : 'border border-zinc-700/80 bg-zinc-950/60 text-zinc-300 hover:border-amber-500/50 hover:text-white'
+                                }`}
+                              >
+                                {mm} mm
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
+
+                    {familyConfig.supportsOrientation && (
+                      <div className="flex flex-col sm:flex-row sm:items-center gap-1.5 sm:gap-3">
+                        <span className="text-[11px] font-medium text-zinc-400 shrink-0 sm:w-32">
+                          Ustawienie startowe:
+                        </span>
+                        <div className="inline-flex items-center gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setCatalogParams((prev) => ({ ...prev, orientation: 'vertical' }))
+                            }
+                            className={`flex min-h-[30px] items-center gap-1.5 rounded-lg px-2.5 py-1 text-[11px] font-semibold transition-colors cursor-pointer ${
+                              catalogParams.orientation === 'vertical'
+                                ? 'bg-sky-500 text-zinc-950'
+                                : 'border border-zinc-700/80 bg-zinc-950/60 text-zinc-300 hover:border-sky-500/50'
+                            }`}
+                          >
+                            <ArrowUpDown className="h-3.5 w-3.5" />
+                            <span>Pionowo (słupek)</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setCatalogParams((prev) => ({ ...prev, orientation: 'horizontal' }))
+                            }
+                            className={`flex min-h-[30px] items-center gap-1.5 rounded-lg px-2.5 py-1 text-[11px] font-semibold transition-colors cursor-pointer ${
+                              catalogParams.orientation === 'horizontal'
+                                ? 'bg-sky-500 text-zinc-950'
+                                : 'border border-zinc-700/80 bg-zinc-950/60 text-zinc-300 hover:border-sky-500/50'
+                            }`}
+                          >
+                            <ArrowLeftRight className="h-3.5 w-3.5" />
+                            <span>Poziomo (belka / deska)</span>
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {/* Step 3: Material-Specific Grouped Catalog Sections */}
+                <div className="space-y-5">
+                  {materialSections.map((section) => (
+                    <div key={section.id} className="space-y-2.5">
+                      <div className="flex items-end justify-between gap-2 border-b border-zinc-800/80 pb-1.5">
+                        <div className="min-w-0">
+                          <h4 className="text-xs font-semibold text-zinc-100 truncate">
+                            {section.title}
+                          </h4>
+                          {section.subtitle && (
+                            <p className="text-[11px] text-zinc-500 truncate">
+                              {section.subtitle}
+                            </p>
+                          )}
+                        </div>
+                        <span className="text-[11px] font-mono-num text-zinc-500 shrink-0">
+                          {section.items.length} poz.
+                        </span>
+                      </div>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                        {section.items.map((preset) => {
+                          const Icon = getPresetIcon(preset.iconKind);
+                          const liveDims = preset.formatDims(catalogParams);
+                          return (
+                            <button
+                              key={preset.id}
+                              type="button"
+                              onClick={() => {
+                                onAddPart(preset.build(selectedMaterial, catalogParams));
+                                onClose();
+                              }}
+                              className="group flex items-start gap-3 rounded-xl border border-zinc-800 bg-zinc-900/75 p-3 text-left hover:border-amber-500/70 hover:bg-zinc-900 transition-colors cursor-pointer min-h-[74px]"
+                            >
+                              <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-zinc-800/90 text-zinc-300 group-hover:bg-amber-500/15 group-hover:text-amber-300 transition-colors shrink-0 mt-0.5">
+                                <Icon className="h-4 w-4" />
+                              </div>
+                              <div className="min-w-0 flex-1">
+                                <div className="flex items-start justify-between gap-2">
+                                  <span className="text-xs font-semibold text-zinc-100 group-hover:text-amber-300 transition-colors leading-snug">
+                                    {preset.label}
+                                  </span>
+                                  <div className="flex h-6 w-6 items-center justify-center rounded-md bg-zinc-800 text-zinc-400 group-hover:bg-amber-500 group-hover:text-zinc-950 transition-colors shrink-0">
+                                    <Plus className="h-3.5 w-3.5" />
+                                  </div>
+                                </div>
+                                <p className="mt-0.5 text-[11px] text-zinc-400 leading-snug line-clamp-1">
+                                  {preset.desc}
+                                </p>
+                                <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                                  <span className="text-[11px] font-mono-num text-zinc-200 font-medium">
+                                    {liveDims}
+                                  </span>
+                                  {preset.badge && (
+                                    <span
+                                      className={`rounded-md border px-1.5 py-0.5 text-[10px] font-semibold leading-none ${getBadgeToneClasses(
+                                        preset.badgeTone
+                                      )}`}
+                                    >
+                                      {preset.badge}
+                                    </span>
+                                  )}
+                                </div>
+                              </div>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  ))}
                 </div>
               </div>
             ) : (
@@ -885,9 +1001,7 @@ export const AddPartDrawer: React.FC<AddPartDrawerProps> = ({
               <div className="space-y-4">
                 <div className="flex items-end justify-between gap-2 border-b border-zinc-800/80 pb-2.5">
                   <div>
-                    <h3 className="text-sm font-semibold text-white">
-                      {activeTabMeta.label}
-                    </h3>
+                    <h3 className="text-sm font-semibold text-white">{activeTabMeta.label}</h3>
                     <p className="mt-0.5 text-xs text-zinc-400">{activeTabMeta.subtitle}</p>
                   </div>
                   <div className="text-[11px] text-zinc-500 whitespace-nowrap shrink-0">

@@ -1974,6 +1974,256 @@ export function ungroupSelectedParts(
   );
 }
 
+export type CarpentryJoinMode =
+  | 'corner_l'
+  | 't_joint'
+  | 'stack_top'
+  | 'side_by_side'
+  | 'in_line';
+
+type AxisKey = 'x' | 'y' | 'z';
+
+function getBoxSpan(b: WorldBox, axis: AxisKey): { min: number; max: number; size: number; center: number } {
+  const min = axis === 'x' ? b.minX : axis === 'y' ? b.minY : b.minZ;
+  const max = axis === 'x' ? b.maxX : axis === 'y' ? b.maxY : b.maxZ;
+  return { min, max, size: max - min, center: (min + max) / 2 };
+}
+
+function getLongestWorldAxis(b: WorldBox): AxisKey {
+  const sx = b.maxX - b.minX;
+  const sy = b.maxY - b.minY;
+  const sz = b.maxZ - b.minZ;
+  if (sy >= sx && sy >= sz) return 'y';
+  if (sx >= sy && sx >= sz) return 'x';
+  return 'z';
+}
+
+function getLocalLongestAxis(p: FurniturePart): AxisKey {
+  if (p.height >= p.width && p.height >= p.depth) return 'y';
+  if (p.width >= p.height && p.width >= p.depth) return 'x';
+  return 'z';
+}
+
+/**
+ * Returns a clean 90-degree Euler rotation [rx, ry, rz] that orients `part`'s
+ * longest local dimension along `targetAxis`.
+ */
+function rotationToAlignLongestAxis(
+  part: FurniturePart,
+  targetAxis: AxisKey
+): [number, number, number] {
+  const localLong = getLocalLongestAxis(part);
+  if (localLong === targetAxis) return [0, 0, 0];
+  if (localLong === 'y' && targetAxis === 'x') return [0, 0, 90];
+  if (localLong === 'y' && targetAxis === 'z') return [90, 0, 0];
+  if (localLong === 'x' && targetAxis === 'y') return [0, 0, 90];
+  if (localLong === 'x' && targetAxis === 'z') return [0, 90, 0];
+  if (localLong === 'z' && targetAxis === 'x') return [0, 90, 0];
+  if (localLong === 'z' && targetAxis === 'y') return [90, 0, 0];
+  return [0, 0, 0];
+}
+
+function roundMm(val: number): number {
+  return Math.round(val * 10) / 10;
+}
+
+/**
+ * Commercial CAD carpentry mate / join engine for 2+ selected parts (e.g. kantówki, beams, panels).
+ * Preserves the first selected part as the stationary anchor and aligns/orients the second part
+ * to an exact 0 mm flush joint (Corner 90° L, T-Joint, Stack on Top, Side-by-Side, or Collinear In-Line).
+ */
+export function joinSelectedParts(
+  parts: FurniturePart[],
+  fasteners: Fastener[],
+  selectedIds: string[],
+  mode: CarpentryJoinMode
+): { parts: FurniturePart[]; fasteners: Fastener[]; summary: string } {
+  const orderedSelected = selectedIds
+    .map((id) => parts.find((p) => p.id === id))
+    .filter((p): p is FurniturePart => Boolean(p && !p.locked && !p.hidden));
+
+  if (orderedSelected.length < 2) {
+    return { parts, fasteners, summary: 'Zaznacz co najmniej 2 odblokowane elementy' };
+  }
+
+  // Side-by-side supports 2 OR MORE parts chained cleanly in one straight flush row (0 mm gap)
+  if (mode === 'side_by_side') {
+    const anchor = orderedSelected[0];
+    const anchorBox = getPartWorldBox(anchor);
+    const anchorMinY = anchorBox.minY;
+    const anchorCenterZ = (anchorBox.minZ + anchorBox.maxZ) / 2;
+
+    // Sort remaining items left-to-right relative to their current X or preserve selection order
+    const rest = orderedSelected.slice(1);
+    const updates = new Map<string, { position: [number, number, number]; rotation: [number, number, number] }>();
+    let cursorX = anchorBox.maxX;
+
+    for (const p of rest) {
+      const b = getPartWorldBox(p);
+      const dx = cursorX - b.minX;
+      const dy = anchorMinY - b.minY;
+      const dz = anchorCenterZ - (b.minZ + b.maxZ) / 2;
+      const nextPos: [number, number, number] = [
+        roundMm(p.position[0] + dx),
+        roundMm(p.position[1] + dy),
+        roundMm(p.position[2] + dz),
+      ];
+      updates.set(p.id, { position: nextPos, rotation: p.rotation });
+      cursorX += b.maxX - b.minX;
+    }
+
+    const changedIds = new Set(updates.keys());
+    const nextParts = parts.map((p) => {
+      const u = updates.get(p.id);
+      return u ? { ...p, position: u.position, rotation: u.rotation } : p;
+    });
+    const synced = syncFastenersWithParts(parts, nextParts, fasteners, changedIds);
+    return {
+      parts: nextParts,
+      fasteners: synced.fasteners,
+      summary: `Ustawiono ${orderedSelected.length} elem. obok siebie w jednej linii (styk 0 mm)`,
+    };
+  }
+
+  // 2-element carpentry mate joints: 1st selected = base anchor, 2nd selected = mated part
+  let basePart = orderedSelected[0];
+  let movePart = orderedSelected[1];
+  let baseBox = getPartWorldBox(basePart);
+  let moveBox = getPartWorldBox(movePart);
+
+  // Smart ergonomic override for stack_top: if user selected a floating beam first and a standing post second,
+  // place the beam cleanly ON TOP of the standing post instead of stacking the post onto the floating beam!
+  if (mode === 'stack_top' && baseBox.minY > moveBox.minY + 80) {
+    const tmpP = basePart;
+    basePart = movePart;
+    movePart = tmpP;
+    const tmpB = baseBox;
+    baseBox = moveBox;
+    moveBox = tmpB;
+  }
+
+  let nextRot: [number, number, number] = [...movePart.rotation];
+  let orientedMove: FurniturePart = { ...movePart, rotation: nextRot };
+  let mBox = moveBox;
+
+  const baseLong = getLongestWorldAxis(baseBox);
+  let moveLong = getLongestWorldAxis(mBox);
+
+  let dx = 0;
+  let dy = 0;
+  let dz = 0;
+  let summary = '';
+
+  if (mode === 'corner_l' || mode === 't_joint') {
+    // Ensure perpendicular orientation if both elements are currently parallel
+    if (moveLong === baseLong) {
+      const targetPerp: AxisKey =
+        baseLong === 'y' ? 'x' : baseLong === 'x' ? 'z' : 'x';
+      nextRot = rotationToAlignLongestAxis(movePart, targetPerp);
+      orientedMove = { ...movePart, rotation: nextRot };
+      mBox = getPartWorldBox(orientedMove);
+      moveLong = getLongestWorldAxis(mBox);
+    }
+
+    const axes: AxisKey[] = ['x', 'y', 'z'];
+    const sharedAxis =
+      axes.find((a) => a !== baseLong && a !== moveLong) ?? 'z';
+
+    const baseShared = getBoxSpan(baseBox, sharedAxis);
+    const moveShared = getBoxSpan(mBox, sharedAxis);
+    const deltaShared = baseShared.center - moveShared.center;
+
+    const baseAlongMove = getBoxSpan(baseBox, moveLong);
+    const moveAlongMove = getBoxSpan(mBox, moveLong);
+    // Snap near end of movePart flush to the side of basePart it is currently closer to
+    const onNegativeSide = moveAlongMove.center < baseAlongMove.center;
+    const deltaAlongMove = onNegativeSide
+      ? baseAlongMove.min - moveAlongMove.max
+      : baseAlongMove.max - moveAlongMove.min;
+
+    const baseAlongBase = getBoxSpan(baseBox, baseLong);
+    const moveAlongBase = getBoxSpan(mBox, baseLong);
+    let deltaAlongBase = 0;
+    if (mode === 'corner_l') {
+      // Flush outer corner: snap top-to-top (or max-to-max) if closer to max end, else min-to-min
+      const closerToMax = moveAlongBase.center >= baseAlongBase.center;
+      deltaAlongBase = closerToMax
+        ? baseAlongBase.max - moveAlongBase.max
+        : baseAlongBase.min - moveAlongBase.min;
+      summary = 'Połączono pod kątem prostym — narożnik L (90°, styk 0 mm)';
+    } else {
+      // T-joint: center movePart cleanly along the middle of basePart
+      deltaAlongBase = baseAlongBase.center - moveAlongBase.center;
+      summary = 'Połączono w literę T (środek, 90°, styk 0 mm)';
+    }
+
+    const deltas: Record<AxisKey, number> = { x: 0, y: 0, z: 0 };
+    deltas[sharedAxis] = deltaShared;
+    deltas[moveLong] = deltaAlongMove;
+    deltas[baseLong] = deltaAlongBase;
+    dx = deltas.x;
+    dy = deltas.y;
+    dz = deltas.z;
+  } else if (mode === 'stack_top') {
+    // Rest movePart 0 mm flush ON TOP of basePart
+    dy = baseBox.maxY - mBox.minY;
+    dz = (baseBox.minZ + baseBox.maxZ) / 2 - (mBox.minZ + mBox.maxZ) / 2;
+
+    const bCenterX = (baseBox.minX + baseBox.maxX) / 2;
+    const mCenterX = (mBox.minX + mBox.maxX) / 2;
+    const bSpanX = baseBox.maxX - baseBox.minX;
+    const mSpanX = mBox.maxX - mBox.minX;
+
+    // If a long horizontal beam is sitting on a narrower post, flush its outer edge or center nicely
+    if (mSpanX > bSpanX * 1.4 && Math.abs(mCenterX - bCenterX) > bSpanX * 0.45) {
+      dx = mCenterX < bCenterX ? baseBox.maxX - mBox.maxX : baseBox.minX - mBox.minX;
+    } else {
+      dx = bCenterX - mCenterX;
+    }
+    summary = 'Ustawiono idealnie na górze (styk 0 mm)';
+  } else if (mode === 'in_line') {
+    // Collinear end-to-end splice along basePart's longest axis
+    nextRot = rotationToAlignLongestAxis(movePart, baseLong);
+    orientedMove = { ...movePart, rotation: nextRot };
+    mBox = getPartWorldBox(orientedMove);
+
+    const deltas: Record<AxisKey, number> = { x: 0, y: 0, z: 0 };
+    for (const axis of ['x', 'y', 'z'] as AxisKey[]) {
+      const bSpan = getBoxSpan(baseBox, axis);
+      const mSpan = getBoxSpan(mBox, axis);
+      if (axis === baseLong) {
+        const beforeBase = mSpan.center < bSpan.center;
+        deltas[axis] = beforeBase ? bSpan.min - mSpan.max : bSpan.max - mSpan.min;
+      } else {
+        deltas[axis] = bSpan.center - mSpan.center;
+      }
+    }
+    dx = deltas.x;
+    dy = deltas.y;
+    dz = deltas.z;
+    summary = 'Połączono w jednej linii (czoło do czoła, styk 0 mm)';
+  }
+
+  let nextPos: [number, number, number] = [
+    roundMm(movePart.position[0] + dx),
+    roundMm(movePart.position[1] + dy),
+    roundMm(movePart.position[2] + dz),
+  ];
+
+  // Floor safety: prevent the joined element from dipping below floor Y = 0
+  const finalBox = getPartWorldBox({ ...movePart, position: nextPos, rotation: nextRot });
+  if (finalBox.minY < 0) {
+    nextPos = [nextPos[0], roundMm(nextPos[1] - finalBox.minY), nextPos[2]];
+  }
+
+  const changedIds = new Set<string>([movePart.id]);
+  const nextParts = parts.map((p) =>
+    p.id === movePart.id ? { ...p, position: nextPos, rotation: nextRot } : p
+  );
+  const synced = syncFastenersWithParts(parts, nextParts, fasteners, changedIds);
+  return { parts: nextParts, fasteners: synced.fasteners, summary };
+}
+
 export type ShelfLoadStatus = 'ok' | 'warning' | 'critical';
 
 export interface ShelfDeflectionAudit {

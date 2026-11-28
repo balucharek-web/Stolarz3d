@@ -81,11 +81,13 @@ import {
   distributeSelectedParts,
   getPartWorldBox,
   groupSelectedParts,
+  joinSelectedParts,
   mergeCountertopsForRow,
   mirrorPartX,
   syncApplianceCutoutsOnCountertops,
   syncFastenersWithParts,
   ungroupSelectedParts,
+  type CarpentryJoinMode,
   type ClearanceGuide,
 } from './engine/carpentry';
 import {
@@ -1111,6 +1113,7 @@ export default function App() {
         setSelectedPartId(null);
         setSelectedPartIds([]);
         setActiveGroupEditId(null);
+        setMultiSelectMode(false);
         setInspectorOpen(false);
         setNudgePadOpen(false);
         return;
@@ -2335,12 +2338,39 @@ export default function App() {
     [commitProject, selectedPartIds, showToast]
   );
 
+  const handleJoinSelected = useCallback(
+    (mode: CarpentryJoinMode) => {
+      if (selectedPartIds.length < 2) return;
+      let summary = '';
+      commitProject((prev) => {
+        const res = joinSelectedParts(prev.parts, prev.fasteners, selectedPartIds, mode);
+        summary = res.summary;
+        return { ...prev, parts: res.parts, fasteners: res.fasteners };
+      });
+      if (summary) showToast(summary);
+    },
+    [commitProject, selectedPartIds, showToast]
+  );
+
+  const handleToggleMultiSelectMode = useCallback(() => {
+    setMultiSelectMode((prev) => {
+      const next = !prev;
+      showToast(
+        next
+          ? 'Zaznaczanie wielu włączone — kliknij kolejne elementy, aby je połączyć'
+          : 'Wyłączono zaznaczanie wielu elementów'
+      );
+      return next;
+    });
+  }, [showToast]);
+
   const handleGroupSelected = useCallback(() => {
     if (selectedPartIds.length < 2) return;
     commitProject((prev) => ({
       ...prev,
       parts: groupSelectedParts(prev.parts, selectedPartIds).parts,
     }));
+    setMultiSelectMode(false);
     showToast(`Połączono ${selectedPartIds.length} elementy w jedną grupę`);
   }, [commitProject, selectedPartIds, showToast]);
 
@@ -3537,6 +3567,8 @@ export default function App() {
         }}
         nudgePadOpen={nudgePadOpen}
         onToggleNudgePad={() => setNudgePadOpen((v) => !v)}
+        multiSelectMode={multiSelectMode}
+        onToggleMultiSelectMode={handleToggleMultiSelectMode}
         tool={tool}
         onChangeTool={(nextTool) => {
           setTool(nextTool);
@@ -3596,6 +3628,7 @@ export default function App() {
           selectedFastener ? SCREW_MAP[selectedFastener.type].name : null
         }
         onAlignSelected={handleAlignSelected}
+        onJoinSelected={handleJoinSelected}
         onDistributeSelected={handleDistributeSelected}
         onGroupSelected={handleGroupSelected}
         onUngroupSelected={handleUngroupSelected}
